@@ -7,7 +7,7 @@
 # =============================================================================
 
 CompileFlags:
-  CompilationDatabase: build/debug-vulkan/
+  CompilationDatabase: build/debug/
 
 Index:
   Background: Build
@@ -25,11 +25,16 @@ Diagnostics:
       - modernize-*
       - performance-*
       - readability-identifier-naming
+      - concurrency-*
+      - cppcoreguidelines-*
+      - misc-*
+      - cert-*
     Remove:
       - modernize-use-trailing-return-type   # project style: no trailing return
       - modernize-avoid-c-arrays             # C arrays used in low-level GPU code
       - modernize-use-std-print              # crashes clangd 21.x on fprintf (LLVM #98758)
       - bugprone-easily-swappable-parameters # too noisy for handle-heavy APIs
+      - cppcoreguidelines-pro-bounds-pointer-arithmetic # Low-level GPU code needs pointer arithmetic
     CheckOptions:
       readability-identifier-naming.ClassCase: CamelCase
       readability-identifier-naming.FunctionCase: CamelCase
@@ -40,6 +45,14 @@ Diagnostics:
       readability-identifier-naming.ConstantPrefix: k
       readability-identifier-naming.EnumConstantCase: CamelCase
       readability-identifier-naming.NamespaceCase: lower_case
+      # Modernize checks
+      modernize-use-nullptr.Nullptr: "nullptr"
+      # Bugprone checks
+      bugprone-assert-side-effect.AssertSideEffects: true
+      bugprone-branch-clone.CheckThreshold: 3
+      # Cppcoreguidelines
+      cppcoreguidelines-explicit-virtual-functions.IgnoreSingleVirtualCalls: true
+      cppcoreguidelines-avoid-goto.IgnoreMacros: true
 
 InlayHints:
   Enabled: true

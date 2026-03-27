@@ -418,3 +418,7 @@ These are planned but NOT yet implemented. Agent should propose when the codebas
 - **Include direction linter**: Layer N may only `#include` Layer 1..N-1
 - **Namespace-directory consistency**: `namespace miki::X` only in `include/miki/X/` and `src/miki/X/`
 - **GPU struct discipline check**: `alignas(16)` + `static_assert(sizeof)` + explicit padding
+
+**Attention: ** This project comes from `D:\repos\miki`, so before any code writting, please check the original code in `D:\repos\miki` by treeing `src`,`include`,`tests` and try to reuse them if possible and valuable. but don't consider any back compatibility or old code style, you should always keep the architecture right, frontier, clean, and keep high performance. You should tell me if you choose to reuse any code. To save tokens for the AI agent, don't write out the original code when you choose to reuse it, just copy the file part using cli and then modify it.
+
+**Attention: ** Every time a new executable is introduced, add items to `launch.json` to make it debuggable (both on the system and on browser).

@@ -33,11 +33,51 @@
 
 ### 1.3 Non-Goals
 
-- **Runtime backend switching**: Backend is a compile-time decision. No `IDevice` vtable polymorphism.
+- **Runtime vtable polymorphism in hot paths**: Command recording uses CRTP (compile-time dispatch). No `IDevice` virtual calls per draw.
 - **Automatic barrier insertion**: That is RenderGraph's job. RHI exposes `CmdPipelineBarrier()` / `CmdTransition()`.
 - **Implicit resource state tracking**: Caller (RenderGraph) tracks states. RHI trusts the caller.
 - **Shader compilation**: Slang → target IR is a separate pipeline. RHI accepts blobs.
 - **Window/surface creation**: Platform layer creates surfaces; RHI attaches to them.
+
+### 1.4 Runtime Backend Switching (Device Hot-Swap)
+
+miki supports **runtime backend switching** via full device teardown and recreation. This does **not** conflict with CRTP compile-time dispatch — all target backends are compiled into the binary simultaneously (each in its own translation unit), and the existing `DeviceHandle` (type-erased facade) selects the active backend.
+
+**Switching protocol**:
+
+```
+1. Application requests backend switch (e.g., user selects "D3D12" in settings)
+2. RenderGraph::Shutdown()        — release all pass resources, transient pools
+3. Device::WaitIdle()             — drain all GPU queues
+4. Scene::ReleaseGpuResources()   — destroy all persistent GPU resources (meshes, textures, pipelines)
+5. DeviceHandle::Destroy()        — tear down the current device and all internal state
+6. DeviceHandle = CreateDevice(newBackendDesc)  — create device with new backend
+7. Scene::RecreateGpuResources()  — re-upload meshes, textures; rebuild pipelines from cache
+8. RenderGraph::Initialize()      — rebuild pass graph, allocate transient resources
+```
+
+**Performance characteristics**:
+
+| Aspect | Impact |
+|--------|--------|
+| Hot path (command recording) | **Zero overhead** — still CRTP, no vtable |
+| `DeviceHandle` dispatch | O(passes/frame) ≈ 50-100 switch cases, same as before |
+| Switch latency | **1-5 seconds** (acceptable: GPU idle + resource rebuild + pipeline compile) |
+| Pipeline rebuild | Mitigated by pipeline cache — `PipelineCacheData` is backend-agnostic blob key; only the compiled PSO is backend-specific |
+| Memory | All backends linked into binary; unused backend code is cold (not paged in) |
+
+**Industry precedent**: Filament (`Engine::destroy()` + `Engine::create(Backend)`), UE5 (process restart with RHI DLL swap), Godot 4 (restart with different driver). miki's approach is closest to Filament — in-process, no restart required.
+
+**Multi-backend compilation**: CMake builds all enabled backends. Each backend's CRTP specialization lives in its own `.cpp` → no cross-contamination, no compile-time cost increase per TU.
+
+```cmake
+# CMake: all backends compiled, runtime-selectable
+option(MIKI_BACKEND_VULKAN    "Build Vulkan 1.4 backend"    ON)
+option(MIKI_BACKEND_D3D12     "Build D3D12 backend"         ON)
+option(MIKI_BACKEND_VULKAN_COMPAT "Build Vulkan Compat backend" ON)
+option(MIKI_BACKEND_WEBGPU    "Build WebGPU backend"        ON)
+option(MIKI_BACKEND_OPENGL    "Build OpenGL 4.3 backend"    ON)
+```
 
 ---
 
@@ -985,7 +1025,13 @@ void CmdUpdateBLAS(AccelStructHandle, BufferHandle scratch);  // Refit
 
 ---
 
-## 11. Swapchain
+## 11. Swapchain & Multi-Window Surface Management
+
+> **Companion document**: `specs/phases/phase-01-1a/01-window-manager.md` — tree-structured multi-window lifecycle, `SurfaceManager`, cascade destruction protocol, GPU resource sharing model.
+
+### 11.1 Low-Level Swapchain API (Device-Level)
+
+The raw swapchain API lives on the device. Higher-level abstractions (`RenderSurface`, `SurfaceManager`) wrap these calls.
 
 ```cpp
 struct SwapchainDesc {
@@ -1004,6 +1050,22 @@ auto AcquireNextImage(SwapchainHandle, SemaphoreHandle signalSemaphore, FenceHan
 auto GetSwapchainTexture(SwapchainHandle, uint32_t imageIndex) -> TextureHandle;
 void Present(SwapchainHandle, std::span<const SemaphoreHandle> waitSemaphores);
 ```
+
+### 11.2 Multi-Window Architecture
+
+Multi-window rendering uses three decoupled subsystems (see companion document for full API):
+
+| Subsystem | Namespace | Responsibility |
+|-----------|-----------|---------------|
+| `WindowManager` | `miki::platform` | OS window tree (create/destroy/events), parent–child hierarchy, cascade destruction |
+| `SurfaceManager` | `miki::rhi` | Per-window `RenderSurface` + `FrameManager` lifecycle, GPU surface attach/detach |
+| `IDevice` (shared) | `miki::rhi` | Single GPU device shared by all windows; all GPU resources available to all surfaces |
+
+**Key design properties**:
+- **Tree-structured windows**: parent–child hierarchy with post-order cascade destruction (GPU surfaces drained before OS windows destroyed)
+- **GPU resource sharing**: single `IDevice`, textures/buffers/pipelines created once and used in any window's render passes
+- **Three-concern separation**: `WindowManager` never touches GPU; `SurfaceManager` never creates OS windows; events flow through `WindowManager` and are dispatched by application code
+- **Runtime backend switching**: `SurfaceManager` detach/reattach cycle preserves OS windows while swapping GPU backend (§1.4)
 
 ---
 
@@ -1250,6 +1312,78 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 | Staging ring allocation | Per-thread ring or lock-free ring |
 
 **Design principle**: Command recording is lock-free. Multiple threads record into separate command buffers concurrently. Submission serializes at the queue level.
+
+---
+
+## 17.1 Implementation Suggestions
+
+### 17.1.1 CRTP Compile-Time Optimization
+
+The CRTP design eliminates virtual dispatch overhead but can increase compile time due to template instantiation. Recommended mitigation:
+
+```cpp
+// Device.h — public header
+template <typename Impl>
+class DeviceBase {
+    // ... interface methods as inline wrappers
+};
+
+// Device.inl — implementation (included only in .cpp files)
+template <typename Impl>
+inline auto DeviceBase<Impl>::CreateBuffer(const BufferDesc& desc) -> Result<BufferHandle> {
+    return static_cast<Impl*>(this)->CreateBufferImpl(desc);
+}
+
+// Explicit instantiations in Device.cpp (one per backend)
+extern template class DeviceBase<VulkanDevice>;
+extern template class DeviceBase<D3D12Device>;
+extern template class DeviceBase<VulkanCompatDevice>;
+extern template class DeviceBase<WebGPUDevice>;
+extern template class DeviceBase<OpenGLDevice>;
+```
+
+**Benefits**:
+- Header-only declarations keep API fast to compile for users
+- Implementation details isolated to .cpp files
+- Explicit instantiation prevents code bloat in translation units
+- Backend selection remains compile-time (no vtable)
+
+### 17.1.2 Handle Pool Lock Strategy
+
+For multi-threaded resource creation, use a lock-free free list with atomic generation counters:
+
+```cpp
+template <typename T, size_t Capacity>
+class HandlePool {
+    std::atomic<uint32_t> freeListHead_;
+    std::atomic<uint32_t> freeCount_;
+    alignas(64) std::array<Slot, Capacity> slots_;  // Cache line aligned
+    
+    struct Slot {
+        alignas(32) T object;        // Avoid false sharing
+        std::atomic<uint32_t> nextFree;
+        std::atomic<uint16_t> generation;
+    };
+};
+```
+
+**Rationale**: Resource creation is not in the hot path (typically startup/level load). A lightweight atomic spinlock or lock-free approach is sufficient; avoid heavyweight mutexes.
+
+### 17.1.3 Command Buffer Recording Validation
+
+In debug builds, add lightweight state validation:
+
+```cpp
+#ifdef MIKI_RHI_DEBUG
+void CommandBuffer::CmdDraw(uint32_t vertexCount, uint32_t instanceCount) {
+    MIKI_ASSERT(state_.pipelineBound, "Pipeline must be bound before draw");
+    MIKI_ASSERT(state_.indexBufferBound || vertexCount > 0, "Vertex count must be >0");
+    // ... other cheap checks
+}
+#endif
+```
+
+**Principle**: Validation should be O(1) and compile out in release builds. No hidden state tracking in hot paths.
 
 ---
 

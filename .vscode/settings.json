@@ -1,0 +1,29 @@
+{
+    "clangd.arguments": [
+        "--background-index",
+        "--header-insertion=never",
+        "--completion-style=detailed",
+        "--clang-tidy",
+        "--all-scopes-completion",
+        "--enable-config",
+        "--fallback-style=LLVM",
+        "--log=info",
+        "--pretty",
+        "--compile-commands-dir=c:\\mitsuki\\build\\debug-vulkan"
+    ],
+    "clangd.checkUpdates": false,
+    "clangd.onConfigChanged": "restart",
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "C_Cpp.autocomplete": "disabled",
+    "C_Cpp.errorSquiggles": "disabled",
+    "files.associations": {
+        "*.h": "cpp",
+        "*.hpp": "cpp",
+        "*.cpp": "cpp",
+        "*.c": "c"
+    },
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll.clangtidy": "explicit"
+    }
+}
