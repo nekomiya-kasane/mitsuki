@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Test (test_structured_logger)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug/test_structured_logger.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {}
+        }
+    ]
+}

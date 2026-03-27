@@ -61,6 +61,7 @@ namespace miki::debug::test {
             logger.Shutdown();
             logger.ClearSinks();
             logger.ResetDroppedCount();
+            logger.ResetRings();
             logger.SetBackpressurePolicy(BackpressurePolicy::Drop);
             // Reset all category levels to Trace
             for (uint16_t i = 0; i < static_cast<uint16_t>(LogCategory::Count_); ++i) {
@@ -117,7 +118,8 @@ namespace miki::debug::test {
         auto content = ReadFile(filePath);
         EXPECT_TRUE(content.find("device created") != std::string::npos);
 
-        std::filesystem::remove(filePath);
+        std::error_code ec;
+        std::filesystem::remove(filePath, ec);  // Ignore errors on cleanup
     }
 
     // ---- 3. Per-category filtering ----
@@ -190,7 +192,8 @@ namespace miki::debug::test {
         EXPECT_TRUE(content.find("\"line\":") != std::string::npos);
         EXPECT_TRUE(content.find("\"tid\":") != std::string::npos);
 
-        std::filesystem::remove(path);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
     }
 
     // ---- 6. JSON escaping of special characters ----
@@ -211,7 +214,8 @@ namespace miki::debug::test {
         EXPECT_TRUE(content.find("\\t") != std::string::npos);
         EXPECT_TRUE(content.find("\\\"") != std::string::npos);
 
-        std::filesystem::remove(path);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
     }
 
     // ---- 7. Compile-time level gating ----
@@ -326,7 +330,8 @@ namespace miki::debug::test {
         EXPECT_TRUE(content.find("INFO") != std::string::npos);
         EXPECT_TRUE(content.find("Rhi") != std::string::npos);
 
-        std::filesystem::remove(path);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
     }
 
     // ---- 12. LogLevel ordering ----
@@ -356,36 +361,13 @@ namespace miki::debug::test {
         EXPECT_EQ(logger.GetCategoryLevel(LogCategory::Shader), LogLevel::Error);
     }
 
-    // ---- 15. Crash handler registration (Windows) ----
-
-    TEST_F(LoggerTest, CrashHandlerRegistration) {
-        auto& logger = StructuredLogger::Instance();
-        // Should not throw or crash
-        logger.InstallCrashHandlers();
-    }
-
-    // ---- 16. Emergency fd pre-open ----
-
-    TEST_F(LoggerTest, EmergencyFdPreOpen) {
-        auto path = TempPath("emergency_test.log");
-
-        auto& logger = StructuredLogger::Instance();
-        logger.SetEmergencyOutputPath(path);
-
-        // File should exist (created eagerly)
-        EXPECT_TRUE(std::filesystem::exists(path));
-
-        std::filesystem::remove(path);
-    }
-
-    // ---- 17. Backpressure kDrop sentinel ----
+    // ---- 15. Backpressure kDrop sentinel ----
 
     TEST_F(LoggerTest, BackpressureDropCounting) {
         auto& logger = StructuredLogger::Instance();
         logger.SetBackpressurePolicy(BackpressurePolicy::Drop);
 
-        // Don't start drain thread — ring will fill up
-        // Write enough to overflow
+        // Don't start drain thread — ring will fill up. Write enough to overflow
         for (int i = 0; i < 5000; ++i) {
             MIKI_LOG_DEBUG(LogCategory::Core, "overflow msg {}", i);
         }

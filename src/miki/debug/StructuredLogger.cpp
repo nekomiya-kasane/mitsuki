@@ -1,11 +1,10 @@
 /** @brief StructuredLogger implementation.
  *
  * SPSC ring buffer per thread, background drain thread,
- * sink dispatch via std::visit, Windows SEH crash handler.
+ * sink dispatch via std::visit.
  */
 
 #include "miki/debug/StructuredLogger.h"
-#include "miki/debug/CrashHandler.h"
 
 #include <algorithm>
 #include <cassert>
@@ -105,6 +104,10 @@ namespace miki::debug {
 
         readPos_.store(rp, std::memory_order_release);
         return count;
+    }
+
+    auto SpscRingBuffer::Reset() -> void {
+        readPos_.store(writePos_.load(std::memory_order_relaxed), std::memory_order_relaxed);
     }
 
     auto SpscRingBuffer::HasData() const -> bool {
@@ -383,17 +386,34 @@ namespace miki::debug {
     }  // anonymous namespace
 
     auto StructuredLogger::GetThreadRing() -> SpscRingBuffer& {
-        thread_local SpscRingBuffer ring;
+        // RAII guard that unregisters the ring when the thread exits.
+        // Prevents use-after-free: thread_local ring is destroyed on thread
+        // exit, but rings_ would still hold a dangling pointer without this.
+        struct RingGuard {
+            SpscRingBuffer ring;
+            RingGuard() = default;
+            RingGuard(const RingGuard&) = delete;
+            RingGuard(RingGuard&&) = delete;
+            auto operator=(const RingGuard&) -> RingGuard& = delete;
+            auto operator=(RingGuard&&) -> RingGuard& = delete;
+            ~RingGuard() {
+                auto& logger = StructuredLogger::Instance();
+                std::lock_guard lock(logger.ringsMutex_);
+                std::erase_if(logger.rings_, [this](const RegisteredRing& r) { return r.ring == &ring; });
+            }
+        };
+
+        thread_local RingGuard guard;
         thread_local bool registered = false;
 
         if (!registered) {
             registered = true;
             auto& logger = Instance();
             std::lock_guard lock(logger.ringsMutex_);
-            logger.rings_.push_back({&ring, GetCurrentThreadIdHash()});
+            logger.rings_.push_back({&guard.ring, GetCurrentThreadIdHash()});
         }
 
-        return ring;
+        return guard.ring;
     }
 
     // ================================================================
@@ -409,7 +429,6 @@ namespace miki::debug {
 
     StructuredLogger::~StructuredLogger() {
         Shutdown();
-        UninstallCrashHandlers();
     }
 
     auto StructuredLogger::Instance() -> StructuredLogger& {
@@ -440,6 +459,15 @@ namespace miki::debug {
             return static_cast<LogLevel>(categoryLevels_[idx].load(std::memory_order_relaxed));
         }
         return LogLevel::Trace;
+    }
+
+    auto StructuredLogger::ResetRings() -> void {
+        std::lock_guard lock(ringsMutex_);
+        for (auto& reg : rings_) {
+            if (reg.ring) {
+                reg.ring->Reset();
+            }
+        }
     }
 
     auto StructuredLogger::SetBackpressurePolicy(BackpressurePolicy policy) -> void {
@@ -533,7 +561,13 @@ namespace miki::debug {
                     }
                 }
                 flushRequested_.store(false, std::memory_order_release);
-                flushDone_.store(true, std::memory_order_release);
+                // Must hold flushMutex_ to prevent lost wakeup:
+                // Flush() does wait(lock, pred) which atomically checks pred and sleeps. By holding the same mutex we
+                // guarantee the store+notify is visible before or after the wait, never lost.
+                {
+                    std::lock_guard fLock(flushMutex_);
+                    flushDone_.store(true, std::memory_order_release);
+                }
                 flushCv_.notify_all();
             }
         }
@@ -631,75 +665,10 @@ namespace miki::debug {
         if (drainThread_.joinable()) {
             drainThread_.join();
         }
-    }
 
-    // ================================================================
-    // Crash handler integration
-    // ================================================================
-
-    // Async-signal-safe callback for crash dump (friend of StructuredLogger)
-    void LoggerCrashCallback(const CrashContext& ctx, intptr_t fd) {
-        (void)ctx;  // Context already written by CrashHandler
-
-        SafeWriteLiteral(fd, "--- Logger Ring Buffer Dump ---\n");
-
-        // Access global logger instance
-        // Note: In signal handler, we cannot use locks safely.
-        // We read rings_ via friend access — this is acceptable for crash dump.
-        auto& logger = StructuredLogger::Instance();
-        auto& rings = logger.rings_;
-
-        // Dump each registered ring buffer
-        SafeWriteLiteral(fd, "Registered rings: ");
-        SafeWriteUint64(fd, static_cast<uint64_t>(rings.size()));
-        SafeWriteLiteral(fd, "\n");
-
-        for (size_t i = 0; i < rings.size(); ++i) {
-            auto* ring = rings[i].ring;
-            auto tid = rings[i].threadId;
-
-            SafeWriteLiteral(fd, "\nRing ");
-            SafeWriteUint64(fd, i);
-            SafeWriteLiteral(fd, " (thread ");
-            SafeWriteUint64(fd, tid);
-            SafeWriteLiteral(fd, "):\n");
-
-            // Get ring buffer state via public API
-            auto wp = ring->WritePos();
-            auto rp = ring->ReadPos();
-            auto used = wp - rp;
-
-            SafeWriteLiteral(fd, "  writePos=");
-            SafeWriteUint64(fd, wp);
-            SafeWriteLiteral(fd, " readPos=");
-            SafeWriteUint64(fd, rp);
-            SafeWriteLiteral(fd, " used=");
-            SafeWriteUint64(fd, used);
-            SafeWriteLiteral(fd, "\n");
-
-            // Dump first 256 bytes of pending data as hex
-            if (used > 0) {
-                auto rawData = ring->RawData();
-                auto dumpLen = std::min<size_t>(used, 256);
-                auto startIdx = rp & (SpscRingBuffer::kCapacity - 1);
-                SafeWriteLiteral(fd, "  Data (first 256 bytes): ");
-                SafeWriteHex(fd, &rawData[startIdx], dumpLen);
-                SafeWriteLiteral(fd, "\n");
-            }
-        }
-
-        SafeWriteLiteral(fd, "\n--- End Ring Buffer Dump ---\n");
-    }
-
-    auto StructuredLogger::InstallCrashHandlers() -> void {
-        if (emergencyPath_.empty()) {
-            return;
-        }
-        miki::debug::InstallCrashHandlers(emergencyPath_, LoggerCrashCallback);
-    }
-
-    auto StructuredLogger::SetEmergencyOutputPath(std::filesystem::path path) -> void {
-        emergencyPath_ = std::move(path);
+        // Reset flush protocol state for potential restart
+        flushRequested_.store(false, std::memory_order_relaxed);
+        flushDone_.store(false, std::memory_order_relaxed);
     }
 
 }  // namespace miki::debug

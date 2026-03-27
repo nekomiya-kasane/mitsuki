@@ -155,6 +155,9 @@ namespace miki::debug {
         using ReadCallback = void (*)(const void* data, uint32_t size, void* userCtx);
         auto ReadAll(ReadCallback cb, void* userCtx) -> uint32_t;
 
+        /// @brief Discard all pending data (reset read pos to write pos).
+        auto Reset() -> void;
+
         /// @brief Check if the ring has pending data.
         [[nodiscard]] auto HasData() const -> bool;
 
@@ -226,13 +229,6 @@ namespace miki::debug {
         /// @brief Start the background drain thread.
         auto StartDrainThread() -> void;
 
-        /// @brief Install crash handlers (Windows SEH).
-        auto InstallCrashHandlers() -> void;
-
-        /// @brief Set emergency output path for crash dump.
-        /// File opened eagerly to avoid heap allocation in signal handler.
-        auto SetEmergencyOutputPath(std::filesystem::path path) -> void;
-
         /// @brief Check if logger is running (drain thread active).
         [[nodiscard]] auto IsRunning() const -> bool;
 
@@ -241,6 +237,10 @@ namespace miki::debug {
 
         /// @brief Reset dropped message counter.
         auto ResetDroppedCount() -> void;
+
+        /// @brief Discard all pending data in registered ring buffers.
+        /// Call only when drain thread is stopped.
+        auto ResetRings() -> void;
 
         StructuredLogger();
         ~StructuredLogger();
@@ -285,12 +285,6 @@ namespace miki::debug {
         std::mutex flushMutex_;
         std::condition_variable flushCv_;
         std::atomic<bool> flushDone_{false};
-
-        // Emergency crash dump path (file opened by CrashHandler)
-        std::filesystem::path emergencyPath_;
-
-        // For crash handler access to rings
-        friend void LoggerCrashCallback(const struct CrashContext&, intptr_t);
     };
 
 }  // namespace miki::debug
