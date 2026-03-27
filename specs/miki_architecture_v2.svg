@@ -1,0 +1,517 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1620 1400" font-family="Segoe UI, Arial, sans-serif">
+<defs>
+  <style>
+    .bg   { fill: #fff; }
+    .layer-bg { rx: 8; ry: 8; stroke: #bbb; stroke-width: 1.2; }
+    .l1  { fill: #E8EAF6; } .l2  { fill: #C5CAE9; } .l3  { fill: #B3E5FC; }
+    .l4  { fill: #B2DFDB; } .l5  { fill: #C8E6C9; } .l6  { fill: #DCEDC8; }
+    .l7  { fill: #FFF9C4; } .l8a { fill: #FFE0B2; } .l8b { fill: #FFCCBC; }
+    .l9  { fill: #F8BBD0; } .l10 { fill: #E1BEE7; } .l11 { fill: #D1C4E9; }
+    .c   { rx: 4; ry: 4; fill: #fff; stroke: #888; stroke-width: 0.7; }
+    .ct  { font-size: 10px; fill: #222; text-anchor: middle; dominant-baseline: central; }
+    .ll  { font-size: 14px; font-weight: 700; fill: #333; }
+    .ln  { font-size: 12px; font-weight: 700; fill: #555; }
+    .pt  { font-size: 8.5px; fill: #999; font-style: italic; }
+    .ns  { font-size: 8.5px; fill: #1565C0; font-weight: 600; }
+    .bb  { rx: 6; ry: 6; stroke: #888; stroke-width: 1; }
+    .bt  { font-size: 10.5px; fill: #333; text-anchor: middle; dominant-baseline: central; }
+    .bh  { font-size: 12px; font-weight: 700; fill: #333; text-anchor: middle; }
+    .t1  { fill: #E3F2FD; } .t2 { fill: #FFF3E0; } .t3 { fill: #F3E5F5; }
+    .t4  { fill: #E8F5E9; } .mk { fill: #F5F5F5; }
+    .title   { font-size: 26px; font-weight: 700; fill: #1A237E; text-anchor: middle; }
+    .subtitle{ font-size: 13px; fill: #666; text-anchor: middle; }
+    .arr  { stroke: #666; stroke-width: 1.5; fill: none; marker-end: url(#ah); }
+    .arrd { stroke: #aaa; stroke-width: 1; fill: none; stroke-dasharray: 5,3; marker-end: url(#ahl); }
+    .lt  { font-size: 12px; font-weight: 700; fill: #333; }
+    .ls  { font-size: 10px; fill: #444; }
+    .tip { rx: 4; ry: 4; fill: #333; opacity: 0.95; }
+    .tip-text { font-size: 10px; fill: #fff; }
+    .tip-title { font-size: 11px; fill: #fff; font-weight: 700; }
+    [data-tip]:hover { filter: brightness(0.93); cursor: pointer; }
+  </style>
+  <marker id="ah" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+    <polygon points="0 0,8 3,0 6" fill="#666"/>
+  </marker>
+  <marker id="ahl" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+    <polygon points="0 0,6 2.5,0 5" fill="#aaa"/>
+  </marker>
+</defs>
+
+<!-- Background -->
+<rect width="1680" height="1720" class="bg"/>
+
+<!-- Title -->
+<text x="730" y="38" class="title">miki Renderer -- Architecture Overview</text>
+<text x="730" y="58" class="subtitle">11 Layers / 5 Backends / 21 Namespaces / 27 Phases</text>
+
+<!-- ===== L11: Application (y=75, h=72) ===== -->
+<g id="L11">
+  <rect x="30" y="75" width="1430" height="72" class="layer-bg l11"/>
+  <text x="44" y="92" class="ln">L11</text><text x="78" y="92" class="ll">Application &amp; Integration</text>
+  <text x="310" y="92" class="pt">Phase 15a-15b</text><text x="44" y="105" class="ns">miki::sdk</text>
+  <rect x="50" y="113" width="118" height="26" class="c" data-tip="MikiEngine|Top-level facade: owns Device + RenderGraph + Scene"/><text x="109" y="126" class="ct">MikiEngine</text>
+  <rect x="174" y="113" width="100" height="26" class="c" data-tip="MikiView|Viewport: camera + swapchain + input dispatch"/><text x="224" y="126" class="ct">MikiView</text>
+  <rect x="280" y="113" width="100" height="26" class="c" data-tip="MikiScene|High-level scene graph wrapper for SDK users"/><text x="330" y="126" class="ct">MikiScene</text>
+  <rect x="386" y="113" width="100" height="26" class="c" data-tip="MikiPicker|GPU picking: entity ID + depth readback"/><text x="436" y="126" class="ct">MikiPicker</text>
+  <rect x="492" y="113" width="110" height="26" class="c" data-tip="MikiExporter|glTF / STEP / image / video export"/><text x="547" y="126" class="ct">MikiExporter</text>
+  <rect x="608" y="113" width="100" height="26" class="c" data-tip="C Wrapper|C89 ABI for FFI: Python / C# / Rust bindings"/><text x="658" y="126" class="ct">C Wrapper</text>
+  <rect x="714" y="113" width="120" height="26" class="c" data-tip="HeadlessDevice|No-window rendering for CI / batch / server"/><text x="774" y="126" class="ct">HeadlessDevice</text>
+  <rect x="840" y="113" width="112" height="26" class="c" data-tip="CloudRender|Server-side rendering + video stream output"/><text x="896" y="126" class="ct">CloudRender</text>
+  <rect x="958" y="113" width="112" height="26" class="c" data-tip="CollabViewer|Multi-user collaborative viewing session"/><text x="1014" y="126" class="ct">CollabViewer</text>
+  <rect x="1076" y="113" width="112" height="26" class="c" data-tip="MultiWindow|Multiple viewports sharing one Device"/><text x="1132" y="126" class="ct">MultiWindow</text>
+  <rect x="1194" y="113" width="112" height="26" class="c" data-tip="miki_editor|Standalone demo editor application"/><text x="1250" y="126" class="ct">miki_editor</text>
+  <rect x="1312" y="113" width="138" height="26" class="c" data-tip="Qt/Embed Adapter|Embed miki into Qt / WPF / Electron hosts"/><text x="1381" y="126" class="ct">Qt/Embed Adapter</text>
+</g>
+
+<!-- ===== L10: Plugin (y=157, h=72) ===== -->
+<g id="L10">
+  <rect x="30" y="157" width="1430" height="72" class="layer-bg l10"/>
+  <text x="44" y="174" class="ln">L10</text><text x="78" y="174" class="ll">Plugin / Extension</text>
+  <text x="270" y="174" class="pt">Phase 15a+</text><text x="44" y="187" class="ns">miki::plugin</text>
+  <rect x="50" y="195" width="90" height="26" class="c" data-tip="IPlugin|Abstract plugin interface: load / unload / version"/><text x="95" y="208" class="ct">IPlugin</text>
+  <rect x="146" y="195" width="120" height="26" class="c" data-tip="PluginRegistry|Discovers, loads, and manages plugin lifecycle"/><text x="206" y="208" class="ct">PluginRegistry</text>
+  <rect x="272" y="195" width="126" height="26" class="c" data-tip="PluginManifest|JSON/TOML manifest: deps, version, caps"/><text x="335" y="208" class="ct">PluginManifest</text>
+  <rect x="404" y="195" width="104" height="26" class="c" data-tip="ITranslator|Format translator interface for CAD import/export"/><text x="456" y="208" class="ct">ITranslator</text>
+  <rect x="514" y="195" width="140" height="26" class="c" data-tip="Extension Points|IKernel / IUiBridge / RG custom passes"/><text x="584" y="208" class="ct">Extension Points</text>
+  <rect x="660" y="195" width="170" height="26" class="c" data-tip="Industry Plugins (post-1.1)|Piping / HVAC / Electrical / Ship"/><text x="745" y="208" class="ct">Industry Plugins</text>
+</g>
+
+<!-- ===== L9: Interactive Tools (y=239, h=102) ===== -->
+<g id="L9">
+  <rect x="30" y="239" width="1430" height="102" class="layer-bg l9"/>
+  <text x="44" y="256" class="ln">L9</text><text x="78" y="256" class="ll">Interactive Tools</text>
+  <text x="250" y="256" class="pt">Phase 9</text><text x="44" y="269" class="ns">miki::tools</text>
+  <rect x="50" y="277" width="80" height="26" class="c" data-tip="Gizmo|3D translate/rotate/scale manipulator"/><text x="90" y="290" class="ct">Gizmo</text>
+  <rect x="136" y="277" width="90" height="26" class="c" data-tip="Compass|3D orientation cube + axis indicator"/><text x="181" y="290" class="ct">Compass</text>
+  <rect x="232" y="277" width="100" height="26" class="c" data-tip="SnapEngine|Grid / vertex / edge / face snapping"/><text x="282" y="290" class="ct">SnapEngine</text>
+  <rect x="338" y="277" width="108" height="26" class="c" data-tip="CommandBus|Undo/redo command pattern + event dispatch"/><text x="392" y="290" class="ct">CommandBus</text>
+  <rect x="452" y="277" width="96" height="26" class="c" data-tip="OpHistory|Operation history stack for undo/redo"/><text x="500" y="290" class="ct">OpHistory</text>
+  <rect x="554" y="277" width="126" height="26" class="c" data-tip="PreviewManager|Transient preview of operations before commit"/><text x="617" y="290" class="ct">PreviewMgr</text>
+  <rect x="686" y="277" width="126" height="26" class="c" data-tip="SelectionOutline|GPU outline pass for selected entities"/><text x="749" y="290" class="ct">SelectOutline</text>
+  <rect x="818" y="277" width="112" height="26" class="c" data-tip="RichTextInput|In-viewport text editing with formatting"/><text x="874" y="290" class="ct">RichTextInput</text>
+  <rect x="936" y="277" width="90" height="26" class="c" data-tip="TopoEdit|Interactive topology editing (split/merge/fill)"/><text x="981" y="290" class="ct">TopoEdit</text>
+  <rect x="1032" y="277" width="100" height="26" class="c" data-tip="MeshEditor|Direct mesh vertex/face manipulation"/><text x="1082" y="290" class="ct">MeshEditor</text>
+  <rect x="50" y="307" width="108" height="26" class="c" data-tip="Interference|Clash detection between solid bodies"/><text x="104" y="320" class="ct">Interference</text>
+  <rect x="164" y="307" width="96" height="26" class="c" data-tip="Curvature|Surface curvature analysis + color map"/><text x="212" y="320" class="ct">Curvature</text>
+  <rect x="266" y="307" width="118" height="26" class="c" data-tip="GeometryDiff|Visual diff between two geometry versions"/><text x="325" y="320" class="ct">GeometryDiff</text>
+  <rect x="390" y="307" width="126" height="26" class="c" data-tip="SurfaceAnalysis|Zebra stripes / isophotes / reflection lines"/><text x="453" y="320" class="ct">SurfaceAnalysis</text>
+  <rect x="522" y="307" width="110" height="26" class="c" data-tip="AdaptiveGrid|Dynamic infinite grid with LOD fading"/><text x="577" y="320" class="ct">AdaptiveGrid</text>
+</g>
+
+<!-- ===== L8b: CAE/DFM/PointCloud/Import (y=351, h=102) ===== -->
+<g id="L8b">
+  <rect x="30" y="351" width="1430" height="102" class="layer-bg l8b"/>
+  <text x="44" y="368" class="ln">L8b</text><text x="82" y="368" class="ll">CAE / DFM / PointCloud / Import</text>
+  <text x="370" y="368" class="pt">Phase 7b, 10, 1.1</text>
+  <text x="44" y="381" class="ns">miki::cae  miki::pointcloud  miki::import  miki::kernel</text>
+  <rect x="50" y="389" width="120" height="26" class="c" data-tip="FemMeshRenderer (miki::cae)|Renders FEM element meshes with per-element type coloring (tet/hex/wedge). Supports wireframe overlay and shrink mode for element inspection."/><text x="110" y="402" class="ct">FemMeshRend</text>
+  <rect x="176" y="389" width="96" height="26" class="c" data-tip="ScalarField (miki::cae)|Maps scalar simulation results (stress, temperature, displacement magnitude) to color via transfer function. Supports log scale and custom LUT."/><text x="224" y="402" class="ct">ScalarField</text>
+  <rect x="278" y="389" width="96" height="26" class="c" data-tip="VectorField (miki::cae)|Renders vector results as oriented glyphs (arrows/cones). Supports magnitude-based scaling and GPU instanced rendering."/><text x="326" y="402" class="ct">VectorField</text>
+  <rect x="380" y="389" width="80" height="26" class="c" data-tip="Contour (miki::cae)|Extracts and renders iso-contour lines on triangulated FEM surfaces. GPU marching-edges with configurable iso-value count."/><text x="420" y="402" class="ct">Contour</text>
+  <rect x="466" y="389" width="96" height="26" class="c" data-tip="Streamline (miki::cae)|Particle advection for flow visualization. GPU compute-based RK4 integration with adaptive step size."/><text x="514" y="402" class="ct">Streamline</text>
+  <rect x="568" y="389" width="104" height="26" class="c" data-tip="Deformation (miki::cae)|Applies displacement field to mesh vertices with adjustable scale factor. Supports animated mode playback."/><text x="620" y="402" class="ct">Deformation</text>
+  <rect x="678" y="389" width="112" height="26" class="c" data-tip="ResultCompare (miki::cae)|Side-by-side or overlay comparison of two FEM result sets. Supports difference field computation and threshold filtering."/><text x="734" y="402" class="ct">ResultCompare</text>
+  <rect x="796" y="389" width="112" height="26" class="c" data-tip="AnimController (miki::cae)|Keyframe-based animation controller for CAE result playback. Manages time stepping, looping, and interpolation modes."/><text x="852" y="402" class="ct">AnimController</text>
+  <rect x="50" y="419" width="100" height="26" class="c" data-tip="DraftAngle (miki::kernel)|Analyzes mold draft angles relative to pull direction. Color-maps faces by angle; identifies undercut regions for DFM validation."/><text x="100" y="432" class="ct">DraftAngle</text>
+  <rect x="156" y="419" width="112" height="26" class="c" data-tip="WallThickness (miki::kernel)|Computes minimum wall thickness via ray-casting or sphere-fitting. Highlights thin-wall violations against user-defined threshold."/><text x="212" y="432" class="ct">WallThickness</text>
+  <rect x="274" y="419" width="96" height="26" class="c" data-tip="MassProps (miki::kernel)|Computes mass, volume, surface area, center of gravity, and inertia tensor for solid bodies. Supports multi-material assemblies."/><text x="322" y="432" class="ct">MassProps</text>
+  <rect x="376" y="419" width="84" height="26" class="c" data-tip="Distance (miki::tools)|Measures minimum/maximum distance between two geometric entities (point/edge/face/body). GPU-accelerated BVH narrowphase."/><text x="418" y="432" class="ct">Distance</text>
+  <rect x="466" y="419" width="120" height="26" class="c" data-tip="PointCloudRenderer (miki::pointcloud)|GPU point splatting with LOD octree. Supports 100M+ points via persistent mapped buffer and eye-dome lighting."/><text x="526" y="432" class="ct">PointCloudRend</text>
+  <rect x="592" y="419" width="60" height="26" class="c" data-tip="ICP (miki::pointcloud)|Iterative Closest Point rigid alignment. GPU-accelerated kd-tree nearest neighbor with outlier rejection (trimmed ICP)."/><text x="622" y="432" class="ct">ICP</text>
+  <rect x="658" y="419" width="96" height="26" class="c" data-tip="ScanToCAD (miki::pointcloud)|Fits BREP primitives (plane/cylinder/sphere/cone) to segmented point cloud regions. Uses RANSAC + least-squares refinement."/><text x="706" y="432" class="ct">ScanToCAD</text>
+  <rect x="760" y="419" width="104" height="26" class="c" data-tip="StepImporter (miki::import)|STEP AP203/AP214/AP242 translator via OCCT. Handles assemblies, PMI, colors, layers. Streaming mode for large files (&gt;1GB)."/><text x="812" y="432" class="ct">StepImporter</text>
+  <rect x="870" y="419" width="96" height="26" class="c" data-tip="JtImporter (miki::import)|Siemens JT format reader. Supports LOD mesh extraction, PMI, and lightweight assembly structure."/><text x="918" y="432" class="ct">JtImporter</text>
+  <rect x="972" y="419" width="104" height="26" class="c" data-tip="GltfPipeline (miki::import)|glTF 2.0 import/export with PBR materials, Draco compression, KHR_mesh_quantization. Bidirectional pipeline."/><text x="1024" y="432" class="ct">GltfPipeline</text>
+  <rect x="1082" y="419" width="118" height="26" class="c" data-tip="GPU Tessellation (miki::kernel)|Adaptive NURBS-to-triangle tessellation on GPU compute. Curvature-based refinement with watertight stitching at T-junctions."/><text x="1141" y="432" class="ct">GPU Tessellation</text>
+</g>
+
+<!-- ===== L8a: CAD Core (y=463, h=102) ===== -->
+<g id="L8a">
+  <rect x="30" y="463" width="1430" height="102" class="layer-bg l8a"/>
+  <text x="44" y="480" class="ln">L8a</text><text x="82" y="480" class="ll">CAD Core</text>
+  <text x="190" y="480" class="pt">Phase 7a, 8</text>
+  <text x="44" y="493" class="ns">miki::cad  miki::cadscene  miki::text  miki::ui</text>
+  <rect x="50" y="501" width="96" height="26" class="c" data-tip="CadScene (miki::cadscene)|CAD-aware scene graph with Body/Face/Edge hierarchy. Manages GPU buffers per-body, supports incremental updates and LOD switching."/><text x="98" y="514" class="ct">CadScene</text>
+  <rect x="152" y="501" width="96" height="26" class="c" data-tip="LayerStack (miki::cadscene)|Ordered compositing layer stack. Each layer has independent render target, blend mode, and visibility. Compositor merges all layers."/><text x="200" y="514" class="ct">LayerStack</text>
+  <rect x="254" y="501" width="112" height="26" class="c" data-tip="ConfigManager (miki::cadscene)|Display configuration manager: wireframe, shaded, shaded+edges, X-ray, realistic. Per-viewport config with inheritance."/><text x="310" y="514" class="ct">ConfigMgr</text>
+  <rect x="372" y="501" width="112" height="26" class="c" data-tip="DisplayStyles (miki::cadscene)|Per-body/per-face visual style presets. Controls color, transparency, edge visibility, material override. Supports style sheets."/><text x="428" y="514" class="ct">DisplayStyles</text>
+  <rect x="490" y="501" width="90" height="26" class="c" data-tip="GPU HLR (miki::cad)|GPU-accelerated hidden line removal for engineering drawings. Renders visible/hidden edges with line-style differentiation (solid vs dashed)."/><text x="535" y="514" class="ct">GPU HLR</text>
+  <rect x="586" y="501" width="104" height="26" class="c" data-tip="SectionPlane (miki::cad)|Real-time cross-section cutting plane with GPU stencil-based cap fill. Supports multiple planes, intersection curve extraction."/><text x="638" y="514" class="ct">SectionPlane</text>
+  <rect x="696" y="501" width="60" height="26" class="c" data-tip="OIT (miki::cad)|Order-Independent Transparency using weighted-blended or moment-based OIT. Handles overlapping transparent faces without sorting artifacts."/><text x="726" y="514" class="ct">OIT</text>
+  <rect x="762" y="501" width="80" height="26" class="c" data-tip="Explode (miki::cad)|Assembly explode view with automatic direction computation along assembly tree. Supports animated transitions and manual offset override."/><text x="802" y="514" class="ct">Explode</text>
+  <rect x="848" y="501" width="70" height="26" class="c" data-tip="RTAO (miki::cad)|Ray-Traced Ambient Occlusion for Tier1 backends. Uses RT pipeline for high-quality contact shadows. Falls back to SSAO on Tier2+."/><text x="883" y="514" class="ct">RTAO</text>
+  <rect x="50" y="531" width="104" height="26" class="c" data-tip="PMI Renderer (miki::cad)|Renders Product Manufacturing Information (GD&amp;T symbols, dimensions, tolerances) as 3D annotations. Supports STEP AP242 PMI data."/><text x="102" y="544" class="ct">PMI Renderer</text>
+  <rect x="160" y="531" width="120" height="26" class="c" data-tip="SketchRenderer (miki::cad)|Renders 2D sketch entities (lines, arcs, splines, constraints) with constraint solver feedback. Color-codes under/over-constrained."/><text x="220" y="544" class="ct">SketchRenderer</text>
+  <rect x="286" y="531" width="130" height="26" class="c" data-tip="DrawingProjector (miki::cad)|Projects 3D model to 2D engineering drawing views (front/top/iso). Handles hidden lines, section views, detail views."/><text x="351" y="544" class="ct">DrawingProjector</text>
+  <rect x="422" y="531" width="96" height="26" class="c" data-tip="2D Markup (miki::ui)|Annotation/redline overlay on viewport. Supports freehand, arrows, text callouts, measurement labels. Persisted as SVG layer."/><text x="470" y="544" class="ct">2D Markup</text>
+  <rect x="524" y="531" width="90" height="26" class="c" data-tip="IUiBridge (miki::ui)|Abstract UI bridge interface. Decouples renderer from host UI framework. Implementations for Qt, ImGui, web (WASM)."/><text x="569" y="544" class="ct">IUiBridge</text>
+  <rect x="620" y="531" width="112" height="26" class="c" data-tip="TextRenderer (miki::text)|GPU text rendering using multi-channel SDF (MSDF) atlas. Supports Unicode, CJK, rich formatting, and sub-pixel anti-aliasing."/><text x="676" y="544" class="ct">TextRenderer</text>
+  <rect x="738" y="531" width="100" height="26" class="c" data-tip="SVG Overlay (miki::ui)|Vector overlay composited via SVG foreignObject or rasterized path. Used for dimension lines, callouts, 2D annotations."/><text x="788" y="544" class="ct">SVG Overlay</text>
+  <rect x="844" y="531" width="126" height="26" class="c" data-tip="ViewportWidgets (miki::ui)|In-viewport floating UI elements: mini toolbar, property popups, context menus. GPU-rendered with hit testing."/><text x="907" y="544" class="ct">ViewportWidgets</text>
+  <rect x="976" y="531" width="112" height="26" class="c" data-tip="RayPicking v2 (miki::cad)|GPU ray-cast picking with BVH traversal. Returns entity ID, face index, UV, depth. Supports lasso/box selection via compute shader."/><text x="1032" y="544" class="ct">RayPicking v2</text>
+  <rect x="1094" y="531" width="126" height="26" class="c" data-tip="BooleanPreview (miki::cad)|Real-time boolean operation preview (union/subtract/intersect). Renders result as transparent overlay before kernel commit."/><text x="1157" y="544" class="ct">BooleanPreview</text>
+</g>
+
+<!-- ===== L7: Rendering Layer Stack (y=575, h=72) ===== -->
+<g id="L7">
+  <rect x="30" y="575" width="1430" height="72" class="layer-bg l7"/>
+  <text x="44" y="592" class="ln">L7</text><text x="78" y="592" class="ll">Rendering Layer Stack</text>
+  <text x="300" y="592" class="pt">Phase 8</text>
+  <text x="44" y="605" class="ns">miki::cadscene (LayerStack)</text>
+  <rect x="50" y="613" width="170" height="26" class="c" data-tip="Scene Layer (miki::cadscene)|Full rendering pipeline layer: opaque geometry, shadows, lighting, post-processing. Primary layer for CAD model display."/><text x="135" y="626" class="ct">Scene Layer (full)</text>
+  <rect x="226" y="613" width="180" height="26" class="c" data-tip="Preview Layer (miki::cadscene)|Transient/ephemeral geometry preview. Used for tool previews, drag operations. Cleared each frame, no persistent state."/><text x="316" y="626" class="ct">Preview Layer (transient)</text>
+  <rect x="412" y="613" width="176" height="26" class="c" data-tip="Overlay Layer (miki::cadscene)|Renders gizmos, compass, axes, selection outlines. Depth-tested against scene but rendered as separate pass."/><text x="500" y="626" class="ct">Overlay Layer (gizmo)</text>
+  <rect x="594" y="613" width="170" height="26" class="c" data-tip="Viewport Widget Layer (miki::cadscene)|Renders in-viewport floating widgets (toolbars, property editors). Screen-space, no depth interaction."/><text x="679" y="626" class="ct">Viewport Widget Lyr</text>
+  <rect x="770" y="613" width="150" height="26" class="c" data-tip="SVG Overlay Layer (miki::cadscene)|Vector SVG compositing layer for dimension lines, annotations. Resolution-independent rendering."/><text x="845" y="626" class="ct">SVG Overlay Lyr</text>
+  <rect x="926" y="613" width="150" height="26" class="c" data-tip="HUD Layer (miki::cadscene)|ImGui-based debug HUD: FPS counter, GPU stats, render graph visualizer, memory monitor. Dev-only in release builds."/><text x="1001" y="626" class="ct">HUD Layer (ImGui)</text>
+  <rect x="1082" y="613" width="110" height="26" class="c" data-tip="Compositor (miki::cadscene)|Merges all layer render targets into final swapchain image. Handles alpha blending, tonemapping, and FXAA on composite."/><text x="1137" y="626" class="ct">Compositor</text>
+</g>
+
+<!-- ===== L6: GPU-Driven Geometry (y=657, h=102) ===== -->
+<g id="L6">
+  <rect x="30" y="657" width="1430" height="102" class="layer-bg l6"/>
+  <text x="44" y="674" class="ln">L6</text><text x="78" y="674" class="ll">GPU-Driven Geometry</text>
+  <text x="280" y="674" class="pt">Phase 6a, 6b</text>
+  <text x="44" y="687" class="ns">miki::vgeo</text>
+  <rect x="50" y="695" width="104" height="26" class="c" data-tip="Task Shader (miki::vgeo)|Tier1 task shader for meshlet dispatch. Performs per-meshlet frustum+occlusion culling before amplifying to mesh shader."/><text x="102" y="708" class="ct">Task Shader</text>
+  <rect x="160" y="695" width="104" height="26" class="c" data-tip="Mesh Shader (miki::vgeo)|Tier1 mesh shader replaces vertex+geometry pipeline. Outputs up to 256 verts/256 prims per workgroup. Zero index buffer."/><text x="212" y="708" class="ct">Mesh Shader</text>
+  <rect x="270" y="695" width="90" height="26" class="c" data-tip="VisBuffer (miki::vgeo)|Visibility buffer (64-bit): stores meshletID + triangleID per pixel. Deferred material eval in fullscreen pass. Eliminates overdraw."/><text x="315" y="708" class="ct">VisBuffer</text>
+  <rect x="366" y="695" width="104" height="26" class="c" data-tip="GPU Culling (miki::vgeo)|Multi-pass GPU culling: frustum, HiZ occlusion, backface, small-triangle. Indirect dispatch chain, zero CPU readback."/><text x="418" y="708" class="ct">GPU Culling</text>
+  <rect x="476" y="695" width="100" height="26" class="c" data-tip="ClusterDAG (miki::vgeo)|Nanite-style cluster LOD DAG. Parent/child cluster hierarchy with seamless LOD transitions. GPU-driven cut selection."/><text x="526" y="708" class="ct">ClusterDAG</text>
+  <rect x="582" y="695" width="130" height="26" class="c" data-tip="GPU Scene Submit (miki::vgeo)|Builds GPU-side draw commands from scene BVH traversal. Fills indirect draw/dispatch buffers entirely on GPU."/><text x="647" y="708" class="ct">GPU Scene Submit</text>
+  <rect x="718" y="695" width="96" height="26" class="c" data-tip="RadixSort (miki::vgeo)|GPU parallel radix sort for depth sorting, OIT, and particle ordering. 4-pass LSB radix, ~1B keys/sec on RTX 4090."/><text x="766" y="708" class="ct">RadixSort</text>
+  <rect x="820" y="695" width="130" height="26" class="c" data-tip="PersistentCompute (miki::vgeo)|Persistent compute thread model: long-running workgroups with work-stealing. Used for culling, BVH build, sort."/><text x="885" y="708" class="ct">PersistentCompute</text>
+  <rect x="50" y="725" width="126" height="26" class="c" data-tip="MeshletCompress (miki::vgeo)|Meshlet geometry compression: quantized positions (16-bit), octahedral normals (8-bit), delta-coded indices. ~60% size reduction."/><text x="113" y="738" class="ct">MeshletCompress</text>
+  <rect x="182" y="725" width="126" height="26" class="c" data-tip="ClusterStreaming (miki::vgeo)|On-demand cluster streaming from disk/network. LRU residency with feedback buffer. Supports 100M+ triangle scenes."/><text x="245" y="738" class="ct">ClusterStreaming</text>
+  <rect x="314" y="725" width="112" height="26" class="c" data-tip="HybridRaster (miki::vgeo)|Software rasterizer for sub-4px triangles in compute shader. Avoids HW raster inefficiency on tiny triangles. Tier1 only."/><text x="370" y="738" class="ct">HybridRaster</text>
+  <rect x="432" y="725" width="130" height="26" class="c" data-tip="CooperativeMatrix (miki::vgeo)|VK_KHR_cooperative_matrix for matrix-heavy compute (BVH build, skinning). 4x-16x throughput vs scalar on supported GPUs."/><text x="497" y="738" class="ct">CooperativeMatrix</text>
+  <rect x="568" y="725" width="90" height="26" class="c" data-tip="GPU QEM (miki::vgeo)|GPU-accelerated Quadric Error Metric mesh simplification. Parallel edge collapse with topology preservation. Used for LOD generation."/><text x="613" y="738" class="ct">GPU QEM</text>
+</g>
+
+<!-- ===== L5: Core Rendering (y=769, h=102) ===== -->
+<g id="L5">
+  <rect x="30" y="769" width="1430" height="102" class="layer-bg l5"/>
+  <text x="44" y="786" class="ln">L5</text><text x="78" y="786" class="ll">Core Rendering</text>
+  <text x="230" y="786" class="pt">Phase 2, 3a, 3b</text>
+  <text x="44" y="799" class="ns">miki::core</text>
+  <rect x="50" y="807" width="108" height="26" class="c" data-tip="RenderGraph (miki::core)|Directed acyclic graph of render passes. Automatic resource aliasing, barrier insertion, async compute scheduling. ~50 passes typical."/><text x="104" y="820" class="ct">RenderGraph</text>
+  <rect x="164" y="807" width="104" height="26" class="c" data-tip="Deferred PBR (miki::core)|G-buffer based PBR: albedo, normal, roughness/metallic, emission. Cook-Torrance BRDF with GGX NDF. Up to 256 lights."/><text x="216" y="820" class="ct">Deferred PBR</text>
+  <rect x="274" y="807" width="104" height="26" class="c" data-tip="VSM Shadows (miki::core)|Virtual Shadow Maps with 16K virtual resolution. Clipmap-based page allocation, GPU-driven page rendering. No shadow acne."/><text x="326" y="820" class="ct">VSM Shadows</text>
+  <rect x="384" y="807" width="90" height="26" class="c" data-tip="TAA / FSR (miki::core)|Temporal Anti-Aliasing with motion-vector reprojection + AMD FSR 2.0 upscaling. Supports 1/2 or 1/4 internal resolution."/><text x="429" y="820" class="ct">TAA / FSR</text>
+  <rect x="480" y="807" width="100" height="26" class="c" data-tip="GTAO / SSAO (miki::core)|Ground Truth Ambient Occlusion (half-res compute). Horizon-based with temporal accumulation. Fallback SSAO for Tier2+."/><text x="530" y="820" class="ct">GTAO / SSAO</text>
+  <rect x="586" y="807" width="60" height="26" class="c" data-tip="VRS (miki::core)|Variable Rate Shading: content-adaptive shading rate via VK_KHR_fragment_shading_rate. Reduces pixel shader cost 20-40% in periphery."/><text x="616" y="820" class="ct">VRS</text>
+  <rect x="652" y="807" width="112" height="26" class="c" data-tip="MaterialGraph (miki::core)|Node-based material graph compiled to Slang. Supports PBR, unlit, subsurface, clearcoat. Hot-reloadable at runtime."/><text x="708" y="820" class="ct">MaterialGraph</text>
+  <rect x="770" y="807" width="96" height="26" class="c" data-tip="Hot-Reload (miki::core)|Shader hot-reload via filesystem watcher. Recompiles changed .slang files, updates pipeline variants without restart. &lt;100ms latency."/><text x="818" y="820" class="ct">Hot-Reload</text>
+  <rect x="872" y="807" width="112" height="26" class="c" data-tip="SlangCompiler (miki::core)|Slang shader compilation frontend. Manages includes, defines, entry points. Outputs SPIR-V/DXIL/GLSL/WGSL per backend."/><text x="928" y="820" class="ct">SlangCompiler</text>
+  <rect x="990" y="807" width="108" height="26" class="c" data-tip="PermutCache (miki::core)|Shader permutation cache: disk-persistent compiled shader variants keyed by (source hash + define set). Avoids redundant recompilation."/><text x="1044" y="820" class="ct">PermutCache</text>
+  <rect x="50" y="837" width="104" height="26" class="c" data-tip="Forward PBR (miki::core)|Single-pass forward PBR for transparent objects and simple scenes. Clustered light culling, max 64 lights per cluster."/><text x="102" y="850" class="ct">Forward PBR</text>
+  <rect x="160" y="837" width="90" height="26" class="c" data-tip="IBL / Env (miki::core)|Image-Based Lighting: prefiltered environment cubemap + split-sum BRDF LUT. Supports HDR .exr and equirectangular input."/><text x="205" y="850" class="ct">IBL / Env</text>
+  <rect x="256" y="837" width="104" height="26" class="c" data-tip="ToneMapping (miki::core)|HDR-to-LDR tonemapping: ACES fitted, AgX, Khronos PBR Neutral. Auto-exposure via luminance histogram (compute)."/><text x="308" y="850" class="ct">ToneMapping</text>
+  <rect x="366" y="837" width="96" height="26" class="c" data-tip="FXAA/MSAA (miki::core)|FXAA 3.11 as lightweight post-process AA. MSAA 4x/8x for Tier2+ where TAA unavailable. Configurable per-viewport."/><text x="414" y="850" class="ct">FXAA/MSAA</text>
+  <rect x="468" y="837" width="118" height="26" class="c" data-tip="BackgroundMode (miki::core)|Viewport background: solid color, gradient, environment map, transparent (for compositing). Per-viewport setting."/><text x="527" y="850" class="ct">BackgroundMode</text>
+  <rect x="592" y="837" width="112" height="26" class="c" data-tip="MotionVectors (miki::core)|Per-pixel motion vectors from current/previous frame transforms. Used by TAA, motion blur, frame interpolation."/><text x="648" y="850" class="ct">MotionVectors</text>
+  <rect x="710" y="837" width="108" height="26" class="c" data-tip="ImGuiBackend (miki::core)|Dear ImGui rendering backend using miki RHI. Supports all 5 backends. Used for debug UI and HUD overlay."/><text x="764" y="850" class="ct">ImGuiBackend</text>
+  <rect x="824" y="837" width="112" height="26" class="c" data-tip="EventRecorder (miki::core)|GPU event recorder for RenderDoc-style frame capture annotation. Inserts debug labels/regions for profiling tools."/><text x="880" y="850" class="ct">EventRecorder</text>
+  <rect x="942" y="837" width="96" height="26" class="c" data-tip="DLSS (miki::core, optional)|NVIDIA DLSS 3.5 integration for Tier1 Vulkan/D3D12. Temporal upscaling + frame generation. Requires RTX GPU."/><text x="990" y="850" class="ct">DLSS (opt)</text>
+  <rect x="1044" y="837" width="140" height="26" class="c" data-tip="ReSTIR / DDGI (miki::core, v1.1)|ReSTIR DI for many-light sampling + DDGI for real-time global illumination. Tier1 RT-capable GPUs. Post-1.0 feature."/><text x="1114" y="850" class="ct">ReSTIR / DDGI (1.1)</text>
+</g>
+
+<!-- ===== L4: Scene & Data (y=881, h=72) ===== -->
+<g id="L4">
+  <rect x="30" y="881" width="1430" height="72" class="layer-bg l4"/>
+  <text x="44" y="898" class="ln">L4</text><text x="78" y="898" class="ll">Scene &amp; Data</text>
+  <text x="210" y="898" class="pt">Phase 5</text>
+  <text x="44" y="911" class="ns">miki::scene  miki::kernel  miki::topo</text>
+  <rect x="50" y="919" width="112" height="26" class="c" data-tip="ECS (miki::scene)|Archetype-based Entity Component System. Cache-friendly SOA layout, parallel system scheduling. Supports 1M+ entities at 60fps."/><text x="106" y="932" class="ct">ECS (Archetype)</text>
+  <rect x="168" y="919" width="130" height="26" class="c" data-tip="SpatialIndex (miki::scene)|GPU-friendly BVH for scene queries: frustum culling, ray casting, nearest neighbor. LBVH build on GPU compute."/><text x="233" y="932" class="ct">SpatialIndex (BVH)</text>
+  <rect x="304" y="919" width="80" height="26" class="c" data-tip="Octree (miki::scene)|Sparse octree for point cloud LOD and spatial queries. Supports streaming insertion and GPU-parallel traversal."/><text x="344" y="932" class="ct">Octree</text>
+  <rect x="390" y="919" width="60" height="26" class="c" data-tip="RTE (miki::scene)|Relative-To-Eye rendering for large-coordinate scenes (&gt;10km). Double-precision CPU, single-precision GPU with origin rebasing."/><text x="420" y="932" class="ct">RTE</text>
+  <rect x="456" y="919" width="104" height="26" class="c" data-tip="EventSystem (miki::scene)|Pub/sub event bus for scene changes. Typed events with priority queuing. Used for dirty-flag propagation and UI sync."/><text x="508" y="932" class="ct">EventSystem</text>
+  <rect x="566" y="919" width="80" height="26" class="c" data-tip="IKernel (miki::kernel)|Abstract geometric kernel interface. Decouples renderer from OCCT/Parasolid. Provides tesselate/query/boolean operations."/><text x="606" y="932" class="ct">IKernel</text>
+  <rect x="652" y="919" width="112" height="26" class="c" data-tip="IGpuGeometry (miki::kernel)|GPU geometry buffer interface. Abstracts vertex/index/meshlet buffer management. Handles format conversion and upload."/><text x="708" y="932" class="ct">IGpuGeometry</text>
+  <rect x="770" y="919" width="104" height="26" class="c" data-tip="OcctKernel (miki::kernel)|OpenCASCADE kernel implementation. Wraps TopoDS_Shape operations: boolean, fillet, chamfer, tessellation."/><text x="822" y="932" class="ct">OcctKernel</text>
+  <rect x="880" y="919" width="96" height="26" class="c" data-tip="SimKernel (miki::kernel)|Simulation kernel adapter for FEA mesh and result access. Wraps solver-specific data structures into uniform interface."/><text x="928" y="932" class="ct">SimKernel</text>
+  <rect x="982" y="919" width="96" height="26" class="c" data-tip="TopoGraph (miki::topo)|Topology adjacency graph: vertex-edge-face-body connectivity. Enables topology-aware selection and propagation queries."/><text x="1030" y="932" class="ct">TopoGraph</text>
+  <rect x="1084" y="919" width="112" height="26" class="c" data-tip="MeshTopoMap (miki::topo)|Maps tessellated mesh elements back to BREP topology (which face owns which triangles). Critical for picking and highlighting."/><text x="1140" y="932" class="ct">MeshTopoMap</text>
+</g>
+
+<!-- ===== L3: Resource & Memory (y=963, h=72) ===== -->
+<g id="L3">
+  <rect x="30" y="963" width="1430" height="72" class="layer-bg l3"/>
+  <text x="44" y="980" class="ln">L3</text><text x="78" y="980" class="ll">Resource &amp; Memory</text>
+  <text x="260" y="980" class="pt">Phase 4</text>
+  <text x="44" y="993" class="ns">miki::resource</text>
+  <rect x="50" y="1001" width="118" height="26" class="c" data-tip="ResourceHandle (miki::resource)|Type-safe opaque handle (32-bit generation + 32-bit index). Dangling access returns error, never crashes. SlotMap-backed."/><text x="109" y="1014" class="ct">ResourceHandle</text>
+  <rect x="174" y="1001" width="120" height="26" class="c" data-tip="BindlessManager (miki::resource)|Manages global bindless descriptor array. All textures/buffers accessible via index. No descriptor set switching overhead."/><text x="234" y="1014" class="ct">BindlessMgr</text>
+  <rect x="300" y="1001" width="126" height="26" class="c" data-tip="DescriptorBuffer (miki::resource)|VK_EXT_descriptor_buffer implementation. Stores descriptors in GPU buffer for bindless access. Tier1 fast path."/><text x="363" y="1014" class="ct">DescriptorBuffer</text>
+  <rect x="432" y="1001" width="96" height="26" class="c" data-tip="BDAPointer (miki::resource)|Buffer Device Address pointer wrapper. Type-safe GPU pointer arithmetic for buffer references in shaders."/><text x="480" y="1014" class="ct">BDAPointer</text>
+  <rect x="534" y="1001" width="80" height="26" class="c" data-tip="SlotMap (miki::resource)|Generational slot map: O(1) insert/remove/lookup with ABA protection. Backing store for ResourceHandle system."/><text x="574" y="1014" class="ct">SlotMap</text>
+  <rect x="620" y="1001" width="100" height="26" class="c" data-tip="StagingRing (miki::resource)|Ring buffer for CPU-to-GPU staging uploads. Triple-buffered, fence-tracked. Handles texture and buffer uploads without stalls."/><text x="670" y="1014" class="ct">StagingRing</text>
+  <rect x="726" y="1001" width="104" height="26" class="c" data-tip="ChunkLoader (miki::resource)|Async streaming chunk loader. Loads geometry/texture chunks on background thread, signals GPU upload when ready."/><text x="778" y="1014" class="ct">ChunkLoader</text>
+  <rect x="836" y="1001" width="96" height="26" class="c" data-tip="MemBudget (miki::resource)|GPU memory budget tracker via VK_EXT_memory_budget. Triggers eviction when approaching VRAM limit. Per-heap accounting."/><text x="884" y="1014" class="ct">MemBudget</text>
+  <rect x="938" y="1001" width="130" height="26" class="c" data-tip="ResidencyFeedback (miki::resource)|GPU feedback buffer indicating which resources were accessed. Drives streaming decisions for virtual textures and cluster LOD."/><text x="1003" y="1014" class="ct">ResidencyFeedback</text>
+  <rect x="1074" y="1001" width="110" height="26" class="c" data-tip="LRU / Defrag (miki::resource)|LRU eviction policy for resident resources + periodic memory defragmentation via copy-and-compact. Reduces fragmentation &lt;5%."/><text x="1129" y="1014" class="ct">LRU / Defrag</text>
+</g>
+
+<!-- ===== L2: RHI (y=1045, h=72) ===== -->
+<g id="L2">
+  <rect x="30" y="1045" width="1430" height="72" class="layer-bg l2"/>
+  <text x="44" y="1062" class="ln">L2</text><text x="78" y="1062" class="ll">RHI (Render Hardware Interface)</text>
+  <text x="360" y="1062" class="pt">Phase 1a, 1b</text>
+  <text x="44" y="1075" class="ns">miki::rhi</text>
+  <rect x="50" y="1083" width="90" height="26" class="c" data-tip="IDevice (miki::rhi)|Abstract GPU device interface. 5 implementations (Vulkan, D3D12, WebGPU, OpenGL, Mock). Owns queues, memory, pipeline cache."/><text x="95" y="1096" class="ct">IDevice</text>
+  <rect x="146" y="1083" width="126" height="26" class="c" data-tip="ICommandBuffer (miki::rhi)|Abstract command buffer. Supports graphics, compute, transfer. Tier-aware: mesh shaders on Tier1, vertex-only on Tier2+."/><text x="209" y="1096" class="ct">ICommandBuffer</text>
+  <rect x="278" y="1083" width="120" height="26" class="c" data-tip="ExternalContext (miki::rhi)|Wraps externally-created GPU context (e.g., host app's VkDevice). Enables embedding without device ownership conflict."/><text x="338" y="1096" class="ct">ExternalContext</text>
+  <rect x="404" y="1083" width="120" height="26" class="c" data-tip="OffscreenTarget (miki::rhi)|Render-to-texture target for headless rendering, thumbnails, shadow maps. Manages framebuffer and resolve attachments."/><text x="464" y="1096" class="ct">OffscreenTarget</text>
+  <rect x="530" y="1083" width="112" height="26" class="c" data-tip="FrameManager (miki::rhi)|Triple-buffered frame lifecycle: acquire, record, submit, present. Manages per-frame fences, semaphores, and resource recycling."/><text x="586" y="1096" class="ct">FrameManager</text>
+  <rect x="648" y="1083" width="126" height="26" class="c" data-tip="StagingUploader (miki::rhi)|Low-level staging buffer upload manager. Batches small uploads, handles alignment, signals completion via timeline semaphore."/><text x="711" y="1096" class="ct">StagingUploader</text>
+  <rect x="780" y="1083" width="126" height="26" class="c" data-tip="IPipelineFactory (miki::rhi)|Abstract pipeline creation. MainPipelineFactory (task/mesh, Tier1) vs CompatPipelineFactory (vertex+MDI, Tier2/3/4)."/><text x="843" y="1096" class="ct">IPipelineFactory</text>
+  <rect x="912" y="1083" width="140" height="26" class="c" data-tip="GpuCapabilityProfile (miki::rhi)|Queries GPU capabilities at init. Determines tier (1-4), optional features (RT, mesh shaders, BDA), and limits."/><text x="982" y="1096" class="ct">GpuCapabilityProfile</text>
+  <rect x="1058" y="1083" width="90" height="26" class="c" data-tip="RhiTypes (miki::rhi)|Common RHI type definitions: Format, TextureUsage, BufferUsage, ShaderStage, PrimitiveTopology, etc. Backend-agnostic enums."/><text x="1103" y="1096" class="ct">RhiTypes</text>
+</g>
+
+<!-- ===== L1: Foundation (y=1127, h=72) ===== -->
+<g id="L1">
+  <rect x="30" y="1127" width="1430" height="72" class="layer-bg l1"/>
+  <text x="44" y="1144" class="ln">L1</text><text x="78" y="1144" class="ll">Foundation</text>
+  <text x="190" y="1144" class="pt">Phase 1a</text>
+  <text x="44" y="1157" class="ns">miki  miki::math  miki::gfx  miki::coca  miki::debug</text>
+  <rect x="50" y="1165" width="90" height="26" class="c" data-tip="ErrorCode (miki)|Strongly-typed error codes with category. Supports std::error_code interop. Used throughout for non-exception error reporting."/><text x="95" y="1178" class="ct">ErrorCode</text>
+  <rect x="146" y="1165" width="90" height="26" class="c" data-tip="Result&lt;T&gt; (miki)|std::expected&lt;T, ErrorCode&gt; alias. Monadic .and_then/.transform. No exceptions on hot paths."/><text x="191" y="1178" class="ct">Result&lt;T&gt;</text>
+  <rect x="242" y="1165" width="96" height="26" class="c" data-tip="Math Types (miki::math)|SIMD-optimized vec2/3/4, mat3/4, quat, AABB, OBB, Plane, Ray, Frustum. GLM-compatible layout, constexpr where possible."/><text x="290" y="1178" class="ct">Math Types</text>
+  <rect x="344" y="1165" width="90" height="26" class="c" data-tip="GFX Types (miki::gfx)|Graphics primitive types: Color, Viewport, Scissor, ClearValue, Extent2D/3D. Shared across all layers."/><text x="389" y="1178" class="ct">GFX Types</text>
+  <rect x="440" y="1165" width="104" height="26" class="c" data-tip="Coca Runtime (miki::coca)|Coroutine-based async runtime. Task scheduler with thread pool, co_await for async I/O, GPU fence waiting, file loading."/><text x="492" y="1178" class="ct">Coca Runtime</text>
+  <rect x="550" y="1165" width="96" height="26" class="c" data-tip="CpuProfiler (miki::debug)|CPU profiling with chrome://tracing JSON export. Scoped zones, thread-aware, &lt;10ns overhead per zone enter/exit."/><text x="598" y="1178" class="ct">CpuProfiler</text>
+  <rect x="652" y="1165" width="96" height="26" class="c" data-tip="GpuProfiler (miki::debug)|GPU timestamp query profiler. Per-pass timing with pipeline statistics. Supports RenderDoc/Nsight integration markers."/><text x="700" y="1178" class="ct">GpuProfiler</text>
+  <rect x="754" y="1165" width="96" height="26" class="c" data-tip="MemProfiler (miki::debug)|Memory allocation tracker: per-category byte counts, peak tracking, leak detection. Hooks into GPU and CPU allocators."/><text x="802" y="1178" class="ct">MemProfiler</text>
+  <rect x="856" y="1165" width="118" height="26" class="c" data-tip="StructuredLogger (miki::debug)|JSON-structured logging with severity, category, source location. Async file writer + optional network sink for remote monitoring."/><text x="915" y="1178" class="ct">StructuredLogger</text>
+  <rect x="980" y="1165" width="90" height="26" class="c" data-tip="Telemetry (miki::debug)|Runtime telemetry: frame time histogram, GPU utilization, memory pressure, draw call counts. Feeds into HUD and external dashboards."/><text x="1025" y="1178" class="ct">Telemetry</text>
+  <rect x="1076" y="1165" width="100" height="26" class="c" data-tip="Breadcrumbs (miki::debug)|GPU crash breadcrumb system via VK_AMD_buffer_marker / NV_device_diagnostic_checkpoints. Identifies last completed GPU operation before TDR."/><text x="1126" y="1178" class="ct">Breadcrumbs</text>
+</g>
+
+<!-- ===== Backend Sidebar (right column) ===== -->
+<g id="backends">
+  <text x="1540" y="90" class="bh">RHI Backends</text>
+  <text x="1540" y="106" class="pt" style="text-anchor:middle">5 backends from Day 1</text>
+  <rect x="1480" y="116" width="120" height="82" class="bb t1"/>
+  <text x="1540" y="134" class="bh" style="font-size:11px">Tier1_Full</text>
+  <text x="1540" y="150" class="bt" style="font-size:9.5px">VulkanDevice</text>
+  <text x="1540" y="164" class="pt" style="text-anchor:middle">Vk 1.4 Mesh/RT/Bindless</text>
+  <text x="1540" y="180" class="bt" style="font-size:9.5px">D3D12Device</text>
+  <text x="1540" y="194" class="pt" style="text-anchor:middle">Mesh+DXR 1.1+Heap</text>
+
+  <rect x="1480" y="206" width="120" height="52" class="bb t2"/>
+  <text x="1540" y="222" class="bh" style="font-size:11px">Tier2_Compat</text>
+  <text x="1540" y="238" class="bt" style="font-size:9.5px">VulkanDevice</text>
+  <text x="1540" y="252" class="pt" style="text-anchor:middle">Vk 1.1 Vertex+MDI</text>
+
+  <rect x="1480" y="266" width="120" height="52" class="bb t3"/>
+  <text x="1540" y="282" class="bh" style="font-size:11px">Tier3_WebGPU</text>
+  <text x="1540" y="298" class="bt" style="font-size:9.5px">WebGpuDevice</text>
+  <text x="1540" y="312" class="pt" style="text-anchor:middle">Dawn, WGSL, UBO emul</text>
+
+  <rect x="1480" y="326" width="120" height="52" class="bb t4"/>
+  <text x="1540" y="342" class="bh" style="font-size:11px">Tier4_OpenGL</text>
+  <text x="1540" y="358" class="bt" style="font-size:9.5px">OpenGlDevice</text>
+  <text x="1540" y="372" class="pt" style="text-anchor:middle">GL 4.3+ Slang-&gt;GLSL</text>
+
+  <rect x="1480" y="386" width="120" height="48" class="bb mk"/>
+  <text x="1540" y="400" class="bh" style="font-size:11px">Mock</text>
+  <text x="1540" y="416" class="bt" style="font-size:9.5px">MockDevice</text>
+  <text x="1540" y="430" class="pt" style="text-anchor:middle">CPU-side, no GPU CI</text>
+
+  <text x="1540" y="452" class="bh" style="font-size:10px">Pipeline Factories</text>
+  <rect x="1480" y="460" width="120" height="34" class="bb" style="fill:#E3F2FD"/>
+  <text x="1540" y="474" class="bt" style="font-size:9px">MainPipelineFactory</text>
+  <text x="1540" y="490" class="pt" style="text-anchor:middle">Task/Mesh (Tier1)</text>
+  <rect x="1480" y="500" width="120" height="34" class="bb" style="fill:#FFF3E0"/>
+  <text x="1540" y="514" class="bt" style="font-size:9px">CompatPipelineFactory</text>
+  <text x="1540" y="530" class="pt" style="text-anchor:middle">Vertex+MDI (Tier2/3/4)</text>
+
+  <text x="1540" y="556" class="bh" style="font-size:10px">Slang Shader Targets</text>
+  <rect x="1480" y="564" width="120" height="76" class="bb" style="fill:#FAFAFA"/>
+  <text x="1540" y="580" class="bt" style="font-size:9px">SPIR-V (Vulkan)</text>
+  <text x="1540" y="594" class="bt" style="font-size:9px">DXIL (D3D12)</text>
+  <text x="1540" y="608" class="bt" style="font-size:9px">GLSL 4.30 (OpenGL)</text>
+  <text x="1540" y="622" class="bt" style="font-size:9px">WGSL (WebGPU)</text>
+  <text x="1540" y="636" class="pt" style="text-anchor:middle">+ PermutationCache</text>
+
+  <rect x="1480" y="650" width="120" height="64" class="bb" style="fill:#F5F5F5"/>
+  <text x="1540" y="668" class="bh" style="font-size:10px">Toolchain</text>
+  <text x="1540" y="684" class="bt" style="font-size:9px">LLVM 20 + Clang 20</text>
+  <text x="1540" y="696" class="bt" style="font-size:9px">libc++ sandbox</text>
+  <text x="1540" y="710" class="pt" style="text-anchor:middle">C++23, CMake 4.0</text>
+</g>
+
+<!-- ===== Inter-layer Curved Arrows (left side) ===== -->
+<g id="arrows">
+  <!-- L11->L10 -->
+  <path d="M30,147 C14,147 14,157 30,157" class="arr"/>
+  <!-- L10->L9 -->
+  <path d="M30,229 C14,229 14,239 30,239" class="arr"/>
+  <!-- L9->L8b (direct) -->
+  <path d="M30,341 C14,341 14,351 30,351" class="arr"/>
+  <!-- L9->L8a (cross-layer, wider curve) -->
+  <path d="M30,341 C-4,341 -4,463 30,463" class="arrd"/>
+  <!-- L8b->L8a -->
+  <path d="M30,453 C14,453 14,463 30,463" class="arr"/>
+  <!-- L8a->L7 -->
+  <path d="M30,565 C14,565 14,575 30,575" class="arr"/>
+  <!-- L7->L6 (direct) -->
+  <path d="M30,647 C14,647 14,657 30,657" class="arr"/>
+  <!-- L7->L5 (cross-layer) -->
+  <path d="M30,647 C-8,647 -8,769 30,769" class="arrd"/>
+  <!-- L6->L5 -->
+  <path d="M30,759 C14,759 14,769 30,769" class="arr"/>
+  <!-- L5->L4 -->
+  <path d="M30,871 C14,871 14,881 30,881" class="arr"/>
+  <!-- L5->L3 (cross-layer) -->
+  <path d="M30,871 C-4,871 -4,963 30,963" class="arrd"/>
+  <!-- L4->L3 -->
+  <path d="M30,953 C14,953 14,963 30,963" class="arr"/>
+  <!-- L3->L2 -->
+  <path d="M30,1035 C14,1035 14,1045 30,1045" class="arr"/>
+  <!-- L2->L1 -->
+  <path d="M30,1117 C14,1117 14,1127 30,1127" class="arr"/>
+</g>
+
+<!-- ===== Legend (y=1215) ===== -->
+<g id="legend" transform="translate(30,1215)">
+  <rect x="0" y="0" width="1570" height="100" rx="8" ry="8" fill="#FAFAFA" stroke="#ccc" stroke-width="1"/>
+  <text x="18" y="18" class="lt">Legend</text>
+  <rect x="18" y="30" width="32" height="12" class="l1" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="58" y="40" class="ls">L1 Foundation</text>
+  <rect x="162" y="30" width="32" height="12" class="l2" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="202" y="40" class="ls">L2 RHI</text>
+  <rect x="310" y="30" width="32" height="12" class="l3" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="350" y="40" class="ls">L3 Resource</text>
+  <rect x="452" y="30" width="32" height="12" class="l4" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="492" y="40" class="ls">L4 Scene</text>
+  <rect x="562" y="30" width="32" height="12" class="l5" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="602" y="40" class="ls">L5 Rendering</text>
+  <rect x="690" y="30" width="32" height="12" class="l6" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="730" y="40" class="ls">L6 GPU Geo</text>
+
+  <rect x="18" y="48" width="32" height="12" class="l7" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="58" y="58" class="ls">L7 LayerStack</text>
+  <rect x="162" y="48" width="32" height="12" class="l8a" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="202" y="58" class="ls">L8a CAD Core</text>
+  <rect x="310" y="48" width="32" height="12" class="l8b" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="350" y="58" class="ls">L8b CAE/DFM</text>
+  <rect x="452" y="48" width="32" height="12" class="l9" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="492" y="58" class="ls">L9 Tools</text>
+  <rect x="562" y="48" width="32" height="12" class="l10" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="602" y="58" class="ls">L10 Plugin</text>
+  <rect x="690" y="48" width="32" height="12" class="l11" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="730" y="58" class="ls">L11 Application</text>
+
+  <line x1="850" y1="36" x2="900" y2="36" class="arr"/>
+  <text x="908" y="40" class="ls">Direct dependency</text>
+  <line x1="850" y1="54" x2="900" y2="54" class="arrd"/>
+  <text x="908" y="58" class="ls">Cross-layer dep</text>
+
+  <rect x="1060" y="30" width="24" height="12" class="t1" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="1092" y="40" class="ls">Tier1 (Vk+D3D12)</text>
+  <rect x="1220" y="30" width="24" height="12" class="t2" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="1252" y="40" class="ls">Tier2 (Compat)</text>
+  <rect x="1060" y="48" width="24" height="12" class="t3" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="1092" y="58" class="ls">Tier3 (WebGPU)</text>
+  <rect x="1220" y="48" width="24" height="12" class="t4" rx="2" ry="2" stroke="#999" stroke-width="0.5"/>
+  <text x="1252" y="58" class="ls">Tier4 (OpenGL)</text>
+
+  <text x="18" y="80" class="ns">Blue text = namespace</text>
+  <text x="180" y="80" class="pt" style="font-size:9px">Gray italic = phase</text>
+  <text x="330" y="80" class="ls">Total: ~21 namespaces, 27 phases (1a-18), ~133 weeks, ~2000+ tests</text>
+</g>
+
+<!-- ===== Phase Timeline (y=1330) ===== -->
+<g id="timeline" transform="translate(30,1330)">
+  <text x="0" y="0" class="lt">Phase Timeline (Critical Path)</text>
+  <rect x="0" y="10" width="1570" height="28" rx="4" ry="4" fill="#ECEFF1" stroke="#999" stroke-width="0.5"/>
+  <rect x="4"    y="13" width="82"  height="22" rx="3" ry="3" fill="#7986CB"/>
+  <text x="45"   y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">1a-1b</text>
+  <rect x="90"   y="13" width="68"  height="22" rx="3" ry="3" fill="#64B5F6"/>
+  <text x="124"  y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">2</text>
+  <rect x="162"  y="13" width="76"  height="22" rx="3" ry="3" fill="#4DB6AC"/>
+  <text x="200"  y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">3a</text>
+  <rect x="242"  y="13" width="66"  height="22" rx="3" ry="3" fill="#81C784"/>
+  <text x="275"  y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">4</text>
+  <rect x="312"  y="13" width="58"  height="22" rx="3" ry="3" fill="#AED581"/>
+  <text x="341"  y="28" style="font-size:9px;fill:#333;text-anchor:middle;font-weight:600">5</text>
+  <rect x="374"  y="13" width="90"  height="22" rx="3" ry="3" fill="#DCE775"/>
+  <text x="419"  y="28" style="font-size:9px;fill:#333;text-anchor:middle;font-weight:600">6a-6b</text>
+  <rect x="468"  y="13" width="42"  height="22" rx="3" ry="3" fill="#FFF176"/>
+  <text x="489"  y="28" style="font-size:8px;fill:#333;text-anchor:middle;font-weight:600">CD1</text>
+  <rect x="514"  y="13" width="106" height="22" rx="3" ry="3" fill="#FFB74D"/>
+  <text x="567"  y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">7a-7b</text>
+  <rect x="624"  y="13" width="76"  height="22" rx="3" ry="3" fill="#FF8A65"/>
+  <text x="662"  y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">8</text>
+  <rect x="704"  y="13" width="42"  height="22" rx="3" ry="3" fill="#FFF176"/>
+  <text x="725"  y="28" style="font-size:8px;fill:#333;text-anchor:middle;font-weight:600">CD2</text>
+  <rect x="750"  y="13" width="58"  height="22" rx="3" ry="3" fill="#F48FB1"/>
+  <text x="779"  y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">9</text>
+  <rect x="812"  y="13" width="58"  height="22" rx="3" ry="3" fill="#CE93D8"/>
+  <text x="841"  y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">10</text>
+  <rect x="874"  y="13" width="90"  height="22" rx="3" ry="3" fill="#B39DDB"/>
+  <text x="919"  y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">11-11c</text>
+  <rect x="968"  y="13" width="48"  height="22" rx="3" ry="3" fill="#90CAF9"/>
+  <text x="992"  y="28" style="font-size:9px;fill:#333;text-anchor:middle;font-weight:600">12</text>
+  <rect x="1020" y="13" width="52"  height="22" rx="3" ry="3" fill="#80DEEA"/>
+  <text x="1046" y="28" style="font-size:9px;fill:#333;text-anchor:middle;font-weight:600">13</text>
+  <rect x="1076" y="13" width="66"  height="22" rx="3" ry="3" fill="#A5D6A7"/>
+  <text x="1109" y="28" style="font-size:9px;fill:#333;text-anchor:middle;font-weight:600">14</text>
+  <rect x="1146" y="13" width="42"  height="22" rx="3" ry="3" fill="#FFF176"/>
+  <text x="1167" y="28" style="font-size:8px;fill:#333;text-anchor:middle;font-weight:600">CD3</text>
+  <rect x="1192" y="13" width="96"  height="22" rx="3" ry="3" fill="#EF9A9A"/>
+  <text x="1240" y="28" style="font-size:9px;fill:#333;text-anchor:middle;font-weight:600">15a-15b</text>
+  <rect x="1292" y="13" width="56"  height="22" rx="3" ry="3" fill="#BCAAA4"/>
+  <text x="1320" y="28" style="font-size:9px;fill:#fff;text-anchor:middle;font-weight:600">Tail</text>
+  <text x="45"   y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W1-4</text>
+  <text x="124"  y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W5-7</text>
+  <text x="200"  y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W8-10</text>
+  <text x="275"  y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W11-14</text>
+  <text x="341"  y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W15-18</text>
+  <text x="419"  y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W19-32</text>
+  <text x="489"  y="50" style="font-size:7.5px;fill:#888;text-anchor:middle">W33-35</text>
+  <text x="567"  y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W36-48</text>
+  <text x="662"  y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W49-54</text>
+  <text x="725"  y="50" style="font-size:7.5px;fill:#888;text-anchor:middle">W55-57</text>
+  <text x="1240" y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W86-95</text>
+  <text x="1320" y="50" style="font-size:7.5px;fill:#666;text-anchor:middle">W96-98</text>
+</g>
+
+<!-- ===== Tooltip System ===== -->
+<g id="tooltip" opacity="0" pointer-events="none">
+  <rect id="tip-bg" class="tip" x="0" y="0" width="200" height="44"/>
+  <text id="tip-t1" class="tip-title" x="8" y="16"></text>
+  <text id="tip-t2" class="tip-text" x="8" y="30"></text>
+</g>
+<script type="text/javascript"><![CDATA[
+(function(){
+  var svg=document.querySelector('svg'),
+      g=document.getElementById('tooltip'),
+      bg=document.getElementById('tip-bg'),
+      t1=document.getElementById('tip-t1'),
+      t2=document.getElementById('tip-t2');
+  svg.addEventListener('mousemove',function(e){
+    var el=e.target.closest('[data-tip]');
+    if(!el){g.setAttribute('opacity','0');return;}
+    var lines=el.getAttribute('data-tip').split('|');
+    t1.textContent=lines[0]||'';
+    t2.textContent=lines[1]||'';
+    var pt=svg.createSVGPoint();
+    pt.x=e.clientX; pt.y=e.clientY;
+    var p=pt.matrixTransform(svg.getScreenCTM().inverse());
+    var w=Math.max(t1.getComputedTextLength(),t2.getComputedTextLength())+16;
+    var h=lines[1]?44:24;
+    bg.setAttribute('width',w);
+    bg.setAttribute('height',h);
+    var tx=p.x+12, ty=p.y-h-6;
+    if(tx+w>1600) tx=p.x-w-12;
+    if(ty<0) ty=p.y+16;
+    g.setAttribute('transform','translate('+tx+','+ty+')');
+    g.setAttribute('opacity','1');
+  });
+})();
+]]></script>
+</svg>

@@ -1,0 +1,521 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1100" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <style>
+      .layer-bg { rx: 12; ry: 12; stroke-width: 2; }
+      .module { rx: 8; ry: 8; stroke-width: 1.5; }
+      .label { font-size: 13px; fill: #fff; font-weight: 600; }
+      .sublabel { font-size: 10.5px; fill: rgba(255,255,255,0.85); }
+      .layer-title { font-size: 15px; font-weight: 700; fill: #1a1a2e; }
+      .layer-subtitle { font-size: 11px; fill: #555; }
+      .arrow { stroke: #666; stroke-width: 1.8; fill: none; marker-end: url(#arrowhead); }
+      .arrow-data { stroke: #999; stroke-width: 1.2; fill: none; stroke-dasharray: 6,3; marker-end: url(#arrowhead-light); }
+      .tier-badge { rx: 4; ry: 4; }
+      .title { font-size: 22px; font-weight: 800; fill: #1a1a2e; }
+      .version { font-size: 12px; fill: #666; font-weight: 400; }
+      .legend-text { font-size: 11px; fill: #444; }
+      .phase-tag { font-size: 9px; fill: rgba(255,255,255,0.7); }
+      .new-badge { font-size: 8px; fill: #f59e0b; font-weight: 700; }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#666"/>
+    </marker>
+    <marker id="arrowhead-light" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+      <polygon points="0 0, 6 2.5, 0 5" fill="#999"/>
+    </marker>
+    <linearGradient id="grad-app" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="grad-render" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="grad-gpu" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0891b2"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="grad-scene" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="grad-resource" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="grad-rhi" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#dc2626"/>
+      <stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+    <linearGradient id="grad-foundation" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4b5563"/>
+      <stop offset="100%" stop-color="#6b7280"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Title -->
+  <text x="720" y="35" text-anchor="middle" class="title">miki Renderer Architecture</text>
+  <text x="720" y="55" text-anchor="middle" class="version">1.0 (Phase 1a-15b, 98w, 3 Cooldowns) + 1.1 (Phase 16-21, 33w) | 5 Backends + 4 Tiers from Day 1 | ~15 Namespaces | Injection-First</text>
+
+  <!-- ═══════════════ LAYER 7: Application (top) ═══════════════ -->
+  <rect x="30" y="75" width="1380" height="95" fill="#f0eeff" class="layer-bg" stroke="#c4b5fd"/>
+  <text x="45" y="95" class="layer-title">Layer 7 — Application</text>
+  <text x="200" y="95" class="layer-subtitle">CAD/CAE Workflows, Editor, Viewport, SDK, IUiBridge</text>
+
+  <rect x="45" y="105" width="135" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="113" y="126" text-anchor="middle" class="label">CadScene</text>
+  <text x="113" y="140" text-anchor="middle" class="sublabel">miki::cadscene</text>
+  <text x="113" y="151" text-anchor="middle" class="phase-tag">Phase 8</text>
+
+  <rect x="188" y="105" width="120" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="248" y="126" text-anchor="middle" class="label">Tools</text>
+  <text x="248" y="140" text-anchor="middle" class="sublabel">Zebra + Curvature</text>
+  <text x="248" y="151" text-anchor="middle" class="phase-tag">Phase 9</text>
+
+  <rect x="316" y="105" width="120" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="376" y="126" text-anchor="middle" class="label">CAD Features</text>
+  <text x="376" y="140" text-anchor="middle" class="sublabel">HLR+OIT+Lasso</text>
+  <text x="376" y="151" text-anchor="middle" class="phase-tag">Phase 7a-7b</text>
+
+  <rect x="444" y="105" width="135" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="512" y="126" text-anchor="middle" class="label">CAE + PointCloud</text>
+  <text x="512" y="140" text-anchor="middle" class="sublabel">EDL + Trace + FEM</text>
+  <text x="512" y="151" text-anchor="middle" class="phase-tag">Phase 10, 17</text>
+
+  <rect x="587" y="105" width="100" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="637" y="126" text-anchor="middle" class="label">SDK</text>
+  <text x="637" y="140" text-anchor="middle" class="sublabel">MikiView + 6DOF</text>
+  <text x="637" y="151" text-anchor="middle" class="phase-tag">Phase 15a</text>
+
+  <rect x="695" y="105" width="100" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="745" y="126" text-anchor="middle" class="label">Cloud</text>
+  <text x="745" y="140" text-anchor="middle" class="sublabel">WebRTC + REST</text>
+  <text x="745" y="151" text-anchor="middle" class="phase-tag">Phase 15b</text>
+
+  <rect x="803" y="105" width="110" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="858" y="126" text-anchor="middle" class="label">IKernel</text>
+  <text x="858" y="140" text-anchor="middle" class="sublabel">Pluggable Geometry</text>
+  <text x="858" y="151" text-anchor="middle" class="phase-tag">Phase 5</text>
+
+  <rect x="921" y="105" width="110" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="976" y="126" text-anchor="middle" class="label">CommandBus</text>
+  <text x="976" y="140" text-anchor="middle" class="sublabel">Text + Script + LLM</text>
+  <text x="976" y="151" text-anchor="middle" class="phase-tag">Phase 9</text>
+
+  <rect x="1039" y="105" width="110" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="1094" y="126" text-anchor="middle" class="label">IUiBridge</text>
+  <text x="1094" y="140" text-anchor="middle" class="sublabel">Host UI contract</text>
+  <text x="1094" y="151" text-anchor="middle" class="phase-tag">Phase 3a+8+9</text>
+
+  <rect x="1157" y="105" width="100" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="1207" y="126" text-anchor="middle" class="label">Debug</text>
+  <text x="1207" y="140" text-anchor="middle" class="sublabel">EventRecorder</text>
+  <text x="1207" y="151" text-anchor="middle" class="phase-tag">Phase 11</text>
+
+  <rect x="1265" y="105" width="130" height="50" fill="url(#grad-app)" class="module" stroke="#4f46e5"/>
+  <text x="1330" y="126" text-anchor="middle" class="label">Ref UI (1.1)</text>
+  <text x="1330" y="140" text-anchor="middle" class="sublabel">LLM Agent + UI</text>
+  <text x="1330" y="151" text-anchor="middle" class="phase-tag">Phase 21</text>
+
+  <!-- ═══════════════ LAYER 6: Core Rendering Pipeline ═══════════════ -->
+  <rect x="30" y="185" width="1380" height="95" fill="#eff6ff" class="layer-bg" stroke="#93c5fd"/>
+  <text x="45" y="205" class="layer-title">Layer 6 — Core Rendering Pipeline</text>
+  <text x="305" y="205" class="layer-subtitle">RenderGraph, Deferred, Aniso PBR, Shadows, Post-Processing, Slang, 3D Procedural</text>
+
+  <rect x="45" y="215" width="150" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="120" y="236" text-anchor="middle" class="label">RenderGraph</text>
+  <text x="120" y="250" text-anchor="middle" class="sublabel">DAG + barriers + aliasing</text>
+  <text x="120" y="261" text-anchor="middle" class="phase-tag">Phase 3a</text>
+
+  <rect x="203" y="215" width="140" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="273" y="236" text-anchor="middle" class="label">Deferred PBR</text>
+  <text x="273" y="250" text-anchor="middle" class="sublabel">GBuffer + IBL + Aniso</text>
+  <text x="273" y="261" text-anchor="middle" class="phase-tag">Phase 2-3a</text>
+
+  <rect x="351" y="215" width="105" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="404" y="236" text-anchor="middle" class="label">VSM</text>
+  <text x="404" y="250" text-anchor="middle" class="sublabel">Virtual Shadow</text>
+  <text x="404" y="261" text-anchor="middle" class="phase-tag">Phase 3b</text>
+
+  <rect x="464" y="215" width="115" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="522" y="236" text-anchor="middle" class="label">TAA / FSR</text>
+  <text x="522" y="250" text-anchor="middle" class="sublabel">Temporal + Upscale</text>
+  <text x="522" y="261" text-anchor="middle" class="phase-tag">Phase 3b</text>
+
+  <rect x="587" y="215" width="105" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="640" y="236" text-anchor="middle" class="label">GTAO / RTAO</text>
+  <text x="640" y="250" text-anchor="middle" class="sublabel">AO (screen + RT)</text>
+  <text x="640" y="261" text-anchor="middle" class="phase-tag">Phase 3b, 7a</text>
+
+  <rect x="700" y="215" width="80" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="740" y="236" text-anchor="middle" class="label">VRS</text>
+  <text x="740" y="250" text-anchor="middle" class="sublabel">Shading Rate</text>
+  <text x="740" y="261" text-anchor="middle" class="phase-tag">Phase 3b</text>
+
+  <rect x="788" y="215" width="130" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="853" y="236" text-anchor="middle" class="label">Slang Compiler</text>
+  <text x="853" y="250" text-anchor="middle" class="sublabel">SPIR-V/DXIL/GLSL/WGSL</text>
+  <text x="853" y="261" text-anchor="middle" class="phase-tag">Phase 1a-1b</text>
+
+  <rect x="926" y="215" width="130" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="991" y="236" text-anchor="middle" class="label">TextRenderer</text>
+  <text x="991" y="250" text-anchor="middle" class="sublabel">MSDF + HarfBuzz</text>
+  <text x="991" y="261" text-anchor="middle" class="phase-tag">Phase 2</text>
+
+  <rect x="1064" y="215" width="145" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="1137" y="236" text-anchor="middle" class="label">ReSTIR + DDGI</text>
+  <text x="1137" y="250" text-anchor="middle" class="sublabel">Advanced GI (1.1 opt)</text>
+  <text x="1137" y="261" text-anchor="middle" class="phase-tag">Phase 19</text>
+
+  <rect x="1217" y="215" width="178" height="50" fill="url(#grad-render)" class="module" stroke="#1d4ed8"/>
+  <text x="1306" y="236" text-anchor="middle" class="label">3D Procedural (1.1)</text>
+  <text x="1306" y="250" text-anchor="middle" class="sublabel">Perlin/Simplex/Worley</text>
+  <text x="1306" y="261" text-anchor="middle" class="phase-tag">Phase 18</text>
+
+  <!-- ═══════════════ LAYER 5: GPU-Driven Rendering ═══════════════ -->
+  <rect x="30" y="295" width="1380" height="95" fill="#ecfeff" class="layer-bg" stroke="#67e8f9"/>
+  <text x="45" y="315" class="layer-title">Layer 5 — GPU-Driven Rendering</text>
+  <text x="290" y="315" class="layer-subtitle">Task/Mesh Shader, VisBuffer, ClusterDAG, GPU Compute Primitives</text>
+
+  <rect x="45" y="325" width="170" height="50" fill="url(#grad-gpu)" class="module" stroke="#0e7490"/>
+  <text x="130" y="346" text-anchor="middle" class="label">Task / Mesh Shader</text>
+  <text x="130" y="360" text-anchor="middle" class="sublabel">Meshlet amplification</text>
+  <text x="130" y="371" text-anchor="middle" class="phase-tag">Phase 6a</text>
+
+  <rect x="223" y="325" width="155" height="50" fill="url(#grad-gpu)" class="module" stroke="#0e7490"/>
+  <text x="301" y="346" text-anchor="middle" class="label">Visibility Buffer</text>
+  <text x="301" y="360" text-anchor="middle" class="sublabel">Deferred material resolve</text>
+  <text x="301" y="371" text-anchor="middle" class="phase-tag">Phase 6a</text>
+
+  <rect x="386" y="325" width="160" height="50" fill="url(#grad-gpu)" class="module" stroke="#0e7490"/>
+  <text x="466" y="346" text-anchor="middle" class="label">GPU Scene Submit</text>
+  <text x="466" y="360" text-anchor="middle" class="sublabel">Zero CPU draw calls</text>
+  <text x="466" y="371" text-anchor="middle" class="phase-tag">Phase 6a</text>
+
+  <rect x="554" y="325" width="160" height="50" fill="url(#grad-gpu)" class="module" stroke="#0e7490"/>
+  <text x="634" y="346" text-anchor="middle" class="label">ClusterDAG + QEM</text>
+  <text x="634" y="360" text-anchor="middle" class="sublabel">LOD + Streaming + Simplify</text>
+  <text x="634" y="371" text-anchor="middle" class="phase-tag">Phase 6b</text>
+
+  <rect x="722" y="325" width="140" height="50" fill="url(#grad-gpu)" class="module" stroke="#0e7490"/>
+  <text x="792" y="346" text-anchor="middle" class="label">GPU Compute</text>
+  <text x="792" y="360" text-anchor="middle" class="sublabel">Sort / Scan / Prefix</text>
+  <text x="792" y="371" text-anchor="middle" class="phase-tag">Phase 6a</text>
+
+  <rect x="870" y="325" width="185" height="50" fill="url(#grad-gpu)" class="module" stroke="#0e7490"/>
+  <text x="963" y="346" text-anchor="middle" class="label">BLAS / TLAS (RT)</text>
+  <text x="963" y="360" text-anchor="middle" class="sublabel">Pick + Lasso + RTAO + DFM</text>
+  <text x="963" y="371" text-anchor="middle" class="phase-tag">Phase 7a</text>
+
+  <rect x="1063" y="325" width="165" height="50" fill="url(#grad-gpu)" class="module" stroke="#0e7490"/>
+  <text x="1146" y="346" text-anchor="middle" class="label">HiZ + Frustum Cull</text>
+  <text x="1146" y="360" text-anchor="middle" class="sublabel">GPU occlusion culling</text>
+  <text x="1146" y="371" text-anchor="middle" class="phase-tag">Phase 6a</text>
+
+  <rect x="1236" y="325" width="159" height="50" fill="url(#grad-gpu)" class="module" stroke="#0e7490"/>
+  <text x="1316" y="346" text-anchor="middle" class="label">Joint Syms (1.1)</text>
+  <text x="1316" y="360" text-anchor="middle" class="sublabel">MBD + TwinBridge</text>
+  <text x="1316" y="371" text-anchor="middle" class="phase-tag">Phase 20</text>
+
+  <!-- ═══════════════ LAYER 4: Scene & Data ═══════════════ -->
+  <rect x="30" y="405" width="1380" height="95" fill="#ecfdf5" class="layer-bg" stroke="#6ee7b7"/>
+  <text x="45" y="425" class="layer-title">Layer 4 — Scene &amp; Data</text>
+  <text x="210" y="425" class="layer-subtitle">ECS, Spatial Index, RTE, Kernel, Import, Coca</text>
+
+  <rect x="45" y="435" width="155" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="123" y="456" text-anchor="middle" class="label">ECS (Archetype)</text>
+  <text x="123" y="470" text-anchor="middle" class="sublabel">SOA + QueryEngine</text>
+  <text x="123" y="481" text-anchor="middle" class="phase-tag">Phase 5</text>
+
+  <rect x="208" y="435" width="155" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="286" y="456" text-anchor="middle" class="label">Spatial Index</text>
+  <text x="286" y="470" text-anchor="middle" class="sublabel">BVH + Octree + Hash</text>
+  <text x="286" y="481" text-anchor="middle" class="phase-tag">Phase 5</text>
+
+  <rect x="371" y="435" width="115" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="429" y="456" text-anchor="middle" class="label">RTE v2</text>
+  <text x="429" y="470" text-anchor="middle" class="sublabel">Relative-to-Eye</text>
+  <text x="429" y="481" text-anchor="middle" class="phase-tag">Phase 5</text>
+
+  <rect x="494" y="435" width="155" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="572" y="456" text-anchor="middle" class="label">Import Pipeline</text>
+  <text x="572" y="470" text-anchor="middle" class="sublabel">STEP/JT/IGES/glTF</text>
+  <text x="572" y="481" text-anchor="middle" class="phase-tag">Phase 7b</text>
+
+  <rect x="657" y="435" width="140" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="727" y="456" text-anchor="middle" class="label">Tessellator</text>
+  <text x="727" y="470" text-anchor="middle" class="sublabel">OCCT + GPU Parametric</text>
+  <text x="727" y="481" text-anchor="middle" class="phase-tag">Phase 7b</text>
+
+  <rect x="805" y="435" width="140" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="875" y="456" text-anchor="middle" class="label">Coca Runtime</text>
+  <text x="875" y="470" text-anchor="middle" class="sublabel">3+N coroutine pool</text>
+  <text x="875" y="481" text-anchor="middle" class="phase-tag">Phase 13</text>
+
+  <rect x="953" y="435" width="145" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="1026" y="456" text-anchor="middle" class="label">Point Cloud</text>
+  <text x="1026" y="470" text-anchor="middle" class="sublabel">Splat + EDL + ICP</text>
+  <text x="1026" y="481" text-anchor="middle" class="phase-tag">Phase 10</text>
+
+  <rect x="1106" y="435" width="140" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="1176" y="456" text-anchor="middle" class="label">TraceCurves</text>
+  <text x="1176" y="470" text-anchor="middle" class="sublabel">Kinematic trajectory</text>
+  <text x="1176" y="481" text-anchor="middle" class="phase-tag">Phase 10</text>
+
+  <rect x="1254" y="435" width="141" height="50" fill="url(#grad-scene)" class="module" stroke="#047857"/>
+  <text x="1325" y="456" text-anchor="middle" class="label">Twin Bridge</text>
+  <text x="1325" y="470" text-anchor="middle" class="sublabel">IoT / MQTT (1.1)</text>
+  <text x="1325" y="481" text-anchor="middle" class="phase-tag">Phase 20</text>
+
+  <!-- ═══════════════ LAYER 3: Resource & Memory ═══════════════ -->
+  <rect x="30" y="515" width="1380" height="95" fill="#fffbeb" class="layer-bg" stroke="#fcd34d"/>
+  <text x="45" y="535" class="layer-title">Layer 3 — Resource &amp; Memory</text>
+  <text x="270" y="535" class="layer-subtitle">Bindless, BDA, Streaming, Memory Budget, Residency</text>
+
+  <rect x="45" y="545" width="170" height="50" fill="url(#grad-resource)" class="module" stroke="#b45309"/>
+  <text x="130" y="566" text-anchor="middle" class="label">Bindless Manager</text>
+  <text x="130" y="580" text-anchor="middle" class="sublabel">Descriptor Buffer + Set</text>
+  <text x="130" y="591" text-anchor="middle" class="phase-tag">Phase 4</text>
+
+  <rect x="223" y="545" width="140" height="50" fill="url(#grad-resource)" class="module" stroke="#b45309"/>
+  <text x="293" y="566" text-anchor="middle" class="label">BDA Pointers</text>
+  <text x="293" y="580" text-anchor="middle" class="sublabel">64-bit + FNV-1a</text>
+  <text x="293" y="591" text-anchor="middle" class="phase-tag">Phase 4</text>
+
+  <rect x="371" y="545" width="160" height="50" fill="url(#grad-resource)" class="module" stroke="#b45309"/>
+  <text x="451" y="566" text-anchor="middle" class="label">Chunk Streaming</text>
+  <text x="451" y="580" text-anchor="middle" class="sublabel">Octree pages + LRU</text>
+  <text x="451" y="591" text-anchor="middle" class="phase-tag">Phase 6b</text>
+
+  <rect x="539" y="545" width="160" height="50" fill="url(#grad-resource)" class="module" stroke="#b45309"/>
+  <text x="619" y="566" text-anchor="middle" class="label">Memory Budget</text>
+  <text x="619" y="580" text-anchor="middle" class="sublabel">VMA + EXT_budget</text>
+  <text x="619" y="591" text-anchor="middle" class="phase-tag">Phase 4</text>
+
+  <rect x="707" y="545" width="165" height="50" fill="url(#grad-resource)" class="module" stroke="#b45309"/>
+  <text x="790" y="566" text-anchor="middle" class="label">Residency Feedback</text>
+  <text x="790" y="580" text-anchor="middle" class="sublabel">GPU page requests</text>
+  <text x="790" y="591" text-anchor="middle" class="phase-tag">Phase 4</text>
+
+  <rect x="880" y="545" width="145" height="50" fill="url(#grad-resource)" class="module" stroke="#b45309"/>
+  <text x="953" y="566" text-anchor="middle" class="label">Staging Ring</text>
+  <text x="953" y="580" text-anchor="middle" class="sublabel">CPU upload</text>
+  <text x="953" y="591" text-anchor="middle" class="phase-tag">Phase 1a</text>
+
+  <rect x="1033" y="545" width="180" height="50" fill="url(#grad-resource)" class="module" stroke="#b45309"/>
+  <text x="1123" y="566" text-anchor="middle" class="label">Resource Handle</text>
+  <text x="1123" y="580" text-anchor="middle" class="sublabel">SlotMap + generation</text>
+  <text x="1123" y="591" text-anchor="middle" class="phase-tag">Phase 1a</text>
+
+  <rect x="1221" y="545" width="174" height="50" fill="url(#grad-resource)" class="module" stroke="#b45309"/>
+  <text x="1308" y="566" text-anchor="middle" class="label">OffscreenTarget</text>
+  <text x="1308" y="580" text-anchor="middle" class="sublabel">Headless + Readback</text>
+  <text x="1308" y="591" text-anchor="middle" class="phase-tag">Phase 1a</text>
+
+  <!-- ═══════════════ LAYER 2: RHI ═══════════════ -->
+  <rect x="30" y="625" width="1380" height="95" fill="#fef2f2" class="layer-bg" stroke="#fca5a5"/>
+  <text x="45" y="645" class="layer-title">Layer 2 — RHI Abstraction (Injection-First)</text>
+  <text x="330" y="645" class="layer-subtitle">IDevice::CreateFromExisting(ExternalContext) — miki never creates windows or API contexts</text>
+
+  <rect x="45" y="655" width="140" height="50" fill="url(#grad-rhi)" class="module" stroke="#b91c1c"/>
+  <text x="115" y="676" text-anchor="middle" class="label">IDevice</text>
+  <text x="115" y="690" text-anchor="middle" class="sublabel">CRUD + Pipeline</text>
+  <text x="115" y="701" text-anchor="middle" class="phase-tag">Phase 1a</text>
+
+  <rect x="193" y="655" width="150" height="50" fill="url(#grad-rhi)" class="module" stroke="#b91c1c"/>
+  <text x="268" y="676" text-anchor="middle" class="label">ICommandBuffer</text>
+  <text x="268" y="690" text-anchor="middle" class="sublabel">Barriers + Draw</text>
+  <text x="268" y="701" text-anchor="middle" class="phase-tag">Phase 1a</text>
+
+  <rect x="351" y="655" width="140" height="50" fill="#dc2626" class="module" stroke="#991b1b"/>
+  <text x="421" y="676" text-anchor="middle" class="label">VulkanDevice</text>
+  <text x="421" y="690" text-anchor="middle" class="sublabel">Vulkan 1.4 (Tier 1)</text>
+  <text x="421" y="701" text-anchor="middle" class="phase-tag">Phase 1a</text>
+
+  <rect x="499" y="655" width="130" height="50" fill="#dc2626" class="module" stroke="#991b1b"/>
+  <text x="564" y="676" text-anchor="middle" class="label">D3D12Device</text>
+  <text x="564" y="690" text-anchor="middle" class="sublabel">D3D12 (Tier 1)</text>
+  <text x="564" y="701" text-anchor="middle" class="phase-tag">Phase 1a</text>
+
+  <rect x="637" y="655" width="130" height="50" fill="#9333ea" class="module" stroke="#7e22ce"/>
+  <text x="702" y="676" text-anchor="middle" class="label">CompatDevice</text>
+  <text x="702" y="690" text-anchor="middle" class="sublabel">Vulkan 1.1 (Tier 2)</text>
+  <text x="702" y="701" text-anchor="middle" class="phase-tag">Phase 1b (11b)</text>
+
+  <rect x="775" y="655" width="130" height="50" fill="#7c3aed" class="module" stroke="#6d28d9"/>
+  <text x="840" y="676" text-anchor="middle" class="label">OpenGlDevice</text>
+  <text x="840" y="690" text-anchor="middle" class="sublabel">GL 4.3 (Tier 4)</text>
+  <text x="840" y="701" text-anchor="middle" class="phase-tag">Phase 1b (11c)</text>
+
+  <rect x="913" y="655" width="130" height="50" fill="#a78bfa" class="module" stroke="#8b5cf6"/>
+  <text x="978" y="676" text-anchor="middle" class="label">WebGpuDevice</text>
+  <text x="978" y="690" text-anchor="middle" class="sublabel">Dawn (Tier 3)</text>
+  <text x="978" y="701" text-anchor="middle" class="phase-tag">Phase 1b</text>
+
+  <rect x="1051" y="655" width="110" height="50" fill="#6b7280" class="module" stroke="#4b5563"/>
+  <text x="1106" y="676" text-anchor="middle" class="label">MockDevice</text>
+  <text x="1106" y="690" text-anchor="middle" class="sublabel">CI (no GPU)</text>
+  <text x="1106" y="701" text-anchor="middle" class="phase-tag">Phase 1a</text>
+
+  <rect x="1169" y="655" width="100" height="50" fill="url(#grad-rhi)" class="module" stroke="#b91c1c"/>
+  <text x="1219" y="676" text-anchor="middle" class="label">ImGui</text>
+  <text x="1219" y="690" text-anchor="middle" class="sublabel">Debug UI</text>
+  <text x="1219" y="701" text-anchor="middle" class="phase-tag">Phase 2</text>
+
+  <rect x="1277" y="655" width="118" height="50" fill="url(#grad-rhi)" class="module" stroke="#b91c1c"/>
+  <text x="1336" y="676" text-anchor="middle" class="label">LayerStack</text>
+  <text x="1336" y="690" text-anchor="middle" class="sublabel">3D+Preview+HUD</text>
+  <text x="1336" y="701" text-anchor="middle" class="phase-tag">Phase 8</text>
+
+  <!-- ═══════════════ LAYER 1: Foundation ═══════════════ -->
+  <rect x="30" y="735" width="1380" height="85" fill="#f3f4f6" class="layer-bg" stroke="#d1d5db"/>
+  <text x="45" y="755" class="layer-title">Layer 1 — Foundation</text>
+  <text x="200" y="755" class="layer-subtitle">Math, Types, Error Handling, Profiling, C++23 Modules, LLVM 20 + libc++ Sandbox</text>
+
+  <rect x="45" y="765" width="140" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="115" y="790" text-anchor="middle" class="label">Math Types</text>
+
+  <rect x="193" y="765" width="130" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="258" y="790" text-anchor="middle" class="label">GFX Types</text>
+
+  <rect x="331" y="765" width="160" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="411" y="790" text-anchor="middle" class="label">ErrorCode + Result</text>
+
+  <rect x="499" y="765" width="145" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="572" y="790" text-anchor="middle" class="label">CPU Profiler</text>
+
+  <rect x="652" y="765" width="145" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="725" y="790" text-anchor="middle" class="label">GPU Profiler</text>
+
+  <rect x="805" y="765" width="130" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="870" y="790" text-anchor="middle" class="label">Mem Profiler</text>
+
+  <rect x="943" y="765" width="140" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="1013" y="790" text-anchor="middle" class="label">Breadcrumbs</text>
+
+  <rect x="1091" y="765" width="130" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="1156" y="790" text-anchor="middle" class="label">Logger</text>
+
+  <rect x="1229" y="765" width="166" height="42" fill="url(#grad-foundation)" class="module" stroke="#374151"/>
+  <text x="1312" y="790" text-anchor="middle" class="label">SlangFeatureProbe</text>
+
+  <!-- ═══════════════ EXTERNAL ═══════════════ -->
+  <rect x="30" y="835" width="1380" height="55" fill="#f8fafc" class="layer-bg" stroke="#e2e8f0"/>
+  <text x="45" y="858" class="layer-title">External (source-compiled, third_party/, LLVM 20 + libc++ sandbox)</text>
+
+  <rect x="120" y="845" width="85" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="163" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">Vulkan 1.4</text>
+
+  <rect x="213" y="845" width="60" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="243" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">VMA</text>
+
+  <rect x="281" y="845" width="60" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="311" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">GLM</text>
+
+  <rect x="349" y="845" width="60" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="379" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">Slang</text>
+
+  <rect x="417" y="845" width="70" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="452" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">OCCT</text>
+
+  <rect x="495" y="845" width="70" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="530" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">GTest</text>
+
+  <rect x="573" y="845" width="75" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="611" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">stdexec</text>
+
+  <rect x="656" y="845" width="70" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="691" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">ImGui</text>
+
+  <rect x="734" y="845" width="75" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="772" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">FreeType</text>
+
+  <rect x="817" y="845" width="78" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="856" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">HarfBuzz</text>
+
+  <rect x="903" y="845" width="72" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="939" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">msdfgen</text>
+
+  <rect x="983" y="845" width="70" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="1018" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">Dawn</text>
+
+  <rect x="1061" y="845" width="70" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="1096" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">OpenGL</text>
+
+  <rect x="1139" y="845" width="70" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="1174" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">D3D12</text>
+
+  <rect x="1217" y="845" width="75" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="1255" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">OpenXR</text>
+
+  <rect x="1300" y="845" width="75" height="35" fill="#e2e8f0" class="module" stroke="#94a3b8"/>
+  <text x="1338" y="867" text-anchor="middle" style="font-size:11px; fill:#475569; font-weight:600;">libc++</text>
+
+  <!-- ═══════════════ DEPENDENCY ARROWS (selected key flows) ═══════════════ -->
+  <!-- Layer 7 to Layer 6 -->
+  <path d="M376,155 L404,215" class="arrow"/>
+  <path d="M512,155 L522,215" class="arrow"/>
+  <path d="M113,155 L120,215" class="arrow"/>
+
+  <!-- Layer 6 to Layer 5 -->
+  <path d="M120,265 L130,325" class="arrow"/>
+  <path d="M404,265 L466,325" class="arrow"/>
+
+  <!-- Layer 5 to Layer 4 -->
+  <path d="M130,375 L123,435" class="arrow"/>
+  <path d="M634,375 L572,435" class="arrow"/>
+
+  <!-- Layer 5 to Layer 3 -->
+  <path d="M301,375 L293,545" class="arrow-data"/>
+
+  <!-- Layer 4 to Layer 3 -->
+  <path d="M286,485 L293,545" class="arrow"/>
+
+  <!-- Layer 3 to Layer 2 -->
+  <path d="M130,595 L115,655" class="arrow"/>
+  <path d="M619,595 L702,655" class="arrow"/>
+
+  <!-- Layer 2 to Layer 1 -->
+  <path d="M115,705 L115,765" class="arrow"/>
+  <path d="M421,705 L411,765" class="arrow"/>
+
+  <!-- ═══════════════ LEGEND ═══════════════ -->
+  <rect x="30" y="905" width="1380" height="185" fill="#fafafa" class="layer-bg" stroke="#e5e7eb"/>
+  <text x="45" y="928" class="layer-title">Legend</text>
+
+  <!-- Tier badges -->
+  <rect x="45" y="940" width="95" height="22" fill="#dc2626" class="tier-badge"/>
+  <text x="93" y="956" text-anchor="middle" style="font-size:11px; fill:#fff; font-weight:600;">Tier 1 Full</text>
+  <text x="155" y="956" class="legend-text">Vulkan 1.4 + D3D12 — Task/Mesh, RT, VSM, VisBuffer (RTX 3060+)</text>
+
+  <rect x="45" y="968" width="95" height="22" fill="#9333ea" class="tier-badge"/>
+  <text x="93" y="984" text-anchor="middle" style="font-size:11px; fill:#fff; font-weight:600;">Tier 2 Compat</text>
+  <text x="155" y="984" class="legend-text">Vulkan 1.1 — Vertex+MDI, CSM, SSAO, FXAA (GTX 10xx, RX 500)</text>
+
+  <rect x="45" y="996" width="95" height="22" fill="#a78bfa" class="tier-badge"/>
+  <text x="93" y="1012" text-anchor="middle" style="font-size:11px; fill:#fff; font-weight:600;">Tier 3 Web</text>
+  <text x="155" y="1012" class="legend-text">WebGPU (Dawn) — Compat subset in browser, from Phase 1b (all phases)</text>
+
+  <rect x="45" y="1024" width="95" height="22" fill="#7c3aed" class="tier-badge"/>
+  <text x="93" y="1040" text-anchor="middle" style="font-size:11px; fill:#fff; font-weight:600;">Tier 4 GL</text>
+  <text x="155" y="1040" class="legend-text">OpenGL 4.3+ — Remote desktop, VirtualGL, no-Vulkan Linux, Phase 11c</text>
+
+  <!-- Arrow legend -->
+  <line x1="700" y1="950" x2="760" y2="950" class="arrow"/>
+  <text x="770" y="954" class="legend-text">Dependency (layer call)</text>
+
+  <line x1="700" y1="975" x2="760" y2="975" class="arrow-data"/>
+  <text x="770" y="979" class="legend-text">Data flow (GPU buffer / readback)</text>
+
+  <!-- Version markers -->
+  <rect x="700" y="1000" width="55" height="18" fill="#2563eb" rx="4"/>
+  <text x="728" y="1014" text-anchor="middle" style="font-size:10px; fill:#fff; font-weight:600;">1.0</text>
+  <text x="770" y="1014" class="legend-text">Shipping release (Phase 1a-15b, Week 98, 5 backends, 3 Cooldowns)</text>
+
+  <rect x="700" y="1025" width="55" height="18" fill="#059669" rx="4"/>
+  <text x="728" y="1039" text-anchor="middle" style="font-size:10px; fill:#fff; font-weight:600;">1.1</text>
+  <text x="770" y="1039" class="legend-text">Post-ship (Phase 16-21, Week 131) — DFM, Volume, 3D Textures, GI, XR, Twin, Joints, Ref UI</text>
+
+  <!-- New features callout -->
+  <text x="45" y="1065" class="layer-title" style="font-size:12px;">New in this revision:</text>
+  <text x="45" y="1080" class="legend-text">LLVM 20/libc++ sandbox | CommandBus (P9) | EventRecorder (P11) | DS float64 emu (P7b) | VisBuffer 3-bucket (P6a) | LLM Agent (P21) | Python CommandBus (P15a) | Aniso GGX | 6-DOF | Lasso | Zebra | EDL | Trace | 3D Proc | Joints</text>
+</svg>

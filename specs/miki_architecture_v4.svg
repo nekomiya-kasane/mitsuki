@@ -1,0 +1,567 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3600 2600" width="3600" height="2600" font-family="Segoe UI,Helvetica,Arial,sans-serif">
+<defs>
+  <marker id="aD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 1L8 5L0 9z" fill="#8b949e"/></marker>
+  <marker id="aF" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 1L8 5L0 9z" fill="#58a6ff"/></marker>
+  <marker id="aI" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 1L8 5L0 9L2 5z" fill="none" stroke="#4caf50" stroke-width="1.5"/></marker>
+  <marker id="aO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 1L8 5L0 9z" fill="#555"/></marker>
+  <marker id="aM" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 1L8 5L0 9z" fill="#ffd700"/></marker>
+  <marker id="dm" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 6L6 0L12 6L6 12z" fill="#777"/></marker>
+  <filter id="s"><feDropShadow dx="0.5" dy="0.5" stdDeviation="1" flood-opacity="0.18"/></filter>
+  <filter id="gl"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+
+<rect width="3600" height="2600" fill="#0d1117" rx="8"/>
+<text x="1800" y="24" text-anchor="middle" fill="#e6edf3" font-size="18" font-weight="bold">miki Renderer -- Module Relationship Architecture (v4)</text>
+
+<!-- LEGEND -->
+<g transform="translate(15,34)">
+<rect width="3570" height="34" rx="3" fill="#161b22" stroke="#30363d" stroke-width="0.5" opacity="0.9"/>
+<polygon points="8,14 17,8 32,8 41,14 32,20 17,20" fill="none" stroke="#58a6ff" stroke-width="1"/><text x="45" y="18" fill="#8b949e" font-size="7">Interface</text>
+<rect x="84" y="8" width="30" height="12" rx="3" fill="none" stroke="#e6edf3" stroke-width="0.8"/><text x="118" y="18" fill="#8b949e" font-size="7">Module</text>
+<rect x="148" y="8" width="30" height="12" rx="3" fill="none" stroke="#888" stroke-dasharray="2,1.5" stroke-width="0.8"/><text x="182" y="18" fill="#8b949e" font-size="7">Ext/Opt</text>
+<path d="M218,8 L244,8 L240,20 L214,20 Z" fill="none" stroke="#ff6e6e" stroke-width="0.8"/><text x="248" y="18" fill="#8b949e" font-size="7">GPU Pass</text>
+<line x1="296" y1="14" x2="322" y2="14" stroke="#8b949e" stroke-width="1.2" marker-end="url(#aD)"/><text x="326" y="18" fill="#8b949e" font-size="7">Dep</text>
+<line x1="348" y1="14" x2="374" y2="14" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#aF)"/><text x="378" y="18" fill="#8b949e" font-size="7">Data</text>
+<line x1="400" y1="14" x2="426" y2="14" stroke="#4caf50" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#aI)"/><text x="430" y="18" fill="#8b949e" font-size="7">Impl</text>
+<line x1="454" y1="14" x2="480" y2="14" stroke="#555" stroke-width="0.8" stroke-dasharray="2,1.5" marker-end="url(#aO)"/><text x="484" y="18" fill="#8b949e" font-size="7">Opt</text>
+<line x1="504" y1="14" x2="530" y2="14" stroke="#777" stroke-width="1" marker-start="url(#dm)"/><text x="534" y="18" fill="#8b949e" font-size="7">Has</text>
+<line x1="556" y1="14" x2="586" y2="14" stroke="#ffd700" stroke-width="2" marker-end="url(#aM)" filter="url(#gl)"/><text x="590" y="18" fill="#ffd700" font-size="7" font-weight="bold">Main</text>
+<text x="640" y="13" fill="#7c8894" font-size="6">P1(W1-4) P2(W5-8) P3(W9-16) P4-5(W13-24) P6(W25-32) P7-8(W36-54) P9-14(W58-82) P15(W86-98)</text>
+<text x="640" y="25" fill="#7c8894" font-size="6">1.1: P16-21(W99-133)</text>
+</g>
+
+<!-- ZONE BACKGROUNDS -->
+<rect x="10" y="2120" width="780" height="250" rx="8" fill="#1a1a2e" opacity="0.25" stroke="#3d4f6f" stroke-width="0.4" stroke-dasharray="5,3"/>
+<text x="18" y="2136" fill="#58a6ff" font-size="8" font-weight="bold" opacity="0.45">L1 Foundation</text>
+<rect x="800" y="2020" width="1440" height="360" rx="8" fill="#0f3460" opacity="0.18" stroke="#3d5f9f" stroke-width="0.4" stroke-dasharray="5,3"/>
+<text x="808" y="2036" fill="#4db6ac" font-size="8" font-weight="bold" opacity="0.45">L2 RHI + Backends</text>
+<rect x="10" y="1500" width="1100" height="600" rx="8" fill="#2d4059" opacity="0.18" stroke="#3d5070" stroke-width="0.4" stroke-dasharray="5,3"/>
+<text x="18" y="1516" fill="#bb86fc" font-size="8" font-weight="bold" opacity="0.45">L3-4 Shader + Resource</text>
+<rect x="1120" y="1140" width="1100" height="860" rx="8" fill="#6b1535" opacity="0.15" stroke="#8b2252" stroke-width="0.4" stroke-dasharray="5,3"/>
+<text x="1128" y="1156" fill="#ef5350" font-size="8" font-weight="bold" opacity="0.45">L5 Render Core</text>
+<rect x="2240" y="1240" width="700" height="760" rx="8" fill="#8b1a1a" opacity="0.15" stroke="#a52020" stroke-width="0.4" stroke-dasharray="5,3"/>
+<text x="2248" y="1256" fill="#ff6e6e" font-size="8" font-weight="bold" opacity="0.45">L6 GPU-Driven</text>
+<rect x="2960" y="1340" width="620" height="550" rx="8" fill="#2d4059" opacity="0.18" stroke="#3d5070" stroke-width="0.4" stroke-dasharray="5,3"/>
+<text x="2968" y="1356" fill="#bb86fc" font-size="8" font-weight="bold" opacity="0.45">L4 Scene + ECS</text>
+<rect x="10" y="74" width="1900" height="700" rx="8" fill="#4a3000" opacity="0.15" stroke="#7a5500" stroke-width="0.4" stroke-dasharray="5,3"/>
+<text x="18" y="90" fill="#ffb74d" font-size="8" font-weight="bold" opacity="0.45">L8-9 CAD + CAE + Tools</text>
+<rect x="1920" y="74" width="1660" height="450" rx="8" fill="#0a2a4a" opacity="0.18" stroke="#1a4a7a" stroke-width="0.4" stroke-dasharray="5,3"/>
+<text x="1928" y="90" fill="#42a5f5" font-size="8" font-weight="bold" opacity="0.45">L10-11 SDK + Cloud + 1.1</text>
+
+<!-- ================================================================ -->
+<!-- Z1: FOUNDATION  y~2140-2350                                      -->
+<!-- ================================================================ -->
+<g id="n-err"><rect x="20" y="2155" width="110" height="32" rx="5" fill="#21262d" stroke="#f0883e" stroke-width="1" filter="url(#s)"/>
+<text x="75" y="2170" text-anchor="middle" fill="#f0883e" font-size="8" font-weight="bold">ErrorCode</text>
+<text x="75" y="2181" text-anchor="middle" fill="#8b949e" font-size="6">Result&lt;T&gt;</text></g>
+
+<g id="n-math"><rect x="140" y="2155" width="110" height="32" rx="5" fill="#21262d" stroke="#f0883e" stroke-width="1" filter="url(#s)"/>
+<text x="195" y="2170" text-anchor="middle" fill="#f0883e" font-size="8" font-weight="bold">miki::math</text>
+<text x="195" y="2181" text-anchor="middle" fill="#8b949e" font-size="6">vec/AABB/BVH/Ray</text></g>
+
+<g id="n-gfx"><rect x="260" y="2155" width="115" height="32" rx="5" fill="#21262d" stroke="#f0883e" stroke-width="1" filter="url(#s)"/>
+<text x="318" y="2170" text-anchor="middle" fill="#f0883e" font-size="8" font-weight="bold">miki::gfx</text>
+<text x="318" y="2181" text-anchor="middle" fill="#8b949e" font-size="6">Format, VertexLayout</text></g>
+
+<g id="n-coca"><rect x="385" y="2155" width="120" height="32" rx="5" fill="#21262d" stroke="#f0883e" stroke-width="1" filter="url(#s)"/>
+<text x="445" y="2170" text-anchor="middle" fill="#f0883e" font-size="8" font-weight="bold">miki::coca</text>
+<text x="445" y="2181" text-anchor="middle" fill="#8b949e" font-size="6">Coroutine, LockFreeQ</text></g>
+
+<g id="n-dbg"><rect x="515" y="2155" width="120" height="32" rx="5" fill="#21262d" stroke="#f0883e" stroke-width="1" filter="url(#s)"/>
+<text x="575" y="2170" text-anchor="middle" fill="#f0883e" font-size="8" font-weight="bold">miki::debug</text>
+<text x="575" y="2181" text-anchor="middle" fill="#8b949e" font-size="6">Profiler, Log</text></g>
+
+<g id="n-nplat"><rect x="20" y="2200" width="145" height="32" rx="5" fill="#161b22" stroke="#888" stroke-width="0.8" stroke-dasharray="3,2" filter="url(#s)"/>
+<text x="93" y="2215" text-anchor="middle" fill="#aaa" font-size="8" font-weight="bold">neko::platform</text>
+<text x="93" y="2226" text-anchor="middle" fill="#777" font-size="6">GLFW/Win32/Neko</text></g>
+
+<g id="n-nipc"><rect x="175" y="2200" width="130" height="32" rx="5" fill="#161b22" stroke="#888" stroke-width="0.8" stroke-dasharray="3,2" filter="url(#s)"/>
+<text x="240" y="2215" text-anchor="middle" fill="#aaa" font-size="8" font-weight="bold">neko::ipc</text>
+<text x="240" y="2226" text-anchor="middle" fill="#777" font-size="6">SharedMem/Pipe</text></g>
+
+<g id="n-3rd"><rect x="320" y="2200" width="180" height="32" rx="5" fill="#161b22" stroke="#888" stroke-width="0.8" stroke-dasharray="3,2" filter="url(#s)"/>
+<text x="410" y="2215" text-anchor="middle" fill="#aaa" font-size="8" font-weight="bold">3rd: D3D12MA/VMA/Slang/GLFW</text>
+<text x="410" y="2226" text-anchor="middle" fill="#777" font-size="6">Source-compiled deps</text></g>
+
+<!-- ================================================================ -->
+<!-- Z2: RHI + BACKENDS  y~2040-2350                                  -->
+<!-- ================================================================ -->
+<g id="n-idev">
+<polygon points="940,2080 960,2065 1010,2065 1030,2080 1010,2095 960,2095" fill="#21262d" stroke="#58a6ff" stroke-width="1.5" filter="url(#s)"/>
+<text x="985" y="2080" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="bold">IDevice</text>
+<text x="985" y="2090" text-anchor="middle" fill="#8b949e" font-size="5">Create/Destroy/Submit</text></g>
+
+<g id="n-icmd">
+<polygon points="1050,2080 1070,2065 1120,2065 1140,2080 1120,2095 1070,2095" fill="#21262d" stroke="#58a6ff" stroke-width="1.5" filter="url(#s)"/>
+<text x="1095" y="2080" text-anchor="middle" fill="#58a6ff" font-size="8" font-weight="bold">ICmdBuf</text>
+<text x="1095" y="2090" text-anchor="middle" fill="#8b949e" font-size="5">Draw/Dispatch/Copy</text></g>
+
+<g id="n-ipipe">
+<polygon points="1160,2080 1180,2065 1240,2065 1260,2080 1240,2095 1180,2095" fill="#21262d" stroke="#58a6ff" stroke-width="1.2" filter="url(#s)"/>
+<text x="1210" y="2082" text-anchor="middle" fill="#58a6ff" font-size="7" font-weight="bold">IPipeFactory</text></g>
+
+<g id="n-fmgr"><rect x="1280" y="2068" width="110" height="28" rx="4" fill="#21262d" stroke="#4db6ac" stroke-width="1" filter="url(#s)"/>
+<text x="1335" y="2084" text-anchor="middle" fill="#4db6ac" font-size="7" font-weight="bold">FrameManager</text></g>
+
+<g id="n-stg"><rect x="1400" y="2068" width="115" height="28" rx="4" fill="#21262d" stroke="#4db6ac" stroke-width="1" filter="url(#s)"/>
+<text x="1458" y="2084" text-anchor="middle" fill="#4db6ac" font-size="7" font-weight="bold">StagingUploader</text></g>
+
+<g id="n-ofs"><rect x="1525" y="2068" width="115" height="28" rx="4" fill="#21262d" stroke="#4db6ac" stroke-width="1" filter="url(#s)"/>
+<text x="1583" y="2084" text-anchor="middle" fill="#4db6ac" font-size="7" font-weight="bold">OffscreenTarget</text></g>
+
+<!-- Backends -->
+<g id="n-vk"><rect x="900" y="2140" width="105" height="32" rx="5" fill="#21262d" stroke="#4db6ac" stroke-width="1.2" filter="url(#s)"/>
+<text x="953" y="2155" text-anchor="middle" fill="#4db6ac" font-size="8" font-weight="bold">Vulkan</text>
+<text x="953" y="2166" text-anchor="middle" fill="#8b949e" font-size="6">Tier-1 primary</text></g>
+
+<g id="n-d3d"><rect x="1015" y="2140" width="105" height="32" rx="5" fill="#21262d" stroke="#4db6ac" stroke-width="1.2" filter="url(#s)"/>
+<text x="1068" y="2155" text-anchor="middle" fill="#4db6ac" font-size="8" font-weight="bold">D3D12</text>
+<text x="1068" y="2166" text-anchor="middle" fill="#8b949e" font-size="6">Tier-1 Win</text></g>
+
+<g id="n-wgpu"><rect x="1130" y="2140" width="105" height="32" rx="5" fill="#21262d" stroke="#4db6ac" stroke-width="1" filter="url(#s)"/>
+<text x="1183" y="2155" text-anchor="middle" fill="#4db6ac" font-size="8" font-weight="bold">WebGPU</text>
+<text x="1183" y="2166" text-anchor="middle" fill="#8b949e" font-size="6">Tier-3</text></g>
+
+<g id="n-gl"><rect x="1245" y="2140" width="95" height="32" rx="5" fill="#21262d" stroke="#4db6ac" stroke-width="0.8" filter="url(#s)"/>
+<text x="1293" y="2155" text-anchor="middle" fill="#4db6ac" font-size="8" font-weight="bold">OpenGL</text>
+<text x="1293" y="2166" text-anchor="middle" fill="#8b949e" font-size="6">Tier-4</text></g>
+
+<g id="n-compat"><rect x="1350" y="2140" width="100" height="32" rx="5" fill="#21262d" stroke="#4db6ac" stroke-width="0.8" filter="url(#s)"/>
+<text x="1400" y="2155" text-anchor="middle" fill="#4db6ac" font-size="8" font-weight="bold">Compat</text>
+<text x="1400" y="2166" text-anchor="middle" fill="#8b949e" font-size="6">Tier-2 fallback</text></g>
+
+<g id="n-mock"><rect x="1460" y="2140" width="90" height="32" rx="5" fill="#21262d" stroke="#4db6ac" stroke-width="0.8" filter="url(#s)"/>
+<text x="1505" y="2155" text-anchor="middle" fill="#4db6ac" font-size="8" font-weight="bold">Mock</text>
+<text x="1505" y="2166" text-anchor="middle" fill="#8b949e" font-size="6">CI test</text></g>
+
+<g id="n-app"><rect x="1660" y="2140" width="110" height="32" rx="5" fill="#21262d" stroke="#4db6ac" stroke-width="1" filter="url(#s)"/>
+<text x="1715" y="2155" text-anchor="middle" fill="#4db6ac" font-size="8" font-weight="bold">AppLoop</text>
+<text x="1715" y="2166" text-anchor="middle" fill="#8b949e" font-size="6">Event pump</text></g>
+
+<g id="n-swap"><rect x="1780" y="2140" width="120" height="32" rx="5" fill="#21262d" stroke="#4db6ac" stroke-width="1" filter="url(#s)"/>
+<text x="1840" y="2155" text-anchor="middle" fill="#4db6ac" font-size="8" font-weight="bold">SwapchainMgr</text>
+<text x="1840" y="2166" text-anchor="middle" fill="#8b949e" font-size="6">Present, resize</text></g>
+
+<!-- RHI bezier arrows -->
+<path d="M953,2140 C953,2115 975,2100 960,2095" fill="none" stroke="#4caf50" stroke-width="0.8" stroke-dasharray="3,2" marker-end="url(#aI)"/>
+<path d="M1068,2140 C1068,2112 1010,2098 1010,2095" fill="none" stroke="#4caf50" stroke-width="0.8" stroke-dasharray="3,2" marker-end="url(#aI)"/>
+<path d="M1183,2140 C1183,2110 1040,2098 1030,2095" fill="none" stroke="#4caf50" stroke-width="0.7" stroke-dasharray="3,2" marker-end="url(#aI)"/>
+<path d="M1293,2140 C1280,2110 1050,2100 1030,2095" fill="none" stroke="#4caf50" stroke-width="0.6" stroke-dasharray="3,2" marker-end="url(#aI)" opacity="0.7"/>
+<path d="M1400,2140 C1380,2108 1060,2102 1030,2095" fill="none" stroke="#4caf50" stroke-width="0.6" stroke-dasharray="3,2" marker-end="url(#aI)" opacity="0.6"/>
+<path d="M1505,2140 C1480,2108 1070,2104 1030,2095" fill="none" stroke="#4caf50" stroke-width="0.5" stroke-dasharray="3,2" marker-end="url(#aI)" opacity="0.5"/>
+<path d="M1280,2082 C1200,2082 1060,2080 1030,2080" fill="none" stroke="#8b949e" stroke-width="0.8" marker-end="url(#aD)"/>
+<path d="M1400,2082 C1300,2082 1160,2080 1140,2080" fill="none" stroke="#8b949e" stroke-width="0.8" marker-end="url(#aD)"/>
+<path d="M1660,2156 C1200,2170 300,2210 165,2216" fill="none" stroke="#8b949e" stroke-width="0.5" marker-end="url(#aD)" stroke-dasharray="4,2" opacity="0.4"/>
+<path d="M635,2170 C750,2150 870,2100 940,2080" fill="none" stroke="#8b949e" stroke-width="0.7" marker-end="url(#aD)" opacity="0.45"/>
+
+<!-- ================================================================ -->
+<!-- Z3: SHADER + RESOURCE  y~1520-2080                               -->
+<!-- ================================================================ -->
+<g id="n-slang"><rect x="25" y="1535" width="130" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1.2" filter="url(#s)"/>
+<text x="90" y="1552" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">SlangCompiler</text>
+<text x="90" y="1564" text-anchor="middle" fill="#8b949e" font-size="6">SPIRV/DXIL/WGSL</text></g>
+
+<g id="n-swatch"><rect x="165" y="1535" width="120" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="225" y="1552" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">ShaderWatcher</text>
+<text x="225" y="1564" text-anchor="middle" fill="#8b949e" font-size="6">Hot reload</text></g>
+
+<g id="n-bind"><rect x="25" y="1585" width="130" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1.2" filter="url(#s)"/>
+<text x="90" y="1602" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">BindlessManager</text>
+<text x="90" y="1614" text-anchor="middle" fill="#8b949e" font-size="6">Global desc set</text></g>
+
+<g id="n-bda"><rect x="165" y="1585" width="110" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="220" y="1602" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">BDA Manager</text>
+<text x="220" y="1614" text-anchor="middle" fill="#8b949e" font-size="6">Buffer dev addr</text></g>
+
+<g id="n-stream"><rect x="285" y="1585" width="120" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="345" y="1602" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">StreamingMgr</text>
+<text x="345" y="1614" text-anchor="middle" fill="#8b949e" font-size="6">Chunk/page/evict</text></g>
+
+<g id="n-mat"><rect x="25" y="1635" width="130" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="90" y="1652" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">MaterialGraph</text>
+<text x="90" y="1664" text-anchor="middle" fill="#8b949e" font-size="6">PBR node-based</text></g>
+
+<g id="n-text"><rect x="165" y="1635" width="110" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="220" y="1652" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">TextRenderer</text>
+<text x="220" y="1664" text-anchor="middle" fill="#8b949e" font-size="6">SDF atlas</text></g>
+
+<g id="n-fwd"><rect x="285" y="1635" width="120" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="345" y="1652" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">ForwardPipeline</text>
+<text x="345" y="1664" text-anchor="middle" fill="#8b949e" font-size="6">Phase 2 path</text></g>
+
+<!-- Import/Kernel -->
+<g id="n-import"><rect x="25" y="1700" width="120" height="38" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="85" y="1717" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">ImportPipeline</text>
+<text x="85" y="1729" text-anchor="middle" fill="#8b949e" font-size="6">STEP/IGES/glTF</text></g>
+
+<g id="n-ikern">
+<polygon points="160,1719 175,1705 218,1705 233,1719 218,1733 175,1733" fill="#21262d" stroke="#58a6ff" stroke-width="1.2" filter="url(#s)"/>
+<text x="197" y="1719" text-anchor="middle" fill="#58a6ff" font-size="7" font-weight="bold">IKernel</text>
+<text x="197" y="1728" text-anchor="middle" fill="#8b949e" font-size="5">B-Rep</text></g>
+
+<g id="n-occt"><rect x="245" y="1703" width="90" height="28" rx="4" fill="#21262d" stroke="#888" stroke-width="0.8" stroke-dasharray="3,2" filter="url(#s)" opacity="0.7"/>
+<text x="290" y="1718" text-anchor="middle" fill="#888" font-size="7" font-weight="bold">OcctKernel</text></g>
+
+<g id="n-sim"><rect x="345" y="1703" width="85" height="28" rx="4" fill="#21262d" stroke="#4db6ac" stroke-width="0.8" filter="url(#s)"/>
+<text x="388" y="1718" text-anchor="middle" fill="#4db6ac" font-size="7" font-weight="bold">SimKernel</text></g>
+
+<g id="n-igpu">
+<polygon points="450,1719 465,1705 508,1705 523,1719 508,1733 465,1733" fill="#21262d" stroke="#58a6ff" stroke-width="1" filter="url(#s)"/>
+<text x="487" y="1719" text-anchor="middle" fill="#58a6ff" font-size="7" font-weight="bold">IGpuGeo</text></g>
+
+<g id="n-topo"><rect x="25" y="1750" width="110" height="32" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="0.8" filter="url(#s)"/>
+<text x="80" y="1766" text-anchor="middle" fill="#bb86fc" font-size="7" font-weight="bold">TopoGraph</text>
+<text x="80" y="1776" text-anchor="middle" fill="#8b949e" font-size="6">B-Rep GPU</text></g>
+
+<g id="n-evt"><rect x="145" y="1750" width="110" height="32" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="0.8" filter="url(#s)"/>
+<text x="200" y="1766" text-anchor="middle" fill="#bb86fc" font-size="7" font-weight="bold">EventSystem</text>
+<text x="200" y="1776" text-anchor="middle" fill="#8b949e" font-size="6">Pub/Sub</text></g>
+
+<g id="n-itrans">
+<polygon points="270,1766 285,1752 328,1752 343,1766 328,1780 285,1780" fill="#21262d" stroke="#58a6ff" stroke-width="1" filter="url(#s)"/>
+<text x="307" y="1767" text-anchor="middle" fill="#58a6ff" font-size="7" font-weight="bold">ITranslator</text></g>
+
+<!-- Resource bezier arrows -->
+<path d="M90,1623 C90,1850 600,2050 940,2080" fill="none" stroke="#8b949e" stroke-width="0.7" marker-end="url(#aD)" opacity="0.45"/>
+<path d="M155,1554 C500,1560 1000,1850 1210,2065" fill="none" stroke="#58a6ff" stroke-width="0.7" marker-end="url(#aF)" opacity="0.5"/>
+<path d="M233,1719 Q240,1718 245,1718" fill="none" stroke="#4caf50" stroke-width="0.7" stroke-dasharray="3,2" marker-end="url(#aI)"/>
+<path d="M233,1722 Q280,1728 345,1718" fill="none" stroke="#4caf50" stroke-width="0.7" stroke-dasharray="3,2" marker-end="url(#aI)"/>
+<path d="M145,1719 Q152,1719 160,1719" fill="none" stroke="#8b949e" stroke-width="0.8" marker-end="url(#aD)"/>
+<path d="M85,1738 C85,1752 150,1766 270,1766" fill="none" stroke="#58a6ff" stroke-width="0.7" marker-end="url(#aF)" opacity="0.6"/>
+<path d="M90,1635 Q90,1628 90,1623" fill="none" stroke="#58a6ff" stroke-width="0.7" marker-end="url(#aF)"/>
+<path d="M345,1623 C400,1800 1100,2050 1400,2082" fill="none" stroke="#58a6ff" stroke-width="0.6" marker-end="url(#aF)" opacity="0.4"/>
+
+<!-- ================================================================ -->
+<!-- Z4: SCENE + ECS  y~1360-1870                                     -->
+<!-- ================================================================ -->
+<g id="n-ecs"><rect x="2980" y="1375" width="170" height="42" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1.2" filter="url(#s)"/>
+<text x="3065" y="1393" text-anchor="middle" fill="#bb86fc" font-size="9" font-weight="bold">ECS (Archetype SOA)</text>
+<text x="3065" y="1406" text-anchor="middle" fill="#8b949e" font-size="6">Query All/Any/None</text></g>
+
+<g id="n-spatial"><rect x="3160" y="1375" width="130" height="42" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="3225" y="1393" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">SpatialIndex</text>
+<text x="3225" y="1406" text-anchor="middle" fill="#8b949e" font-size="6">BVH/Octree</text></g>
+
+<g id="n-rte"><rect x="3300" y="1375" width="120" height="42" rx="5" fill="#21262d" stroke="#bb86fc" stroke-width="1" filter="url(#s)"/>
+<text x="3360" y="1393" text-anchor="middle" fill="#bb86fc" font-size="8" font-weight="bold">RTE</text>
+<text x="3360" y="1406" text-anchor="middle" fill="#8b949e" font-size="6">DCoord origin</text></g>
+
+<g id="n-iui">
+<polygon points="2980,1440 2998,1425 3048,1425 3066,1440 3048,1455 2998,1455" fill="#21262d" stroke="#58a6ff" stroke-width="1" filter="url(#s)"/>
+<text x="3023" y="1442" text-anchor="middle" fill="#58a6ff" font-size="7" font-weight="bold">IUiBridge</text></g>
+
+<path d="M3150,1396 Q3155,1396 3160,1396" fill="none" stroke="#777" stroke-width="0.8" marker-start="url(#dm)"/>
+
+<!-- ================================================================ -->
+<!-- Z5: RENDER CORE  y~1160-1980                                     -->
+<!-- ================================================================ -->
+<g id="n-rg"><rect x="1360" y="1180" width="180" height="52" rx="8" fill="#21262d" stroke="#ffd700" stroke-width="2" filter="url(#s)"/>
+<text x="1450" y="1198" text-anchor="middle" fill="#ffd700" font-size="10" font-weight="bold">RenderGraph</text>
+<text x="1450" y="1212" text-anchor="middle" fill="#e6edf3" font-size="7">Pass DAG, Kahn sort</text>
+<text x="1450" y="1224" text-anchor="middle" fill="#8b949e" font-size="6">Auto barrier, transient</text></g>
+
+<g id="n-gb"><rect x="1560" y="1180" width="120" height="38" rx="5" fill="#1a2a3a" stroke="#ef5350" stroke-width="1.2" filter="url(#s)"/>
+<text x="1620" y="1197" text-anchor="middle" fill="#ef5350" font-size="8" font-weight="bold">GBuffer</text>
+<text x="1620" y="1210" text-anchor="middle" fill="#8b949e" font-size="6">Albedo+N+PBR 64bpp</text></g>
+
+<g id="n-def"><rect x="1140" y="1260" width="150" height="38" rx="5" fill="#21262d" stroke="#ef5350" stroke-width="1.2" filter="url(#s)"/>
+<text x="1215" y="1277" text-anchor="middle" fill="#ef5350" font-size="8" font-weight="bold">Deferred Pipeline</text>
+<text x="1215" y="1290" text-anchor="middle" fill="#8b949e" font-size="6">G > Light > Composite</text></g>
+
+<g id="n-shd"><path d="M1310,1260 L1450,1260 L1435,1298 L1295,1298 Z" fill="#21262d" stroke="#ff6e6e" stroke-width="1" filter="url(#s)"/>
+<text x="1373" y="1277" text-anchor="middle" fill="#ff6e6e" font-size="8" font-weight="bold">Shadows</text>
+<text x="1373" y="1290" text-anchor="middle" fill="#8b949e" font-size="6">VSM+CSM 8-cas</text></g>
+
+<g id="n-taa"><rect x="1470" y="1260" width="120" height="38" rx="5" fill="#21262d" stroke="#ef5350" stroke-width="1" filter="url(#s)"/>
+<text x="1530" y="1277" text-anchor="middle" fill="#ef5350" font-size="8" font-weight="bold">TAA+Upscale</text>
+<text x="1530" y="1290" text-anchor="middle" fill="#8b949e" font-size="6">FSR/DLSS opt</text></g>
+
+<g id="n-ao"><rect x="1600" y="1260" width="100" height="38" rx="5" fill="#21262d" stroke="#ef5350" stroke-width="1" filter="url(#s)"/>
+<text x="1650" y="1277" text-anchor="middle" fill="#ef5350" font-size="8" font-weight="bold">GTAO</text>
+<text x="1650" y="1290" text-anchor="middle" fill="#8b949e" font-size="6">Half-res</text></g>
+
+<g id="n-pfx"><rect x="1710" y="1260" width="120" height="38" rx="5" fill="#21262d" stroke="#ef5350" stroke-width="1" filter="url(#s)"/>
+<text x="1770" y="1277" text-anchor="middle" fill="#ef5350" font-size="8" font-weight="bold">PostFX+VRS</text>
+<text x="1770" y="1290" text-anchor="middle" fill="#8b949e" font-size="6">Bloom/DOF/Tone</text></g>
+
+<g id="n-ibl"><rect x="1840" y="1260" width="115" height="38" rx="5" fill="#21262d" stroke="#ef5350" stroke-width="1" filter="url(#s)"/>
+<text x="1898" y="1277" text-anchor="middle" fill="#ef5350" font-size="8" font-weight="bold">IBL+Env</text>
+<text x="1898" y="1290" text-anchor="middle" fill="#8b949e" font-size="6">HDRI, SH</text></g>
+
+<g id="n-async"><rect x="1140" y="1320" width="155" height="28" rx="4" fill="#21262d" stroke="#ce93d8" stroke-width="0.8" filter="url(#s)"/>
+<text x="1218" y="1337" text-anchor="middle" fill="#ce93d8" font-size="7" font-weight="bold">AsyncCompSched</text></g>
+
+<g id="n-grid"><rect x="1310" y="1320" width="115" height="28" rx="4" fill="#21262d" stroke="#ef5350" stroke-width="0.8" filter="url(#s)"/>
+<text x="1368" y="1337" text-anchor="middle" fill="#ef5350" font-size="7" font-weight="bold">AdaptiveGrid</text></g>
+
+<g id="n-mw"><rect x="1440" y="1320" width="120" height="28" rx="4" fill="#21262d" stroke="#ef5350" stroke-width="0.8" filter="url(#s)"/>
+<text x="1500" y="1337" text-anchor="middle" fill="#ef5350" font-size="7" font-weight="bold">MultiWindow</text></g>
+
+<g id="n-ls"><rect x="1575" y="1320" width="120" height="28" rx="4" fill="#21262d" stroke="#81c784" stroke-width="1" filter="url(#s)"/>
+<text x="1635" y="1337" text-anchor="middle" fill="#81c784" font-size="7" font-weight="bold">LayerStack</text></g>
+
+<!-- Render Core bezier arrows -->
+<path d="M1400,1232 C1350,1250 1260,1260 1215,1260" fill="none" stroke="#777" stroke-width="0.7" marker-start="url(#dm)"/>
+<path d="M1420,1232 C1400,1248 1385,1258 1373,1260" fill="none" stroke="#777" stroke-width="0.7" marker-start="url(#dm)"/>
+<path d="M1470,1232 C1490,1248 1520,1258 1530,1260" fill="none" stroke="#777" stroke-width="0.7" marker-start="url(#dm)"/>
+<path d="M1490,1232 C1560,1245 1640,1258 1650,1260" fill="none" stroke="#777" stroke-width="0.6" marker-start="url(#dm)"/>
+<path d="M1510,1232 C1620,1244 1760,1258 1770,1260" fill="none" stroke="#777" stroke-width="0.6" marker-start="url(#dm)"/>
+<path d="M1540,1206 Q1558,1200 1560,1199" fill="none" stroke="#58a6ff" stroke-width="0.8" marker-end="url(#aF)"/>
+<path d="M1620,1218 C1600,1240 1380,1260 1290,1264" fill="none" stroke="#58a6ff" stroke-width="0.8" marker-end="url(#aF)"/>
+<path d="M1840,1279 C1700,1282 1400,1278 1290,1272" fill="none" stroke="#58a6ff" stroke-width="0.5" marker-end="url(#aF)" stroke-dasharray="3,2" opacity="0.4"/>
+<path d="M1635,1320 C1620,1270 1540,1240 1540,1232" fill="none" stroke="#58a6ff" stroke-width="0.6" marker-end="url(#aF)" opacity="0.5"/>
+<path d="M1450,1232 C1450,1600 1100,2050 1030,2080" fill="none" stroke="#8b949e" stroke-width="0.7" marker-end="url(#aD)" opacity="0.4"/>
+<path d="M155,1604 C500,1550 1000,1350 1360,1206" fill="none" stroke="#58a6ff" stroke-width="0.8" marker-end="url(#aF)" opacity="0.5"/>
+<path d="M155,1652 C500,1600 900,1400 1140,1279" fill="none" stroke="#58a6ff" stroke-width="0.6" marker-end="url(#aF)" opacity="0.4"/>
+<path d="M405,1652 C700,1500 1200,1300 1360,1210" fill="none" stroke="#58a6ff" stroke-width="0.5" marker-end="url(#aF)" stroke-dasharray="3,2" opacity="0.35"/>
+
+<!-- ================================================================ -->
+<!-- Z6: GPU-DRIVEN  y~1260-1950                                      -->
+<!-- ================================================================ -->
+<g id="n-tm"><path d="M2270,1290 L2420,1290 L2405,1325 L2255,1325 Z" fill="#21262d" stroke="#ff6e6e" stroke-width="1.5" filter="url(#s)"/>
+<text x="2338" y="1305" text-anchor="middle" fill="#ff6e6e" font-size="8" font-weight="bold">Task/Mesh Shader</text>
+<text x="2338" y="1318" text-anchor="middle" fill="#8b949e" font-size="6">Meshlet cull</text></g>
+
+<g id="n-vis"><rect x="2270" y="1340" width="155" height="38" rx="5" fill="#1a2a3a" stroke="#ff6e6e" stroke-width="1.2" filter="url(#s)"/>
+<text x="2348" y="1357" text-anchor="middle" fill="#ff6e6e" font-size="8" font-weight="bold">VisibilityBuffer</text>
+<text x="2348" y="1370" text-anchor="middle" fill="#8b949e" font-size="6">Inst+Meshlet+Tri</text></g>
+
+<g id="n-gss"><path d="M2440,1340 L2570,1340 L2555,1378 L2425,1378 Z" fill="#21262d" stroke="#ff6e6e" stroke-width="1" filter="url(#s)"/>
+<text x="2498" y="1357" text-anchor="middle" fill="#ff6e6e" font-size="7" font-weight="bold">GPU Scene</text>
+<text x="2498" y="1370" text-anchor="middle" fill="#8b949e" font-size="5">Zero CPU draw</text></g>
+
+<g id="n-cdag"><rect x="2270" y="1395" width="155" height="38" rx="5" fill="#21262d" stroke="#ff6e6e" stroke-width="1.2" filter="url(#s)"/>
+<text x="2348" y="1412" text-anchor="middle" fill="#ff6e6e" font-size="8" font-weight="bold">ClusterDAG</text>
+<text x="2348" y="1424" text-anchor="middle" fill="#8b949e" font-size="6">Nanite LOD</text></g>
+
+<g id="n-sort"><path d="M2440,1395 L2555,1395 L2542,1433 L2427,1433 Z" fill="#21262d" stroke="#ff6e6e" stroke-width="0.8" filter="url(#s)"/>
+<text x="2491" y="1412" text-anchor="middle" fill="#ff6e6e" font-size="7" font-weight="bold">RadixSort</text></g>
+
+<g id="n-cstr"><rect x="2270" y="1445" width="140" height="30" rx="4" fill="#21262d" stroke="#ff6e6e" stroke-width="0.8" filter="url(#s)"/>
+<text x="2340" y="1463" text-anchor="middle" fill="#ff6e6e" font-size="7" font-weight="bold">ClusterStream</text></g>
+
+<g id="n-mcmp"><rect x="2420" y="1445" width="130" height="30" rx="4" fill="#21262d" stroke="#ff6e6e" stroke-width="0.8" filter="url(#s)"/>
+<text x="2485" y="1463" text-anchor="middle" fill="#ff6e6e" font-size="7" font-weight="bold">MeshletCompr</text></g>
+
+<g id="n-qem"><rect x="2560" y="1395" width="110" height="32" rx="4" fill="#21262d" stroke="#ff6e6e" stroke-width="0.8" filter="url(#s)"/>
+<text x="2615" y="1413" text-anchor="middle" fill="#ff6e6e" font-size="7" font-weight="bold">GPU QEM</text></g>
+
+<g id="n-coop"><rect x="2560" y="1340" width="120" height="32" rx="4" fill="#21262d" stroke="#ff6e6e" stroke-width="0.7" filter="url(#s)"/>
+<text x="2620" y="1358" text-anchor="middle" fill="#ff6e6e" font-size="7" font-weight="bold">CoopMatrix</text></g>
+
+<!-- GPU-Driven bezier arrows -->
+<path d="M2338,1325 C2338,1332 2345,1338 2348,1340" fill="none" stroke="#58a6ff" stroke-width="0.9" marker-end="url(#aF)"/>
+<path d="M2425,1359 Q2432,1359 2440,1359" fill="none" stroke="#58a6ff" stroke-width="0.8" marker-end="url(#aF)"/>
+<path d="M2348,1395 C2348,1365 2340,1340 2338,1325" fill="none" stroke="#58a6ff" stroke-width="0.9" marker-end="url(#aF)"/>
+<path d="M2340,1445 C2345,1440 2348,1436 2348,1433" fill="none" stroke="#58a6ff" stroke-width="0.7" marker-end="url(#aF)"/>
+<path d="M2485,1445 C2470,1438 2430,1425 2425,1420" fill="none" stroke="#58a6ff" stroke-width="0.7" marker-end="url(#aF)"/>
+<path d="M2560,1411 C2500,1412 2440,1414 2425,1414" fill="none" stroke="#58a6ff" stroke-width="0.7" marker-end="url(#aF)"/>
+<path d="M2620,1372 C2618,1382 2616,1392 2615,1395" fill="none" stroke="#555" stroke-width="0.5" stroke-dasharray="2,1.5" marker-end="url(#aO)"/>
+
+<!-- MAIN PIPELINE (gold bezier) -->
+<path d="M2270,1359 C2100,1350 1850,1260 1680,1199" fill="none" stroke="#ffd700" stroke-width="2" marker-end="url(#aM)" filter="url(#gl)"/>
+<text x="1960" y="1280" fill="#ffd700" font-size="6" font-weight="bold" opacity="0.7" transform="rotate(-8,1960,1280)">Material Resolve</text>
+<path d="M1620,1218 C1580,1240 1380,1260 1290,1265" fill="none" stroke="#ffd700" stroke-width="1.8" marker-end="url(#aM)" filter="url(#gl)" opacity="0.65"/>
+<path d="M1290,1279 C1450,1279 1650,1278 1710,1279" fill="none" stroke="#ffd700" stroke-width="1.8" marker-end="url(#aM)" filter="url(#gl)" opacity="0.65"/>
+<text x="1500" y="1274" fill="#ffd700" font-size="5" opacity="0.55">Lit HDR > ToneMap</text>
+<path d="M1830,1279 C1870,1279 1900,1500 1900,2140" fill="none" stroke="#ffd700" stroke-width="1.2" marker-end="url(#aM)" filter="url(#gl)" opacity="0.4"/>
+<text x="1910" y="1700" fill="#ffd700" font-size="5" opacity="0.35" transform="rotate(90,1910,1700)">Present</text>
+<path d="M523,1719 C800,1700 1800,1500 2270,1414" fill="none" stroke="#ffd700" stroke-width="1.5" marker-end="url(#aM)" filter="url(#gl)" opacity="0.55"/>
+<text x="1400" y="1570" fill="#ffd700" font-size="5" opacity="0.45" transform="rotate(-8,1400,1570)">Tess > Meshlet</text>
+
+<!-- Cross-zone bezier -->
+<path d="M2980,1396 C2850,1396 2650,1370 2570,1359" fill="none" stroke="#58a6ff" stroke-width="0.7" marker-end="url(#aF)" opacity="0.5"/>
+<path d="M3225,1417 C3100,1500 2600,1380 2420,1308" fill="none" stroke="#58a6ff" stroke-width="0.6" marker-end="url(#aF)" opacity="0.4"/>
+<path d="M405,1614 C700,1600 1800,1500 2270,1463" fill="none" stroke="#58a6ff" stroke-width="0.6" marker-end="url(#aF)" opacity="0.35"/>
+
+<!-- ================================================================ -->
+<!-- Z7: CAD/CAE/TOOLS (y~100-760)                                    -->
+<!-- ================================================================ -->
+<g id="n-hlr"><path d="M25,120 L150,120 L140,152 L15,152 Z" fill="#21262d" stroke="#ffb74d" stroke-width="1" filter="url(#s)"/>
+<text x="83" y="134" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">GPU HLR</text>
+<text x="83" y="146" text-anchor="middle" fill="#8b949e" font-size="5">SDF edge 10M</text></g>
+
+<g id="n-sec"><rect x="160" y="120" width="120" height="36" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="1" filter="url(#s)"/>
+<text x="220" y="136" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">SectionPlane</text>
+<text x="220" y="148" text-anchor="middle" fill="#8b949e" font-size="5">Stencil cap</text></g>
+
+<g id="n-oit"><rect x="290" y="120" width="100" height="36" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="1" filter="url(#s)"/>
+<text x="340" y="136" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">OIT</text>
+<text x="340" y="148" text-anchor="middle" fill="#8b949e" font-size="5">X-Ray</text></g>
+
+<g id="n-pick"><rect x="400" y="120" width="110" height="36" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="1" filter="url(#s)"/>
+<text x="455" y="136" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">RayPicking</text>
+<text x="455" y="148" text-anchor="middle" fill="#8b949e" font-size="5">GPU RT multi</text></g>
+
+<g id="n-expl"><rect x="520" y="120" width="95" height="36" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="568" y="136" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">Explode</text></g>
+
+<g id="n-rtao"><rect x="625" y="120" width="90" height="36" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="670" y="136" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">RTAO</text></g>
+
+<g id="n-pmi"><rect x="25" y="166" width="110" height="28" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="80" y="182" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">PMI</text></g>
+
+<g id="n-meas"><rect x="145" y="166" width="100" height="28" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="195" y="182" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">Measurement</text></g>
+
+<g id="n-bool"><path d="M255,166 L365,166 L358,194 L248,194 Z" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="307" y="181" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">BoolPreview</text></g>
+
+<g id="n-dfm"><rect x="375" y="166" width="110" height="28" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="430" y="182" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">DFM</text></g>
+
+<g id="n-mkup"><rect x="495" y="166" width="100" height="28" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="545" y="182" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">2D Markup</text></g>
+
+<g id="n-skt"><rect x="605" y="166" width="100" height="28" rx="4" fill="#21262d" stroke="#ffb74d" stroke-width="0.7" filter="url(#s)"/>
+<text x="655" y="182" text-anchor="middle" fill="#ffb74d" font-size="7" font-weight="bold">Sketch</text></g>
+
+<!-- CadScene -->
+<g id="n-cs"><rect x="25" y="210" width="155" height="38" rx="6" fill="#21262d" stroke="#ffa726" stroke-width="1.5" filter="url(#s)"/>
+<text x="103" y="226" text-anchor="middle" fill="#ffa726" font-size="8" font-weight="bold">CadScene</text>
+<text x="103" y="240" text-anchor="middle" fill="#8b949e" font-size="6">Segment tree, style</text></g>
+
+<g id="n-cslyr"><rect x="190" y="215" width="95" height="28" rx="4" fill="#21262d" stroke="#ffa726" stroke-width="0.8" filter="url(#s)"/>
+<text x="238" y="232" text-anchor="middle" fill="#ffa726" font-size="7" font-weight="bold">Layers</text></g>
+
+<g id="n-cscfg"><rect x="295" y="215" width="100" height="28" rx="4" fill="#21262d" stroke="#ffa726" stroke-width="0.8" filter="url(#s)"/>
+<text x="345" y="232" text-anchor="middle" fill="#ffa726" font-size="7" font-weight="bold">ConfigMgr</text></g>
+
+<g id="n-cssty"><rect x="405" y="215" width="100" height="28" rx="4" fill="#21262d" stroke="#ffa726" stroke-width="0.8" filter="url(#s)"/>
+<text x="455" y="232" text-anchor="middle" fill="#ffa726" font-size="7" font-weight="bold">Styles</text></g>
+
+<path d="M180,229 Q185,229 190,229" fill="none" stroke="#777" stroke-width="0.7" marker-start="url(#dm)"/>
+<path d="M180,233 Q230,242 295,229" fill="none" stroke="#777" stroke-width="0.6" marker-start="url(#dm)"/>
+<path d="M180,237 Q280,250 405,229" fill="none" stroke="#777" stroke-width="0.5" marker-start="url(#dm)"/>
+
+<!-- CAE -->
+<g id="n-fem"><path d="M25,266 L135,266 L128,296 L18,296 Z" fill="#21262d" stroke="#ce93d8" stroke-width="1" filter="url(#s)"/>
+<text x="77" y="280" text-anchor="middle" fill="#ce93d8" font-size="7" font-weight="bold">FEM Mesh</text></g>
+
+<g id="n-field"><rect x="145" y="266" width="110" height="32" rx="4" fill="#21262d" stroke="#ce93d8" stroke-width="0.8" filter="url(#s)"/>
+<text x="200" y="283" text-anchor="middle" fill="#ce93d8" font-size="7" font-weight="bold">ScalarField</text></g>
+
+<g id="n-pc"><rect x="265" y="266" width="110" height="32" rx="4" fill="#21262d" stroke="#ce93d8" stroke-width="0.8" filter="url(#s)"/>
+<text x="320" y="283" text-anchor="middle" fill="#ce93d8" font-size="7" font-weight="bold">PointCloud</text></g>
+
+<g id="n-vol"><rect x="385" y="266" width="100" height="32" rx="4" fill="#161b22" stroke="#666" stroke-width="0.7" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.6"/>
+<text x="435" y="283" text-anchor="middle" fill="#888" font-size="7" font-weight="bold">Volume</text>
+<text x="435" y="293" text-anchor="middle" fill="#666" font-size="5">1.1</text></g>
+
+<!-- Tools -->
+<g id="n-giz"><rect x="25" y="312" width="80" height="24" rx="3" fill="#21262d" stroke="#ffb74d" stroke-width="0.7" filter="url(#s)"/>
+<text x="65" y="327" text-anchor="middle" fill="#ffb74d" font-size="6" font-weight="bold">Gizmo</text></g>
+
+<g id="n-comp"><rect x="115" y="312" width="75" height="24" rx="3" fill="#21262d" stroke="#ffb74d" stroke-width="0.7" filter="url(#s)"/>
+<text x="153" y="327" text-anchor="middle" fill="#ffb74d" font-size="6" font-weight="bold">Compass</text></g>
+
+<g id="n-snap"><rect x="200" y="312" width="80" height="24" rx="3" fill="#21262d" stroke="#ffb74d" stroke-width="0.7" filter="url(#s)"/>
+<text x="240" y="327" text-anchor="middle" fill="#ffb74d" font-size="6" font-weight="bold">Snap</text></g>
+
+<g id="n-oph"><rect x="290" y="312" width="110" height="24" rx="3" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="345" y="327" text-anchor="middle" fill="#ffb74d" font-size="6" font-weight="bold">OpHistory+Cmd</text></g>
+
+<g id="n-prev"><rect x="410" y="312" width="100" height="24" rx="3" fill="#21262d" stroke="#ffb74d" stroke-width="0.8" filter="url(#s)"/>
+<text x="460" y="327" text-anchor="middle" fill="#ffb74d" font-size="6" font-weight="bold">Preview</text></g>
+
+<g id="n-selout"><rect x="520" y="312" width="100" height="24" rx="3" fill="#21262d" stroke="#ffb74d" stroke-width="0.7" filter="url(#s)"/>
+<text x="570" y="327" text-anchor="middle" fill="#ffb74d" font-size="6" font-weight="bold">SelOutline</text></g>
+
+<g id="n-tedit"><rect x="630" y="312" width="95" height="24" rx="3" fill="#21262d" stroke="#ffb74d" stroke-width="0.7" filter="url(#s)"/>
+<text x="678" y="327" text-anchor="middle" fill="#ffb74d" font-size="6" font-weight="bold">TopoEdit</text></g>
+
+<!-- CAD -> RenderGraph -->
+<path d="M340,152 C340,500 800,1000 1360,1196" fill="none" stroke="#8b949e" stroke-width="0.6" marker-end="url(#aD)" opacity="0.35"/>
+<!-- CadScene -> ECS -->
+<path d="M180,229 C600,229 2200,600 3065,1375" fill="none" stroke="#58a6ff" stroke-width="0.7" marker-end="url(#aF)" opacity="0.35"/>
+<!-- Tools -> CadScene -->
+<path d="M345,312 C345,280 200,258 180,248" fill="none" stroke="#58a6ff" stroke-width="0.6" marker-end="url(#aF)" opacity="0.4"/>
+
+<!-- ================================================================ -->
+<!-- Z8: SDK/CLOUD/PLUGIN/1.1                                         -->
+<!-- ================================================================ -->
+<g id="n-sdk"><rect x="1940" y="108" width="140" height="34" rx="5" fill="#21262d" stroke="#42a5f5" stroke-width="1.2" filter="url(#s)"/>
+<text x="2010" y="124" text-anchor="middle" fill="#42a5f5" font-size="8" font-weight="bold">MikiEngine</text>
+<text x="2010" y="136" text-anchor="middle" fill="#8b949e" font-size="5">C++/C SDK</text></g>
+
+<g id="n-view"><rect x="2090" y="108" width="105" height="34" rx="5" fill="#21262d" stroke="#42a5f5" stroke-width="1" filter="url(#s)"/>
+<text x="2143" y="124" text-anchor="middle" fill="#42a5f5" font-size="8" font-weight="bold">MikiView</text>
+<text x="2143" y="136" text-anchor="middle" fill="#8b949e" font-size="5">Viewport</text></g>
+
+<g id="n-pkex"><rect x="2205" y="108" width="110" height="34" rx="5" fill="#21262d" stroke="#42a5f5" stroke-width="1" filter="url(#s)"/>
+<text x="2260" y="124" text-anchor="middle" fill="#42a5f5" font-size="7" font-weight="bold">Picker+Export</text></g>
+
+<g id="n-hdls"><rect x="2325" y="108" width="115" height="34" rx="5" fill="#21262d" stroke="#42a5f5" stroke-width="1" filter="url(#s)"/>
+<text x="2383" y="124" text-anchor="middle" fill="#42a5f5" font-size="7" font-weight="bold">Headless</text>
+<text x="2383" y="136" text-anchor="middle" fill="#8b949e" font-size="5">EGL/llvmpipe</text></g>
+
+<g id="n-cloud"><rect x="2450" y="108" width="110" height="34" rx="5" fill="#21262d" stroke="#42a5f5" stroke-width="1" filter="url(#s)"/>
+<text x="2505" y="124" text-anchor="middle" fill="#42a5f5" font-size="7" font-weight="bold">CloudRender</text>
+<text x="2505" y="136" text-anchor="middle" fill="#8b949e" font-size="5">WS tile</text></g>
+
+<!-- Plugin row -->
+<g id="n-iplug">
+<polygon points="1940,168 1956,156 1998,156 2014,168 1998,180 1956,180" fill="#21262d" stroke="#58a6ff" stroke-width="1" filter="url(#s)"/>
+<text x="1977" y="170" text-anchor="middle" fill="#58a6ff" font-size="6" font-weight="bold">IPlugin</text></g>
+
+<g id="n-preg"><rect x="2025" y="156" width="100" height="24" rx="3" fill="#21262d" stroke="#81c784" stroke-width="0.8" filter="url(#s)"/>
+<text x="2075" y="171" text-anchor="middle" fill="#81c784" font-size="6" font-weight="bold">PluginRegistry</text></g>
+
+<g id="n-gprof"><rect x="2135" y="156" width="95" height="24" rx="3" fill="#21262d" stroke="#81c784" stroke-width="0.8" filter="url(#s)"/>
+<text x="2183" y="171" text-anchor="middle" fill="#81c784" font-size="6" font-weight="bold">GPU Profiler</text></g>
+
+<g id="n-evrec"><rect x="2240" y="156" width="100" height="24" rx="3" fill="#21262d" stroke="#81c784" stroke-width="0.8" filter="url(#s)"/>
+<text x="2290" y="171" text-anchor="middle" fill="#81c784" font-size="6" font-weight="bold">EventRecorder</text></g>
+
+<g id="n-gcap"><rect x="2350" y="156" width="115" height="24" rx="3" fill="#21262d" stroke="#81c784" stroke-width="0.8" filter="url(#s)"/>
+<text x="2408" y="171" text-anchor="middle" fill="#81c784" font-size="6" font-weight="bold">GpuCapture</text></g>
+
+<path d="M2014,168 Q2019,168 2025,168" fill="none" stroke="#8b949e" stroke-width="0.7" marker-end="url(#aD)"/>
+
+<!-- 1.1 row -->
+<g><rect x="2580" y="108" width="95" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="2628" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">ReSTIR</text></g>
+
+<g><rect x="2685" y="108" width="80" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="2725" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">DDGI</text></g>
+
+<g><rect x="2775" y="108" width="80" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="2815" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">XR</text></g>
+
+<g><rect x="2865" y="108" width="95" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="2913" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">DGC/WG</text></g>
+
+<g><rect x="2970" y="108" width="95" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="3018" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">ProdVis</text></g>
+
+<g><rect x="3075" y="108" width="95" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="3123" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">Editor</text></g>
+
+<g><rect x="3180" y="108" width="95" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="3228" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">Collab</text></g>
+
+<g><rect x="3285" y="108" width="85" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="3328" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">LLM</text></g>
+
+<g><rect x="3380" y="108" width="95" height="28" rx="3" fill="#161b22" stroke="#666" stroke-width="0.6" stroke-dasharray="2,1.5" filter="url(#s)" opacity="0.5"/>
+<text x="3428" y="122" text-anchor="middle" fill="#888" font-size="6" font-weight="bold">DigiTwin</text></g>
+
+<!-- SDK bezier arrows -->
+<path d="M1940,125 C1200,125 400,190 180,229" fill="none" stroke="#8b949e" stroke-width="0.7" marker-end="url(#aD)" opacity="0.4"/>
+<path d="M2010,142 C2010,500 1600,900 1450,1180" fill="none" stroke="#8b949e" stroke-width="0.6" marker-end="url(#aD)" opacity="0.35"/>
+<path d="M2383,142 C2383,1000 1500,1900 1030,2080" fill="none" stroke="#4caf50" stroke-width="0.6" stroke-dasharray="3,2" marker-end="url(#aI)" opacity="0.35"/>
+<path d="M2505,142 C2505,1800 600,2200 305,2216" fill="none" stroke="#58a6ff" stroke-width="0.5" marker-end="url(#aF)" stroke-dasharray="3,2" opacity="0.25"/>
+<path d="M2628,136 C2628,500 1600,1100 1290,1262" fill="none" stroke="#555" stroke-width="0.4" stroke-dasharray="2,1.5" marker-end="url(#aO)" opacity="0.25"/>
+
+<!-- Cooldowns -->
+<rect x="3420" y="2560" width="150" height="14" rx="2" fill="#ffd700" opacity="0.07"/>
+<text x="3495" y="2571" text-anchor="middle" fill="#ffd700" font-size="6" font-weight="bold" opacity="0.45">Cool #1 W33-35</text>
+<rect x="3420" y="2542" width="150" height="14" rx="2" fill="#ffd700" opacity="0.07"/>
+<text x="3495" y="2553" text-anchor="middle" fill="#ffd700" font-size="6" font-weight="bold" opacity="0.45">Cool #2 W55-57</text>
+<rect x="3420" y="2524" width="150" height="14" rx="2" fill="#ffd700" opacity="0.07"/>
+<text x="3495" y="2535" text-anchor="middle" fill="#ffd700" font-size="6" font-weight="bold" opacity="0.45">Cool #3 W83-85</text>
+
+<text x="1800" y="2590" text-anchor="middle" fill="#30363d" font-size="7">miki Renderer v4 -- Module Relationship Topology -- specs/roadmap.md</text>
+</svg>

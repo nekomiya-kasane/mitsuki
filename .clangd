@@ -1,0 +1,67 @@
+# =============================================================================
+# clangd — miki (whole-project indexing via compile_commands.json)
+# =============================================================================
+# 1. Configure CMake:  cmake --preset debug-vulkan   (or your usual preset)
+# 2. Compilation DB:  build/<preset>/compile_commands.json  (CMAKE_EXPORT_COMPILE_COMMANDS=ON in root CMakeLists)
+# 3. This file points at debug-vulkan; if you use only `debug`, change CompilationDatabase to build/debug/
+# =============================================================================
+
+CompileFlags:
+  CompilationDatabase: build/debug-vulkan/
+
+Index:
+  Background: Build
+  StandardLibrary: Yes
+
+Diagnostics:
+  # Suppress noisy warnings from third-party headers
+  Suppress:
+    - -Wunused-variable
+    - -Wmissing-field-initializers
+    - pp_file_not_found         # transient missing headers during indexing
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - modernize-*
+      - performance-*
+      - readability-identifier-naming
+    Remove:
+      - modernize-use-trailing-return-type   # project style: no trailing return
+      - modernize-avoid-c-arrays             # C arrays used in low-level GPU code
+      - modernize-use-std-print              # crashes clangd 21.x on fprintf (LLVM #98758)
+      - bugprone-easily-swappable-parameters # too noisy for handle-heavy APIs
+    CheckOptions:
+      readability-identifier-naming.ClassCase: CamelCase
+      readability-identifier-naming.FunctionCase: CamelCase
+      readability-identifier-naming.VariableCase: camelBack
+      readability-identifier-naming.PrivateMemberCase: camelBack
+      readability-identifier-naming.PrivateMemberSuffix: _
+      readability-identifier-naming.ConstantCase: CamelCase
+      readability-identifier-naming.ConstantPrefix: k
+      readability-identifier-naming.EnumConstantCase: CamelCase
+      readability-identifier-naming.NamespaceCase: lower_case
+
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  DeducedTypes: true
+  Designators: true
+
+Hover:
+  ShowAKA: true
+
+---
+# Suppress ALL diagnostics for third-party code
+If:
+  PathMatch: third_party/.*
+Diagnostics:
+  Suppress: ["*"]
+CompileFlags:
+  Add: [-w]
+
+---
+# Suppress diagnostics for build directory
+If:
+  PathMatch: build/.*
+Diagnostics:
+  Suppress: ["*"]

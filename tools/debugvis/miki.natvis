@@ -1,0 +1,301 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  miki.natvis — Debug visualizers for miki renderer types.
+
+  Works with:
+    - CodeLLDB (VS Code extension) via "sourceLanguages" / natvis support
+    - MSVC / Visual Studio natively
+    - WinDbg
+
+  Kept in tools/debugvis/ and referenced from launch.json.
+-->
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+  <!-- =================================================================== -->
+  <!-- miki::core — Math types                                             -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::core::float2">
+    <DisplayString>({x}, {y})</DisplayString>
+  </Type>
+
+  <Type Name="miki::core::float3">
+    <DisplayString>({x}, {y}, {z})</DisplayString>
+    <Expand>
+      <Item Name="x">x</Item>
+      <Item Name="y">y</Item>
+      <Item Name="z">z</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="miki::core::float4">
+    <DisplayString>({x}, {y}, {z}, {w})</DisplayString>
+    <Expand>
+      <Item Name="x">x</Item>
+      <Item Name="y">y</Item>
+      <Item Name="z">z</Item>
+      <Item Name="w">w</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="miki::core::float4x4">
+    <DisplayString>float4x4</DisplayString>
+    <Expand>
+      <Item Name="col0">columns[0]</Item>
+      <Item Name="col1">columns[1]</Item>
+      <Item Name="col2">columns[2]</Item>
+      <Item Name="col3">columns[3]</Item>
+      <!-- Diagonal (quick identity check) -->
+      <Item Name="[diag]">{{columns[0].x, columns[1].y, columns[2].z, columns[3].w}}</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="miki::core::int2">
+    <DisplayString>({x}, {y})</DisplayString>
+  </Type>
+
+  <Type Name="miki::core::uint2">
+    <DisplayString>({x}, {y})</DisplayString>
+  </Type>
+
+  <Type Name="miki::core::uint3">
+    <DisplayString>({x}, {y}, {z})</DisplayString>
+  </Type>
+
+  <Type Name="miki::core::uint4">
+    <DisplayString>({x}, {y}, {z}, {w})</DisplayString>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::core — Geometry types                                         -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::core::AABB">
+    <DisplayString>AABB [({min.x},{min.y},{min.z}) .. ({max.x},{max.y},{max.z})]</DisplayString>
+    <Expand>
+      <Item Name="min">min</Item>
+      <Item Name="max">max</Item>
+      <Item Name="sizeX">max.x - min.x</Item>
+      <Item Name="sizeY">max.y - min.y</Item>
+      <Item Name="sizeZ">max.z - min.z</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="miki::core::BoundingSphere">
+    <DisplayString>Sphere c=({center.x},{center.y},{center.z}) r={center._pad}</DisplayString>
+    <Expand>
+      <Item Name="center">center</Item>
+      <Item Name="radius">center._pad</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="miki::core::Ray">
+    <DisplayString>Ray o=({origin.x},{origin.y},{origin.z}) d=({direction.x},{direction.y},{direction.z})</DisplayString>
+  </Type>
+
+  <Type Name="miki::core::Plane">
+    <DisplayString>Plane n=({normal.x},{normal.y},{normal.z}) d={normal._pad}</DisplayString>
+  </Type>
+
+  <Type Name="miki::core::FrustumPlanes">
+    <DisplayString>FrustumPlanes (6 planes)</DisplayString>
+    <Expand>
+      <Item Name="left">planes[0]</Item>
+      <Item Name="right">planes[1]</Item>
+      <Item Name="bottom">planes[2]</Item>
+      <Item Name="top">planes[3]</Item>
+      <Item Name="near">planes[4]</Item>
+      <Item Name="far">planes[5]</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::core — Error / Result                                         -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::core::ErrorCode">
+    <DisplayString Condition="_value == 0">Ok</DisplayString>
+    <DisplayString Condition="_value == 1">InvalidArgument</DisplayString>
+    <DisplayString Condition="_value == 2">OutOfMemory</DisplayString>
+    <DisplayString Condition="_value == 3">NotSupported</DisplayString>
+    <DisplayString Condition="_value == 4">NotImplemented</DisplayString>
+    <DisplayString Condition="_value == 5">InvalidState</DisplayString>
+    <DisplayString Condition="_value == 6">IoError</DisplayString>
+    <DisplayString Condition="_value == 7">Timeout</DisplayString>
+    <DisplayString Condition="_value == 0x1000">PipelineCreationFailed</DisplayString>
+    <DisplayString Condition="_value == 0x1001">ShaderCompilationFailed</DisplayString>
+    <DisplayString Condition="_value == 0x1002">RenderPassInvalid</DisplayString>
+    <DisplayString Condition="_value == 0x1003">GraphCycleDetected</DisplayString>
+    <DisplayString Condition="_value == 0x1004">UnresolvedResource</DisplayString>
+    <DisplayString Condition="_value == 0xF000">DeviceLost</DisplayString>
+    <DisplayString Condition="_value == 0xF001">DeviceNotReady</DisplayString>
+    <DisplayString Condition="_value == 0xF002">SwapchainOutOfDate</DisplayString>
+    <DisplayString Condition="_value == 0xF003">SurfaceLost</DisplayString>
+    <DisplayString>ErrorCode(0x{_value,X})</DisplayString>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::rhi — Handle<Tag>                                             -->
+  <!-- Layout: [generation:16 | index:32 | type:16]                        -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::rhi::Handle&lt;*&gt;">
+    <DisplayString Condition="_value == 0">null</DisplayString>
+    <DisplayString>Handle(gen={(_value &gt;&gt; 48) &amp; 0xFFFF,u}, idx={(_value &gt;&gt; 16) &amp; 0xFFFFFFFF,u}, ty={_value &amp; 0xFFFF,u})</DisplayString>
+    <Expand>
+      <Item Name="generation">(_value &gt;&gt; 48) &amp; 0xFFFF</Item>
+      <Item Name="index">(_value &gt;&gt; 16) &amp; 0xFFFFFFFF</Item>
+      <Item Name="type">_value &amp; 0xFFFF</Item>
+      <Item Name="[raw]">_value</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::rhi — BackendType                                             -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::rhi::BackendType">
+    <DisplayString Condition="(int)this == 0">Vulkan</DisplayString>
+    <DisplayString Condition="(int)this == 1">D3D12</DisplayString>
+    <DisplayString Condition="(int)this == 2">OpenGL</DisplayString>
+    <DisplayString Condition="(int)this == 3">WebGPU</DisplayString>
+    <DisplayString Condition="(int)this == 4">Mock</DisplayString>
+    <DisplayString>BackendType({(int)this})</DisplayString>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::rhi — DeviceConfig                                            -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::rhi::DeviceConfig">
+    <DisplayString>DeviceConfig backend={preferredBackend} validation={enableValidation} compat={forceCompatTier}</DisplayString>
+    <Expand>
+      <Item Name="preferredBackend">preferredBackend</Item>
+      <Item Name="enableValidation">enableValidation</Item>
+      <Item Name="enableProfiling">enableProfiling</Item>
+      <Item Name="forceCompatTier">forceCompatTier</Item>
+      <Item Name="requiredFeatures">requiredFeatures</Item>
+      <Item Name="optionalFeatures">optionalFeatures</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::rhi — DeviceFeatureSet                                        -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::rhi::DeviceFeatureSet">
+    <DisplayString>FeatureSet({bits_._Array_val})</DisplayString>
+    <Expand>
+      <Item Name="[raw bits]">bits_</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::render — CameraUBO                                            -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::render::CameraUBO">
+    <DisplayString>Camera pos=({cameraPos.x},{cameraPos.y},{cameraPos.z}) near={nearPlane} far={farPlane}</DisplayString>
+    <Expand>
+      <Item Name="viewProj">viewProj</Item>
+      <Item Name="prevViewProj">prevViewProj</Item>
+      <Item Name="cameraPos">cameraPos</Item>
+      <Item Name="nearPlane">nearPlane</Item>
+      <Item Name="farPlane">farPlane</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::render — DirectionalLight                                     -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::render::DirectionalLight">
+    <DisplayString>Light dir=({dirX},{dirY},{dirZ}) col=({colorR},{colorG},{colorB}) I={intensity}</DisplayString>
+    <Expand>
+      <Item Name="direction">{dirX, dirY, dirZ}</Item>
+      <Item Name="color">{colorR, colorG, colorB}</Item>
+      <Item Name="intensity">intensity</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::render — LightBuffer                                          -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::render::LightBuffer">
+    <DisplayString>LightBuffer count={lightCount}</DisplayString>
+    <Expand>
+      <Item Name="lightCount">lightCount</Item>
+      <ArrayItems>
+        <Size>lightCount</Size>
+        <ValuePointer>lights</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::render — StandardPBR                                          -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::render::StandardPBR">
+    <DisplayString>PBR albedo=({albedo.x},{albedo.y},{albedo.z}) metal={metallic} rough={roughness}</DisplayString>
+    <Expand>
+      <Item Name="albedo">albedo</Item>
+      <Item Name="metallic">metallic</Item>
+      <Item Name="roughness">roughness</Item>
+      <Item Name="anisotropy">anisotropy</Item>
+      <Item Name="anisotropyAngle">anisotropyAngle</Item>
+      <Item Name="clearcoat">clearcoat</Item>
+      <Item Name="clearcoatRoughness">clearcoatRoughness</Item>
+      <Item Name="ior">ior</Item>
+      <Item Name="subsurface">subsurface</Item>
+      <Item Name="sheen">sheen</Item>
+      <Item Name="sheenRoughness">sheenRoughness</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::render — DrawCall                                             -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::render::DrawCall">
+    <DisplayString>Draw mat={material} verts={mesh.vertexCount} idx={mesh.indexCount}</DisplayString>
+    <Expand>
+      <Item Name="mesh">mesh</Item>
+      <Item Name="material">material</Item>
+      <Item Name="model">model</Item>
+      <Item Name="pipeline">pipeline</Item>
+      <Item Name="sortKey">sortKey</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::gfx — MeshBuffers                                            -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::gfx::MeshBuffers">
+    <DisplayString>Mesh verts={vertexCount} idx={indexCount}</DisplayString>
+    <Expand>
+      <Item Name="vertexBuffer">vertexBuffer</Item>
+      <Item Name="indexBuffer">indexBuffer</Item>
+      <Item Name="vertexCount">vertexCount</Item>
+      <Item Name="indexCount">indexCount</Item>
+    </Expand>
+  </Type>
+
+  <!-- =================================================================== -->
+  <!-- miki::rhi — NativeImageHandle                                       -->
+  <!-- =================================================================== -->
+
+  <Type Name="miki::rhi::NativeImageHandle">
+    <DisplayString>{width}x{height} fmt={format} backend={type}</DisplayString>
+    <Expand>
+      <Item Name="handle">handle</Item>
+      <Item Name="type">type</Item>
+      <Item Name="format">format</Item>
+      <Item Name="width">width</Item>
+      <Item Name="height">height</Item>
+    </Expand>
+  </Type>
+
+</AutoVisualizer>

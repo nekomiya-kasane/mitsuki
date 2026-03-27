@@ -1,0 +1,556 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 2200" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <style>
+      .title { font-size: 22px; font-weight: 700; fill: #1a1a2e; }
+      .subtitle { font-size: 13px; fill: #666; }
+      .section-title { font-size: 15px; font-weight: 700; fill: #fff; }
+      .label { font-size: 12px; fill: #333; }
+      .label-bold { font-size: 12px; font-weight: 600; fill: #333; }
+      .label-sm { font-size: 10px; fill: #555; }
+      .label-xs { font-size: 9px; fill: #888; }
+      .label-white { font-size: 11px; fill: #fff; }
+      .label-white-bold { font-size: 11px; font-weight: 600; fill: #fff; }
+      .metric { font-size: 10px; font-weight: 600; fill: #e74c3c; }
+      .metric-ok { font-size: 10px; font-weight: 600; fill: #27ae60; }
+      .arrow { fill: none; stroke: #667; stroke-width: 1.5; marker-end: url(#arrowhead); }
+      .arrow-thick { fill: none; stroke: #4a69bd; stroke-width: 2; marker-end: url(#arrowhead-blue); }
+      .arrow-dashed { fill: none; stroke: #999; stroke-width: 1.2; stroke-dasharray: 5,3; marker-end: url(#arrowhead); }
+      .arrow-red { fill: none; stroke: #e74c3c; stroke-width: 1.5; marker-end: url(#arrowhead-red); }
+      .connector { fill: none; stroke: #bbb; stroke-width: 1; stroke-dasharray: 3,3; }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#667"/>
+    </marker>
+    <marker id="arrowhead-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#4a69bd"/>
+    </marker>
+    <marker id="arrowhead-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#e74c3c"/>
+    </marker>
+    <linearGradient id="grad-system" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2c3e50"/>
+      <stop offset="100%" stop-color="#34495e"/>
+    </linearGradient>
+    <linearGradient id="grad-auto" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8e44ad"/>
+      <stop offset="100%" stop-color="#9b59b6"/>
+    </linearGradient>
+    <linearGradient id="grad-workflow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2980b9"/>
+      <stop offset="100%" stop-color="#3498db"/>
+    </linearGradient>
+    <linearGradient id="grad-spec" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#27ae60"/>
+      <stop offset="100%" stop-color="#2ecc71"/>
+    </linearGradient>
+    <linearGradient id="grad-mcp" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e67e22"/>
+      <stop offset="100%" stop-color="#f39c12"/>
+    </linearGradient>
+    <linearGradient id="grad-output" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#c0392b"/>
+      <stop offset="100%" stop-color="#e74c3c"/>
+    </linearGradient>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.12"/>
+    </filter>
+    <filter id="shadow-lg" x="-3%" y="-3%" width="106%" height="106%">
+      <feDropShadow dx="2" dy="2" stdDeviation="4" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1400" height="2200" fill="#f8f9fa" rx="8"/>
+
+  <!-- Title -->
+  <text x="700" y="40" text-anchor="middle" class="title">miki Renderer - Windsurf Infrastructure Architecture</text>
+  <text x="700" y="58" text-anchor="middle" class="subtitle">Prompt Layout + Workflow Hierarchy + Data Flow + Token Budget</text>
+  <text x="700" y="74" text-anchor="middle" class="label-xs">Generated 2026-03-01 | All token estimates are approximate</text>
+
+  <!-- ================================================================== -->
+  <!-- SECTION 1: SYSTEM PROMPT (auto-injected every turn) -->
+  <!-- ================================================================== -->
+  <rect x="30" y="95" width="660" height="480" rx="8" fill="#fff" stroke="#2c3e50" stroke-width="2" filter="url(#shadow-lg)"/>
+  <rect x="30" y="95" width="660" height="32" rx="8" fill="url(#grad-system)"/>
+  <rect x="30" y="119" width="660" height="8" fill="url(#grad-system)"/>
+  <text x="50" y="116" class="section-title">LAYER 0: System Prompt (auto-injected every turn)</text>
+  <text x="650" y="116" text-anchor="end" class="label-white">~6,300 tokens total</text>
+
+  <!-- Windsurf Platform Rules -->
+  <rect x="50" y="140" width="300" height="60" rx="6" fill="#ecf0f1" stroke="#bdc3c7" filter="url(#shadow)"/>
+  <text x="60" y="158" class="label-bold">Windsurf Platform Rules</text>
+  <text x="60" y="172" class="label-sm">Communication style, tool calling, code edit</text>
+  <text x="60" y="184" class="label-sm">rules, running commands, debugging protocol</text>
+  <text x="310" y="158" text-anchor="end" class="metric">~2,500 tok</text>
+
+  <!-- .windsurfrules -->
+  <rect x="50" y="210" width="300" height="80" rx="6" fill="#eaf2f8" stroke="#5dade2" filter="url(#shadow)"/>
+  <text x="60" y="228" class="label-bold">.windsurfrules (313 lines)</text>
+  <text x="310" y="228" text-anchor="end" class="metric">~4,500 tok</text>
+  <text x="60" y="244" class="label-sm">S1: User Profile</text>
+  <text x="60" y="256" class="label-sm">S2: Communication Rules</text>
+  <text x="60" y="268" class="label-sm">S3: Project Scale (27 phases, 11 layers)</text>
+  <text x="60" y="280" class="label-sm">S4: Dev Workflow (Phase Gate, Execution)</text>
+  <rect x="195" y="233" width="155" height="52" rx="4" fill="none" stroke="#5dade2" stroke-dasharray="3,2"/>
+  <text x="200" y="248" class="label-xs">S5: Coding Standards (C++23)</text>
+  <text x="200" y="260" class="label-xs">S6: Key Tech Decisions</text>
+  <text x="200" y="272" class="label-xs">S7: Namespace Map ref</text>
+  <text x="200" y="284" class="label-xs">S8: Debugging + Pitfalls</text>
+
+  <!-- Memory -->
+  <rect x="50" y="300" width="300" height="70" rx="6" fill="#fef9e7" stroke="#f1c40f" filter="url(#shadow)"/>
+  <text x="60" y="318" class="label-bold">Windsurf Memory (auto-retrieved)</text>
+  <text x="310" y="318" text-anchor="end" class="metric">~1,800 tok</text>
+  <text x="60" y="334" class="label-sm">Global user rules (from user_global)</text>
+  <text x="60" y="346" class="label-sm">Project rules (from user_15148...)</text>
+  <text x="60" y="358" class="label-sm">Progress Snapshot (session resume)</text>
+
+  <!-- MCP Server Definitions -->
+  <rect x="50" y="380" width="300" height="50" rx="6" fill="#fdf2e9" stroke="#e67e22" filter="url(#shadow)"/>
+  <text x="60" y="398" class="label-bold">MCP Server Definitions</text>
+  <text x="310" y="398" text-anchor="end" class="label-xs">~500 tok</text>
+  <text x="60" y="414" class="label-sm">debugmcp, deepwiki, renderdoc-cli-mcp</text>
+
+  <!-- Tool Definitions -->
+  <rect x="50" y="440" width="300" height="50" rx="6" fill="#f4ecf7" stroke="#8e44ad" filter="url(#shadow)"/>
+  <text x="60" y="458" class="label-bold">Tool Definitions (40+ tools)</text>
+  <text x="310" y="458" text-anchor="end" class="label-xs">included in platform</text>
+  <text x="60" y="474" class="label-sm">edit, read_file, grep_search, run_command...</text>
+
+  <!-- Injection order arrow -->
+  <text x="380" y="155" class="label-xs">injection</text>
+  <text x="380" y="165" class="label-xs">order</text>
+  <line x1="375" y1="170" x2="375" y2="195" class="arrow"/>
+  <line x1="375" y1="200" x2="375" y2="295" class="arrow"/>
+  <line x1="375" y1="300" x2="375" y2="375" class="arrow"/>
+  <line x1="375" y1="380" x2="375" y2="435" class="arrow"/>
+
+  <!-- Token budget sidebar -->
+  <rect x="400" y="140" width="270" height="370" rx="6" fill="#fff" stroke="#ddd"/>
+  <text x="415" y="160" class="label-bold">Token Budget Analysis (200K context)</text>
+
+  <rect x="415" y="172" width="240" height="18" rx="3" fill="#eee"/>
+  <rect x="415" y="172" width="76" height="18" rx="3" fill="#2c3e50"/>
+  <text x="420" y="185" class="label-white" style="font-size:9px">System ~6.3K (3.2%)</text>
+
+  <text x="415" y="210" class="label-sm">Remaining for conversation: ~193K</text>
+
+  <text x="415" y="235" class="label-bold">Per-Session Scenarios:</text>
+
+  <rect x="415" y="245" width="240" height="42" rx="4" fill="#eafaf1" stroke="#27ae60"/>
+  <text x="425" y="260" class="label-sm">Phase Planning session</text>
+  <text x="425" y="274" class="metric-ok">System 6.3K + Roadmap 12K + Phase 3K = ~21K (11%)</text>
+
+  <rect x="415" y="295" width="240" height="42" rx="4" fill="#eafaf1" stroke="#27ae60"/>
+  <text x="425" y="310" class="label-sm">Simple Task (2-3 files)</text>
+  <text x="425" y="324" class="metric-ok">System 6.3K + Workflow 7K + Code 10K = ~23K (12%)</text>
+
+  <rect x="415" y="345" width="240" height="42" rx="4" fill="#fef9e7" stroke="#f1c40f"/>
+  <text x="425" y="360" class="label-sm">Complex Task (10+ files, Phase 8+)</text>
+  <text x="425" y="374" class="metric">System 6.3K + Workflow 7K + Code 40K + API 15K = ~68K (34%)</text>
+
+  <rect x="415" y="395" width="240" height="42" rx="4" fill="#fdedec" stroke="#e74c3c"/>
+  <text x="425" y="410" class="label-sm">Gate Check (full roadmap re-read)</text>
+  <text x="425" y="424" class="metric">System 6.3K + Roadmap 50K + Code 30K = ~86K (43%)</text>
+
+  <rect x="415" y="445" width="240" height="48" rx="4" fill="#f4ecf7" stroke="#8e44ad"/>
+  <text x="425" y="460" class="label-sm">Token Pressure Mitigations:</text>
+  <text x="425" y="474" class="label-xs">- Layer-based API index (not monolith)</text>
+  <text x="425" y="484" class="label-xs">- Roadmap Digest in phase-spec (skip roadmap re-read)</text>
+
+  <!-- ================================================================== -->
+  <!-- SECTION 2: THREE-LAYER WORKFLOW HIERARCHY -->
+  <!-- ================================================================== -->
+  <rect x="30" y="590" width="1340" height="620" rx="8" fill="#fff" stroke="#2980b9" stroke-width="2" filter="url(#shadow-lg)"/>
+  <rect x="30" y="590" width="1340" height="32" rx="8" fill="url(#grad-workflow)"/>
+  <rect x="30" y="614" width="1340" height="8" fill="url(#grad-workflow)"/>
+  <text x="50" y="611" class="section-title">LAYER 1: Three-Layer Workflow Hierarchy (on-demand, triggered by /slash-command or internal dispatch)</text>
+
+  <!-- L1: miki-roadmap -->
+  <rect x="50" y="640" width="400" height="320" rx="6" fill="#ebf5fb" stroke="#2980b9" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="50" y="640" width="400" height="26" rx="6" fill="#2980b9"/>
+  <rect x="50" y="660" width="400" height="6" fill="#2980b9"/>
+  <text x="60" y="659" class="label-white-bold">/miki-roadmap (L1: Orchestrator) — 422 lines ~5,800 tok</text>
+
+  <text x="65" y="684" class="label-bold">S1: Session Startup</text>
+  <text x="65" y="698" class="label-sm">1.1 Read roadmap.md (segmented, 4 reads)</text>
+  <text x="65" y="710" class="label-sm">1.2 Find existing phase specs</text>
+  <text x="65" y="722" class="label-sm">1.3 Load API Surface Index (hub + layer files)</text>
+  <text x="65" y="734" class="label-sm">1.4 Identify current phase</text>
+  <text x="65" y="746" class="label-sm">1.5-1.6 Attention anchoring re-reads</text>
+  <text x="65" y="758" class="label-sm">1.7 CHECKPOINT: Startup Summary table</text>
+
+  <text x="65" y="778" class="label-bold">S2: Phase Dispatch</text>
+  <text x="65" y="792" class="label-sm">No spec? -> invoke /miki-phase</text>
+  <text x="65" y="804" class="label-sm">Spec exists? -> locate next incomplete Task</text>
+
+  <text x="65" y="824" class="label-bold">S3: Task Loop + Auto-Advance</text>
+  <text x="65" y="838" class="label-sm">3.1 Invoke /miki-task on current Task</text>
+  <text x="65" y="850" class="label-sm">3.3 Auto-advance (4 pause conditions)</text>
+  <text x="65" y="862" class="label-sm">3.4 Periodic Anchor Audit (every 5 Tasks)</text>
+
+  <text x="65" y="882" class="label-bold">S4: Gate Check (10 checks)</text>
+  <text x="65" y="896" class="label-sm">+ Demo Checklist + Test count + Perf sanity</text>
+  <text x="65" y="908" class="label-sm">+ Success Criteria spot-check (Phase 6a+)</text>
+
+  <text x="65" y="928" class="label-bold">S5-6: Anchor Invalidation + Session End</text>
+  <text x="65" y="942" class="label-sm">S8: Phase ID -> Filename Mapping Rules</text>
+
+  <!-- L2: miki-phase -->
+  <rect x="480" y="640" width="400" height="320" rx="6" fill="#e8f8f5" stroke="#1abc9c" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="480" y="640" width="400" height="26" rx="6" fill="#1abc9c"/>
+  <rect x="480" y="660" width="400" height="6" fill="#1abc9c"/>
+  <text x="490" y="659" class="label-white-bold">/miki-phase (L2: Planner) — 243 lines ~3,300 tok</text>
+
+  <text x="495" y="684" class="label-bold">S1.1: Read Phase Context</text>
+  <text x="495" y="698" class="label-sm">1.1.0 Resolve Phase filenames (nn/id)</text>
+  <text x="495" y="710" class="label-sm">1.1.1 Roadmap section</text>
+  <text x="495" y="722" class="label-sm">1.1.3 API Surface Index (layer-based)</text>
+  <text x="495" y="734" class="label-sm">1.1.5 Downstream phase expectations</text>
+
+  <text x="495" y="754" class="label-bold">S1.2: Component -> Task Decomposition</text>
+  <text x="495" y="768" class="label-sm">1.2.0 Per-Component Context Refresh</text>
+  <text x="495" y="780" class="label-sm">     (lexical + semantic fallback search)</text>
+  <text x="495" y="792" class="label-sm">1.2.1 Split into Tasks (T{id}.X.Y)</text>
+  <text x="495" y="804" class="label-sm">1.2.3 Generate Context Anchor Card</text>
+  <text x="495" y="816" class="label-sm">     + Anchor Completeness Micro-Check</text>
+  <text x="495" y="828" class="label-sm">1.2.3a Assign File Exposure + Ref Heat</text>
+
+  <text x="495" y="848" class="label-bold">S1.4: Create Task Files</text>
+  <text x="495" y="862" class="label-sm">Phase type dispatch: standard / cooldown / spike</text>
+
+  <text x="495" y="882" class="label-bold">S1.6: Write Phase Spec + Roadmap Digest</text>
+
+  <text x="495" y="902" class="label-bold">S2: Quality Gate (7 checks)</text>
+  <text x="495" y="916" class="label-sm">Coverage, Completeness, Dependencies,</text>
+  <text x="495" y="928" class="label-sm">Contract consistency, Test target (80%),</text>
+  <text x="495" y="940" class="label-sm">Modernity, Complexity warning</text>
+
+  <!-- L3: miki-task -->
+  <rect x="910" y="640" width="440" height="320" rx="6" fill="#fef9e7" stroke="#f1c40f" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="910" y="640" width="440" height="26" rx="6" fill="#d4ac0d"/>
+  <rect x="910" y="660" width="440" height="6" fill="#d4ac0d"/>
+  <text x="920" y="659" class="label-white-bold">/miki-task (L3: Executor) — 180 lines ~2,500 tok</text>
+
+  <text x="925" y="684" class="label-bold">S1: Task Startup</text>
+  <text x="925" y="698" class="label-sm">1.1 Read Task file</text>
+  <text x="925" y="710" class="label-sm">1.2 Read phase spec + Roadmap Digest</text>
+  <text x="925" y="722" class="label-sm">1.5 Detect Task type (standard/cooldown/spike)</text>
+  <text x="925" y="734" class="label-sm">1.6 Self-summary (attention anchoring)</text>
+
+  <text x="925" y="754" class="label-bold">S2: Implementation Loop (per Step)</text>
+  <text x="925" y="768" class="label-sm">2.2 Re-read Context Anchor (standard only)</text>
+  <text x="925" y="780" class="label-sm">    [CRITICAL] Pre-save C++23 compliance check</text>
+  <text x="925" y="792" class="label-sm">2.3 Step verification: compile/test/visual/</text>
+  <text x="925" y="804" class="label-sm">    gpu-debug/debug/manual</text>
+  <text x="925" y="816" class="label-sm">2.5 Step Batch Processing (compile batching)</text>
+
+  <text x="925" y="836" class="label-bold">S3: Task Verification</text>
+  <text x="925" y="850" class="label-sm">Build + test + no TODO/stub/placeholder</text>
+
+  <text x="925" y="870" class="label-bold">S4: Contract Verification</text>
+  <text x="925" y="884" class="label-sm">Scope gate: skip for cooldown/spike/internal-only</text>
+  <text x="925" y="896" class="label-sm">4.2 Expected vs Actual diff table</text>
+  <text x="925" y="908" class="label-sm">4.3 Consumer check</text>
+  <text x="925" y="920" class="label-sm">4.4 Direction check</text>
+
+  <text x="925" y="940" class="label-bold">S5: Task Completion -> return to L1</text>
+
+  <!-- Dispatch arrows between workflow layers -->
+  <path d="M 450 710 L 478 710" class="arrow-thick"/>
+  <text x="453" y="704" class="label-xs" fill="#4a69bd">dispatch</text>
+
+  <path d="M 450 840 L 908 840" class="arrow-thick"/>
+  <text x="660" y="834" class="label-xs" fill="#4a69bd">dispatch per Task</text>
+
+  <path d="M 908 950 L 452 950" class="arrow-dashed"/>
+  <text x="660" y="944" class="label-xs">return (auto-advance rules)</text>
+
+  <!-- ================================================================== -->
+  <!-- SECTION 3: SPEC & TEMPLATE FILES (document store) -->
+  <!-- ================================================================== -->
+  <rect x="30" y="1230" width="850" height="390" rx="8" fill="#fff" stroke="#27ae60" stroke-width="2" filter="url(#shadow-lg)"/>
+  <rect x="30" y="1230" width="850" height="32" rx="8" fill="url(#grad-spec)"/>
+  <rect x="30" y="1254" width="850" height="8" fill="url(#grad-spec)"/>
+  <text x="50" y="1251" class="section-title">LAYER 2: Spec &amp; Template Files (document store — read on demand)</text>
+
+  <!-- roadmap.md -->
+  <rect x="50" y="1275" width="240" height="90" rx="6" fill="#eafaf1" stroke="#27ae60" filter="url(#shadow)"/>
+  <text x="60" y="1293" class="label-bold">specs/roadmap.md</text>
+  <text x="250" y="1293" text-anchor="end" class="metric">~3,585 lines</text>
+  <text x="250" y="1307" text-anchor="end" class="metric">~50,000 tok</text>
+  <text x="60" y="1315" class="label-sm">27 Phases (1a..18)</text>
+  <text x="60" y="1327" class="label-sm">Part VII: Success Criteria</text>
+  <text x="60" y="1339" class="label-sm">Part VIII: Phase Ordering</text>
+  <text x="60" y="1351" class="label-sm">Segmented read (4 x 900 lines)</text>
+
+  <!-- Templates -->
+  <rect x="310" y="1275" width="260" height="90" rx="6" fill="#eafaf1" stroke="#27ae60" filter="url(#shadow)"/>
+  <text x="320" y="1293" class="label-bold">specs/templates/ (4 files)</text>
+  <rect x="325" y="1301" width="230" height="15" rx="3" fill="#d5f5e3"/>
+  <text x="330" y="1312" class="label-xs">task-template.md (242 lines) — standard Tasks</text>
+  <rect x="325" y="1319" width="230" height="15" rx="3" fill="#d5f5e3"/>
+  <text x="330" y="1330" class="label-xs">phase-template.md (141 lines) — with Roadmap Digest</text>
+  <rect x="325" y="1337" width="230" height="15" rx="3" fill="#fdebd0"/>
+  <text x="330" y="1348" class="label-xs">cooldown-task-template.md (64 lines) — no Contract</text>
+  <rect x="325" y="1355" width="230" height="15" rx="3" fill="#fdebd0"/>
+  <text x="330" y="1366" class="label-xs">spike-task-template.md (88 lines) — Decision Gate</text>
+
+  <!-- API Surface Index -->
+  <rect x="590" y="1275" width="270" height="90" rx="6" fill="#eafaf1" stroke="#27ae60" filter="url(#shadow)"/>
+  <text x="600" y="1293" class="label-bold">API Surface Index (Hub + Layers)</text>
+  <rect x="605" y="1301" width="240" height="15" rx="3" fill="#d5f5e3"/>
+  <text x="610" y="1312" class="label-xs">api-surface-index.md (89 lines) — Hub, Phase->Layer map</text>
+  <rect x="605" y="1319" width="240" height="15" rx="3" fill="#d5f5e3"/>
+  <text x="610" y="1330" class="label-xs">api-surface-L01.md .. L11.md — per-layer locked APIs</text>
+  <rect x="605" y="1337" width="240" height="15" rx="3" fill="#d5f5e3"/>
+  <text x="610" y="1348" class="label-xs">Created on first phase completion per layer</text>
+  <text x="610" y="1362" class="label-xs">Load: O(dependent layers) not O(total phases)</text>
+
+  <!-- Phase Specs (generated) -->
+  <rect x="50" y="1380" width="240" height="80" rx="6" fill="#d4efdf" stroke="#27ae60" filter="url(#shadow)"/>
+  <text x="60" y="1398" class="label-bold">specs/phases/phase-{nn}-{id}.md</text>
+  <text x="60" y="1414" class="label-sm">Generated by /miki-phase</text>
+  <text x="60" y="1426" class="label-sm">Contains: Roadmap Digest, Components,</text>
+  <text x="60" y="1438" class="label-sm">Task table, Demo plan, Test summary</text>
+  <text x="60" y="1450" class="label-sm">Cross-Component Contract Table</text>
+
+  <!-- Task Files (generated) -->
+  <rect x="310" y="1380" width="260" height="80" rx="6" fill="#d4efdf" stroke="#27ae60" filter="url(#shadow)"/>
+  <text x="320" y="1398" class="label-bold">phase-{nn}-{id}/T{id}.X.Y.md</text>
+  <text x="320" y="1414" class="label-sm">Generated by /miki-phase</text>
+  <text x="320" y="1426" class="label-sm">Contains: Context Anchor, Files table</text>
+  <text x="320" y="1438" class="label-sm">(Exposure + Ref Heat), Steps with</text>
+  <text x="320" y="1450" class="label-sm">Expected API (signature tables)</text>
+
+  <!-- Phase ID rules box -->
+  <rect x="590" y="1380" width="270" height="80" rx="6" fill="#fef9e7" stroke="#f1c40f" filter="url(#shadow)"/>
+  <text x="600" y="1398" class="label-bold">Phase ID -> Filename Rules (S8)</text>
+  <text x="600" y="1414" class="label-sm">nn = 2-digit sequence (01..27, cd1..cd3)</text>
+  <text x="600" y="1426" class="label-sm">id = slug (no hyphens: 7a-1 -> 7a1)</text>
+  <text x="600" y="1438" class="label-sm">File: phase-{nn}-{id}.md</text>
+  <text x="600" y="1450" class="label-sm">Task: T{id}.X.Y (e.g. T7a1.3.2)</text>
+
+  <!-- Arrows from workflow to specs -->
+  <path d="M 250 960 L 250 1010 L 170 1010 L 170 1273" class="arrow"/>
+  <text x="130" y="1140" class="label-xs" transform="rotate(-90, 130, 1140)">reads segmented</text>
+
+  <path d="M 680 960 L 680 1010 L 440 1010 L 440 1273" class="arrow"/>
+  <text x="520" y="1140" class="label-xs" transform="rotate(-90, 520, 1140)">reads templates</text>
+
+  <path d="M 680 960 L 680 1030 L 730 1030 L 730 1273" class="arrow"/>
+  <text x="740" y="1140" class="label-xs" transform="rotate(-90, 740, 1140)">loads layers</text>
+
+  <!-- Arrows from L2(planner) to generated files -->
+  <path d="M 580 960 L 580 1050 L 170 1050 L 170 1378" class="arrow" style="stroke:#1abc9c"/>
+  <text x="300" y="1065" class="label-xs" style="fill:#1abc9c">generates phase spec</text>
+
+  <path d="M 620 960 L 620 1070 L 440 1070 L 440 1378" class="arrow" style="stroke:#1abc9c"/>
+  <text x="490" y="1085" class="label-xs" style="fill:#1abc9c">generates task files</text>
+
+  <!-- ================================================================== -->
+  <!-- SECTION 4: MCP SERVERS -->
+  <!-- ================================================================== -->
+  <rect x="910" y="1230" width="460" height="250" rx="8" fill="#fff" stroke="#e67e22" stroke-width="2" filter="url(#shadow-lg)"/>
+  <rect x="910" y="1230" width="460" height="32" rx="8" fill="url(#grad-mcp)"/>
+  <rect x="910" y="1254" width="460" height="8" fill="url(#grad-mcp)"/>
+  <text x="930" y="1251" class="section-title">LAYER 3: MCP Servers (external tool integration)</text>
+
+  <!-- debugmcp -->
+  <rect x="930" y="1275" width="200" height="80" rx="6" fill="#fdf2e9" stroke="#e67e22" filter="url(#shadow)"/>
+  <text x="940" y="1293" class="label-bold">debugmcp</text>
+  <text x="940" y="1309" class="label-sm">VS Code extension</text>
+  <text x="940" y="1321" class="label-sm">HTTP localhost:3001</text>
+  <text x="940" y="1337" class="label-sm">Breakpoints, variables,</text>
+  <text x="940" y="1349" class="label-sm">step-over, evaluate</text>
+
+  <!-- renderdoc-cli-mcp -->
+  <rect x="1150" y="1275" width="200" height="80" rx="6" fill="#fdf2e9" stroke="#e67e22" filter="url(#shadow)"/>
+  <text x="1160" y="1293" class="label-bold">renderdoc-cli-mcp</text>
+  <text x="1160" y="1309" class="label-sm">Custom CLI MCP server</text>
+  <text x="1160" y="1321" class="label-sm">Wraps renderdoccmd.exe</text>
+  <text x="1160" y="1337" class="label-sm">Capture, analyze, replay,</text>
+  <text x="1160" y="1349" class="label-sm">pipeline state, draw calls</text>
+
+  <!-- deepwiki -->
+  <rect x="930" y="1365" width="200" height="50" rx="6" fill="#fdf2e9" stroke="#e67e22" filter="url(#shadow)"/>
+  <text x="940" y="1383" class="label-bold">deepwiki</text>
+  <text x="940" y="1399" class="label-sm">AI docs for GitHub repos (Slang, Dawn, VMA)</text>
+
+  <!-- verify tags to MCP mapping -->
+  <rect x="1150" y="1365" width="200" height="100" rx="6" fill="#fef9e7" stroke="#d4ac0d" filter="url(#shadow)"/>
+  <text x="1160" y="1383" class="label-bold">Verify Tag -> MCP Map</text>
+  <text x="1160" y="1399" class="label-sm">[verify: visual] -> renderdoc</text>
+  <text x="1160" y="1411" class="label-sm">[verify: gpu-debug] -> renderdoc</text>
+  <text x="1160" y="1423" class="label-sm">[verify: debug] -> debugmcp</text>
+  <text x="1160" y="1435" class="label-sm">[verify: compile] -> run_command</text>
+  <text x="1160" y="1447" class="label-sm">[verify: test] -> run_command</text>
+
+  <!-- Arrow from L3 executor to MCP -->
+  <path d="M 1130 960 L 1130 1040 L 1140 1040 L 1140 1228" class="arrow" style="stroke:#e67e22"/>
+  <text x="1145" y="1100" class="label-xs" style="fill:#e67e22">Step verification</text>
+
+  <!-- ================================================================== -->
+  <!-- SECTION 5: OUTPUT ARTIFACTS -->
+  <!-- ================================================================== -->
+  <rect x="30" y="1640" width="1340" height="200" rx="8" fill="#fff" stroke="#c0392b" stroke-width="2" filter="url(#shadow-lg)"/>
+  <rect x="30" y="1640" width="1340" height="32" rx="8" fill="url(#grad-output)"/>
+  <rect x="30" y="1664" width="1340" height="8" fill="url(#grad-output)"/>
+  <text x="50" y="1661" class="section-title">LAYER 4: Output Artifacts (written by agent during execution)</text>
+
+  <!-- Source code -->
+  <rect x="50" y="1685" width="200" height="70" rx="6" fill="#fdedec" stroke="#e74c3c" filter="url(#shadow)"/>
+  <text x="60" y="1703" class="label-bold">Source Code</text>
+  <text x="60" y="1719" class="label-sm">include/miki/**/*.h</text>
+  <text x="60" y="1731" class="label-sm">src/miki/**/*.cpp</text>
+  <text x="60" y="1743" class="label-sm">shaders/**/*.slang</text>
+
+  <!-- Tests -->
+  <rect x="270" y="1685" width="200" height="70" rx="6" fill="#fdedec" stroke="#e74c3c" filter="url(#shadow)"/>
+  <text x="280" y="1703" class="label-bold">Tests</text>
+  <text x="280" y="1719" class="label-sm">tests/unit/test_*.cpp</text>
+  <text x="280" y="1731" class="label-sm">tests/integration/</text>
+  <text x="280" y="1743" class="label-sm">tests/visual/ (golden images)</text>
+
+  <!-- Demos -->
+  <rect x="490" y="1685" width="170" height="70" rx="6" fill="#fdedec" stroke="#e74c3c" filter="url(#shadow)"/>
+  <text x="500" y="1703" class="label-bold">Demos</text>
+  <text x="500" y="1719" class="label-sm">demos/{name}/main.cpp</text>
+  <text x="500" y="1731" class="label-sm">demos/spikes/ (spike only)</text>
+
+  <!-- Phase specs (updated) -->
+  <rect x="680" y="1685" width="200" height="70" rx="6" fill="#fdedec" stroke="#e74c3c" filter="url(#shadow)"/>
+  <text x="690" y="1703" class="label-bold">Updated Phase Specs</text>
+  <text x="690" y="1719" class="label-sm">Task status [x] / [ ]</text>
+  <text x="690" y="1731" class="label-sm">Test Summary (actual)</text>
+  <text x="690" y="1743" class="label-sm">Completion Summary</text>
+
+  <!-- API Surface -->
+  <rect x="900" y="1685" width="200" height="70" rx="6" fill="#fdedec" stroke="#e74c3c" filter="url(#shadow)"/>
+  <text x="910" y="1703" class="label-bold">Locked API Surface</text>
+  <text x="910" y="1719" class="label-sm">api-surface-L{NN}.md</text>
+  <text x="910" y="1731" class="label-sm">append-only per layer</text>
+
+  <!-- Windsurf Memory -->
+  <rect x="1120" y="1685" width="230" height="70" rx="6" fill="#fef9e7" stroke="#f1c40f" filter="url(#shadow)"/>
+  <text x="1130" y="1703" class="label-bold">Windsurf Memory</text>
+  <text x="1130" y="1719" class="label-sm">Progress Snapshot (S6.5)</text>
+  <text x="1130" y="1731" class="label-sm">MCP Config</text>
+  <text x="1130" y="1743" class="label-sm">Auto-retrieved next session</text>
+
+  <!-- Arrow from L4 output back to system prompt -->
+  <path d="M 1235 1685 C 1235 1650, 1380 1650, 1380 600 C 1380 200, 700 120, 693 140" class="arrow-red"/>
+  <text x="1370" y="400" class="label-xs" style="fill:#e74c3c" transform="rotate(-90, 1370, 400)">Memory re-injected next session</text>
+
+  <!-- ================================================================== -->
+  <!-- SECTION 6: LIFECYCLE FLOW (bottom) -->
+  <!-- ================================================================== -->
+  <rect x="30" y="1870" width="1340" height="310" rx="8" fill="#fff" stroke="#555" stroke-width="1.5" filter="url(#shadow-lg)"/>
+  <rect x="30" y="1870" width="1340" height="32" rx="8" fill="#555"/>
+  <rect x="30" y="1894" width="1340" height="8" fill="#555"/>
+  <text x="50" y="1891" class="section-title">Session Lifecycle &amp; Phase Gate Flow</text>
+
+  <!-- Flow nodes -->
+  <rect x="60" y="1920" width="130" height="40" rx="20" fill="#2980b9" filter="url(#shadow)"/>
+  <text x="125" y="1944" text-anchor="middle" class="label-white-bold">Session Start</text>
+
+  <rect x="220" y="1920" width="130" height="40" rx="6" fill="#ecf0f1" stroke="#bdc3c7" filter="url(#shadow)"/>
+  <text x="285" y="1937" text-anchor="middle" class="label-bold">Startup</text>
+  <text x="285" y="1951" text-anchor="middle" class="label-xs">Summary S1.7</text>
+
+  <rect x="380" y="1920" width="120" height="40" rx="6" fill="#ecf0f1" stroke="#1abc9c" filter="url(#shadow)"/>
+  <text x="440" y="1937" text-anchor="middle" class="label-bold">Phase Plan</text>
+  <text x="440" y="1951" text-anchor="middle" class="label-xs">/miki-phase</text>
+
+  <rect x="530" y="1920" width="120" height="40" rx="6" fill="#ecf0f1" stroke="#d4ac0d" filter="url(#shadow)"/>
+  <text x="590" y="1937" text-anchor="middle" class="label-bold">Task Exec</text>
+  <text x="590" y="1951" text-anchor="middle" class="label-xs">/miki-task</text>
+
+  <!-- Loop arrow -->
+  <path d="M 650 1940 Q 680 1940, 680 1975 Q 680 1995, 590 1995 Q 540 1995, 530 1940" class="arrow" style="stroke:#d4ac0d"/>
+  <text x="700" y="1975" class="label-xs" style="fill:#d4ac0d">auto-advance</text>
+
+  <rect x="740" y="1920" width="130" height="40" rx="6" fill="#ecf0f1" stroke="#e74c3c" filter="url(#shadow)"/>
+  <text x="805" y="1937" text-anchor="middle" class="label-bold">Gate Check</text>
+  <text x="805" y="1951" text-anchor="middle" class="label-xs">10 checks</text>
+
+  <rect x="900" y="1920" width="120" height="40" rx="6" fill="#ecf0f1" stroke="#27ae60" filter="url(#shadow)"/>
+  <text x="960" y="1937" text-anchor="middle" class="label-bold">API Lock</text>
+  <text x="960" y="1951" text-anchor="middle" class="label-xs">L{NN}.md</text>
+
+  <rect x="1050" y="1920" width="120" height="40" rx="6" fill="#fef9e7" stroke="#f1c40f" filter="url(#shadow)"/>
+  <text x="1110" y="1937" text-anchor="middle" class="label-bold">Memory</text>
+  <text x="1110" y="1951" text-anchor="middle" class="label-xs">Snapshot</text>
+
+  <rect x="1200" y="1920" width="130" height="40" rx="20" fill="#e74c3c" filter="url(#shadow)"/>
+  <text x="1265" y="1944" text-anchor="middle" class="label-white-bold">Session End</text>
+
+  <!-- Flow arrows -->
+  <path d="M 190 1940 L 218 1940" class="arrow-thick"/>
+  <path d="M 350 1940 L 378 1940" class="arrow-thick"/>
+  <path d="M 500 1940 L 528 1940" class="arrow-thick"/>
+  <path d="M 650 1940 L 738 1940" class="arrow-thick"/>
+  <path d="M 870 1940 L 898 1940" class="arrow-thick"/>
+  <path d="M 1020 1940 L 1048 1940" class="arrow-thick"/>
+  <path d="M 1170 1940 L 1198 1940" class="arrow-thick"/>
+
+  <!-- Phase types row -->
+  <text x="60" y="2040" class="label-bold">Phase Type Dispatch:</text>
+
+  <rect x="230" y="2020" width="180" height="55" rx="6" fill="#ebf5fb" stroke="#2980b9" filter="url(#shadow)"/>
+  <text x="240" y="2038" class="label-bold" style="fill:#2980b9">Standard Phase</text>
+  <text x="240" y="2054" class="label-sm">task-template.md</text>
+  <text x="240" y="2066" class="label-sm">Full Anchor + Contract</text>
+
+  <rect x="430" y="2020" width="180" height="55" rx="6" fill="#fdf2e9" stroke="#e67e22" filter="url(#shadow)"/>
+  <text x="440" y="2038" class="label-bold" style="fill:#e67e22">Cooldown Phase</text>
+  <text x="440" y="2054" class="label-sm">cooldown-task-template.md</text>
+  <text x="440" y="2066" class="label-sm">No Contract, Audit Checklist</text>
+
+  <rect x="630" y="2020" width="180" height="55" rx="6" fill="#f4ecf7" stroke="#8e44ad" filter="url(#shadow)"/>
+  <text x="640" y="2038" class="label-bold" style="fill:#8e44ad">Tech Spike Phase</text>
+  <text x="640" y="2054" class="label-sm">spike-task-template.md</text>
+  <text x="640" y="2066" class="label-sm">Decision Gate, Go/NoGo</text>
+
+  <!-- Checkpoints row -->
+  <text x="60" y="2115" class="label-bold">CHECKPOINT Markers (mandatory output):</text>
+
+  <rect x="370" y="2095" width="160" height="35" rx="4" fill="#eee" stroke="#999"/>
+  <text x="380" y="2116" class="label-sm">Startup Summary</text>
+  <text x="380" y="2126" class="label-xs">miki-roadmap S1.7</text>
+
+  <rect x="545" y="2095" width="160" height="35" rx="4" fill="#eee" stroke="#999"/>
+  <text x="555" y="2116" class="label-sm">Quality Gate</text>
+  <text x="555" y="2126" class="label-xs">miki-phase S2</text>
+
+  <rect x="720" y="2095" width="160" height="35" rx="4" fill="#eee" stroke="#999"/>
+  <text x="730" y="2116" class="label-sm">Contract Verification</text>
+  <text x="730" y="2126" class="label-xs">miki-task S4</text>
+
+  <rect x="895" y="2095" width="160" height="35" rx="4" fill="#eee" stroke="#999"/>
+  <text x="905" y="2116" class="label-sm">Gate Check (10)</text>
+  <text x="905" y="2126" class="label-xs">miki-roadmap S4</text>
+
+  <rect x="1070" y="2095" width="160" height="35" rx="4" fill="#eee" stroke="#999"/>
+  <text x="1080" y="2116" class="label-sm">Session End Audit</text>
+  <text x="1080" y="2126" class="label-xs">miki-roadmap S6.4</text>
+
+  <!-- Legend -->
+  <text x="60" y="2165" class="label-bold">Legend:</text>
+  <rect x="120" y="2153" width="14" height="14" rx="2" fill="#2c3e50"/>
+  <text x="140" y="2165" class="label-sm">Auto-injected (every turn)</text>
+  <rect x="290" y="2153" width="14" height="14" rx="2" fill="#2980b9"/>
+  <text x="310" y="2165" class="label-sm">On-demand workflow</text>
+  <rect x="450" y="2153" width="14" height="14" rx="2" fill="#27ae60"/>
+  <text x="470" y="2165" class="label-sm">Spec / template store</text>
+  <rect x="610" y="2153" width="14" height="14" rx="2" fill="#e67e22"/>
+  <text x="630" y="2165" class="label-sm">MCP external tool</text>
+  <rect x="760" y="2153" width="14" height="14" rx="2" fill="#e74c3c"/>
+  <text x="780" y="2165" class="label-sm">Output artifact</text>
+  <rect x="900" y="2153" width="14" height="14" rx="2" fill="#f1c40f"/>
+  <text x="920" y="2165" class="label-sm">Persistent memory</text>
+  <line x1="1050" y1="2160" x2="1090" y2="2160" class="arrow-thick"/>
+  <text x="1095" y="2165" class="label-sm">Dispatch</text>
+  <line x1="1170" y1="2160" x2="1210" y2="2160" class="arrow-dashed"/>
+  <text x="1215" y="2165" class="label-sm">Return</text>
+</svg>

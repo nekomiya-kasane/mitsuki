@@ -8,6 +8,9 @@
 
 #include "miki/core/ErrorCode.h"
 
+#include <string>
+#include <atomic>
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 

@@ -1,0 +1,912 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4200 3700" width="4200" height="3700" font-family="Segoe UI,Helvetica,Arial,sans-serif">
+<defs>
+  <linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a1a2e"/><stop offset="100%" stop-color="#16213e"/></linearGradient>
+  <linearGradient id="gR" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0f3460"/><stop offset="100%" stop-color="#1a1a5e"/></linearGradient>
+  <linearGradient id="gS" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2d4059"/><stop offset="100%" stop-color="#1b3a4b"/></linearGradient>
+  <linearGradient id="gC" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#6b1535"/><stop offset="100%" stop-color="#4a0e25"/></linearGradient>
+  <linearGradient id="gV" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8b1a1a"/><stop offset="100%" stop-color="#5c1010"/></linearGradient>
+  <linearGradient id="gD" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4a3000"/><stop offset="100%" stop-color="#332200"/></linearGradient>
+  <linearGradient id="gT" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a3a1a"/><stop offset="100%" stop-color="#0f280f"/></linearGradient>
+  <linearGradient id="gE" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a2a4a"/><stop offset="100%" stop-color="#0f1a3a"/></linearGradient>
+  <linearGradient id="gK" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0a2a4a"/><stop offset="100%" stop-color="#051a35"/></linearGradient>
+  <linearGradient id="gP" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2a2a2a"/><stop offset="100%" stop-color="#1a1a1a"/></linearGradient>
+  <filter id="sh"><feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.3"/></filter>
+  <filter id="gsh"><feDropShadow dx="3" dy="3" stdDeviation="5" flood-opacity="0.4"/></filter>
+  <marker id="ar" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#888"/></marker>
+</defs>
+<rect width="4200" height="3700" fill="#0d1117" rx="16"/>
+<text x="2100" y="55" text-anchor="middle" fill="#e6edf3" font-size="38" font-weight="bold">miki Renderer — Module Architecture</text>
+<text x="2100" y="85" text-anchor="middle" fill="#8b949e" font-size="18">11 Layers | ~21 Namespaces | 27 Phases | 5 Backends | 133 Weeks | ~10000 Tests</text>
+
+<!-- LEGEND -->
+<g transform="translate(50,100)">
+<rect width="4100" height="40" rx="6" fill="#161b22" stroke="#30363d"/>
+<rect x="10" y="10" width="18" height="18" rx="3" fill="#1a1a2e"/><text x="34" y="24" fill="#aaa" font-size="11">L1 Foundation</text>
+<rect x="150" y="10" width="18" height="18" rx="3" fill="#0f3460"/><text x="174" y="24" fill="#aaa" font-size="11">L2 RHI</text>
+<rect x="260" y="10" width="18" height="18" rx="3" fill="#2d4059"/><text x="284" y="24" fill="#aaa" font-size="11">L3 Resource + L4 Scene</text>
+<rect x="440" y="10" width="18" height="18" rx="3" fill="#6b1535"/><text x="464" y="24" fill="#aaa" font-size="11">L5 Core Render</text>
+<rect x="590" y="10" width="18" height="18" rx="3" fill="#8b1a1a"/><text x="614" y="24" fill="#aaa" font-size="11">L6 GPU-Driven</text>
+<rect x="740" y="10" width="18" height="18" rx="3" fill="#4a3000"/><text x="764" y="24" fill="#aaa" font-size="11">L8a CAD</text>
+<rect x="850" y="10" width="18" height="18" rx="3" fill="#1a3a1a"/><text x="874" y="24" fill="#aaa" font-size="11">L9 Tools</text>
+<rect x="960" y="10" width="18" height="18" rx="3" fill="#1a2a4a"/><text x="984" y="24" fill="#aaa" font-size="11">L8b CAE/Import</text>
+<rect x="1110" y="10" width="18" height="18" rx="3" fill="#0a2a4a"/><text x="1134" y="24" fill="#aaa" font-size="11">L11 SDK/Cloud</text>
+<rect x="1280" y="10" width="18" height="18" rx="3" fill="#2a2a2a"/><text x="1304" y="24" fill="#aaa" font-size="11">1.1 Post-Ship</text>
+<text x="1450" y="24" fill="#f08a5d" font-size="11" font-weight="bold">P#</text><text x="1470" y="24" fill="#aaa" font-size="11">=Phase</text>
+<rect x="1550" y="8" width="50" height="22" rx="4" fill="none" stroke="#ffd700" stroke-width="1.5" stroke-dasharray="4,2"/>
+<text x="1610" y="24" fill="#aaa" font-size="11">=Milestone</text>
+<text x="1730" y="24" fill="#58a6ff" font-size="11">Dashed border = external dep</text>
+</g>
+
+<!-- ================= LAYER 1: FOUNDATION ================= -->
+<g id="L1" transform="translate(50,3220)">
+<rect width="4100" height="400" rx="10" fill="url(#gF)" stroke="#3d4f6f" stroke-width="2" filter="url(#gsh)" opacity="0.95"/>
+<text x="20" y="30" fill="#e6edf3" font-size="20" font-weight="bold">L1 Foundation</text>
+<text x="200" y="30" fill="#8b949e" font-size="13">miki:: + neko:: externals | P1a, P5, P11, P13</text>
+
+<g transform="translate(20,45)"><rect width="240" height="90" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="120" y="20" text-anchor="middle" fill="#f0883e" font-size="13" font-weight="bold">ErrorCode + Result&lt;T&gt;</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">std::expected&lt;T,ErrorCode&gt;</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Module error ranges, no exceptions</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">Zero-overhead propagation</text>
+<text x="210" y="80" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(270,45)"><rect width="300" height="90" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="150" y="20" text-anchor="middle" fill="#f0883e" font-size="13" font-weight="bold">Math (miki::math)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">float3/4, float4x4, AABB, Ray, Plane</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">FrustumPlanes, BoundingSphere</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">alignas(16), static_assert, GLM-based</text>
+<text x="270" y="80" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(580,45)"><rect width="260" height="90" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="130" y="20" text-anchor="middle" fill="#f0883e" font-size="13" font-weight="bold">GFX Types (miki::gfx)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Format (100+ pixel fmts), FormatInfo</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">VertexLayout, MaterialTypes, GPU structs</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">alignas(16) + explicit padding</text>
+<text x="230" y="80" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(850,45)"><rect width="320" height="90" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="160" y="20" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">Coca Runtime (miki::coca)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">3+N thread pool (UI+Render+IO+Workers)</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">stdexec sender/receiver, work-stealing</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">LockFreeQueue MPMC, Pimpl-wrapped</text>
+<text x="290" y="80" fill="#555" font-size="9">P13</text></g>
+
+<g transform="translate(1180,45)"><rect width="320" height="90" rx="6" fill="#1b2838" stroke="#58a6ff" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="160" y="20" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">neko::platform (external)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Event = variant&lt;11 types&gt;</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Mouse, Key, Scroll, TextInput, Focus, DPI</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">Window + EventLoop (Win32/X11/Wayland)</text>
+<text x="290" y="80" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(1510,45)"><rect width="300" height="90" rx="6" fill="#1b2838" stroke="#58a6ff" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="150" y="20" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">neko::ipc (external)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">SharedMemory, ProcessHandle, EventPort</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">PipeStream, MappedFile, MessageChannel</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">Win32 + POSIX | OOP Compute (P13)</text>
+<text x="270" y="80" fill="#555" font-size="9">P5</text></g>
+
+<g transform="translate(1820,45)"><rect width="370" height="90" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="185" y="20" text-anchor="middle" fill="#ce93d8" font-size="13" font-weight="bold">Debug &amp; Profiling (miki::debug)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">StructuredLogger, CpuProfiler, GpuProfiler v2</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">MemoryProfiler (VMA), GpuBreadcrumbs (TDR)</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">ShaderPrintf, GpuCapture, CrashDump, EventRecorder</text>
+<text x="340" y="80" fill="#555" font-size="9">P11</text></g>
+
+<g transform="translate(2200,45)"><rect width="300" height="90" rx="6" fill="#161b22" stroke="#30363d" filter="url(#sh)"/>
+<text x="150" y="20" text-anchor="middle" fill="#8b949e" font-size="13" font-weight="bold">C++23 Conventions</text>
+<text x="8" y="38" fill="#7c8894" font-size="10">std::expected, span, flat_map, generator</text>
+<text x="8" y="52" fill="#7c8894" font-size="9">mdspan, [[assume]], deducing this</text>
+<text x="8" y="66" fill="#7c8894" font-size="9">LLVM 20 + libc++ sandbox</text></g>
+
+<!-- Row 2: Build + CI + 3rdparty + Cooldowns -->
+<g transform="translate(20,150)"><rect width="520" height="90" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="260" y="20" text-anchor="middle" fill="#f0883e" font-size="13" font-weight="bold">Build System</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">CMake 4.0 | No vcpkg | git clone --recursive + cmake --preset</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Presets: Debug/Release/ASAN/TSAN/UBSAN/Emscripten/D3D12</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">MIKI_DEMO_BACKEND=glfw|neko | MIKI_KERNEL_OCCT | MIKI_BUILD_D3D12</text>
+<text x="490" y="80" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(550,150)"><rect width="700" height="90" rx="6" fill="#161b22" stroke="#30363d" filter="url(#sh)"/>
+<text x="350" y="20" text-anchor="middle" fill="#8b949e" font-size="13" font-weight="bold">Third-Party (all source-compiled, STATIC libs)</text>
+<text x="8" y="38" fill="#7c8894" font-size="10">glm | gtest | vma | slang | imgui(dock) | freetype | harfbuzz | msdfgen | lunasvg | nanosvg</text>
+<text x="8" y="52" fill="#7c8894" font-size="9">cgltf | tinyxml2 | stb | glad | dawn | directx-headers | d3d12ma | occt | pybind11 | libdxfrw</text>
+<text x="8" y="66" fill="#7c8894" font-size="9">neko-platform | neko-ipc | Each third_party/name/CMakeLists.txt -> miki::third_party::name</text></g>
+
+<g transform="translate(1260,150)"><rect width="460" height="90" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="230" y="20" text-anchor="middle" fill="#f0883e" font-size="13" font-weight="bold">CI Matrix (GitHub Actions)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Primary: Win/Linux Clang20+libc++ x (Vk+D3D12+GL+WebGPU)</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">ASAN/TSAN/UBSAN | Benchmark gate >10% | Golden image &lt;1%</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">Secondary: MSVC 17.12 | Tertiary: GCC15+ | SwiftShader/llvmpipe</text>
+<text x="430" y="80" fill="#555" font-size="9">P1a+</text></g>
+
+<g transform="translate(1730,150)"><rect width="360" height="90" rx="6" fill="#161b22" stroke="#ffd700" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="180" y="20" text-anchor="middle" fill="#ffd700" font-size="13" font-weight="bold">Cooldown Periods (3x3+3w)</text>
+<text x="8" y="38" fill="#ffd700" font-size="10">#1 W33-35: GPU pipeline freeze</text>
+<text x="8" y="52" fill="#ffd700" font-size="10">#2 W55-57: CAD core freeze</text>
+<text x="8" y="66" fill="#ffd700" font-size="10">#3 W83-85: Pre-release, RC1 tag</text></g>
+
+<!-- Demo framework (outside core) -->
+<g transform="translate(2100,150)"><rect width="400" height="90" rx="6" fill="#161b22" stroke="#30363d" stroke-dasharray="4,2" filter="url(#sh)"/>
+<text x="200" y="20" text-anchor="middle" fill="#8b949e" font-size="13" font-weight="bold">Demo Framework (NOT in libmiki)</text>
+<text x="8" y="38" fill="#7c8894" font-size="10">AppLoop(abstract) | GlfwBootstrap | NekoBootstrap</text>
+<text x="8" y="52" fill="#7c8894" font-size="9">OrbitCamera (spherical + 6-DOF SpaceMouse)</text>
+<text x="8" y="66" fill="#7c8894" font-size="9">ProceduralGeometry (cube/sphere/grid) | demos/framework/</text></g>
+
+<!-- Row 3: Scale Validation -->
+<g transform="translate(20,255)"><rect width="820" height="90" rx="6" fill="#21262d" stroke="#ffd700" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="410" y="20" text-anchor="middle" fill="#ffd700" font-size="13" font-weight="bold">Scale Validation &amp; Optimization (P14) — Milestone</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Benchmark: 1M-10B tri | 4K: 100M@60fps, 1B@30fps, 2B@30fps(streaming) | VRAM: &lt;8GB/1B, &lt;12GB/2B</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Shader PGO: top-5 hottest, VGPR/LDS optimize | DS register audit (WebGPU) | Stress: 10K frames, TSAN, VMA leak, TDR</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">4-layer VRAM: out-of-core streaming + meshlet compression + transient aliasing + on-demand page alloc</text>
+<text x="790" y="80" fill="#555" font-size="9">P14</text></g>
+
+<g transform="translate(850,255)"><rect width="550" height="90" rx="6" fill="#21262d" stroke="#9575cd" filter="url(#sh)"/>
+<text x="275" y="20" text-anchor="middle" fill="#9575cd" font-size="13" font-weight="bold">Compat &amp; OpenGL Hardening (P11b/11c)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Golden image audit: Tier1 vs Tier2 &lt;5% | Tier2 vs Tier4 &lt;2%</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">SwiftShader CI (software Vulkan) | Mesa llvmpipe CI (software GL)</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">VirtualGL remote test | VRAM budget stress 4GB/6GB | 10M tri@30fps GTX1060</text>
+<text x="520" y="80" fill="#555" font-size="9">P11b/c</text></g>
+</g>
+
+<!-- ================= LAYER 2: RHI ================= -->
+<g id="L2" transform="translate(50,2740)">
+<rect width="4100" height="450" rx="10" fill="url(#gR)" stroke="#3d5f9f" stroke-width="2" filter="url(#gsh)" opacity="0.95"/>
+<text x="20" y="30" fill="#e6edf3" font-size="20" font-weight="bold">L2 RHI (Render Hardware Interface)</text>
+<text x="420" y="30" fill="#8b949e" font-size="13">miki::rhi | P1a-1b | IDevice, ICommandBuffer, 5 Backends + Mock</text>
+
+<!-- Core RHI -->
+<g transform="translate(20,45)"><rect width="320" height="130" rx="6" fill="#21262d" stroke="#58a6ff" stroke-width="1.5" filter="url(#sh)"/>
+<text x="160" y="20" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">IDevice (Injection-First)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">CreateFromExisting(ExternalContext)</text>
+<text x="8" y="52" fill="#adb5bd" font-size="10">CreateOwned(DeviceConfig) headless</text>
+<text x="8" y="66" fill="#adb5bd" font-size="10">ImportSwapchainImage(native)->TextureHandle</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">Create/Destroy Buffer/Texture/Sampler/PSO</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">Own VMA + desc pool + PSO cache per device</text>
+<text x="8" y="108" fill="#8b949e" font-size="9">ExternalContext = variant{Vk,D3D12,GL,WebGPU}</text>
+<text x="290" y="120" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(350,45)"><rect width="280" height="130" rx="6" fill="#21262d" stroke="#58a6ff" stroke-width="1.5" filter="url(#sh)"/>
+<text x="140" y="20" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">ICommandBuffer</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">BeginRendering / EndRendering</text>
+<text x="8" y="52" fill="#adb5bd" font-size="10">BindPipeline, Draw, DrawIndexed</text>
+<text x="8" y="66" fill="#adb5bd" font-size="10">Dispatch, PipelineBarrier, CopyBuffer</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">SetRootConstants (push const)</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">SetViewport, SetScissor, dynamic rendering</text>
+<text x="250" y="120" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(640,45)"><rect width="260" height="130" rx="6" fill="#21262d" stroke="#ffd700" stroke-width="1.5" filter="url(#sh)"/>
+<text x="130" y="20" text-anchor="middle" fill="#ffd700" font-size="13" font-weight="bold">IPipelineFactory</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">MainPipelineFactory (Tier1)</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">  Task/Mesh + VisBuffer + GPU Submit</text>
+<text x="8" y="66" fill="#adb5bd" font-size="10">CompatPipelineFactory (Tier2/3/4)</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">  Vertex + MDI + CPU Cull</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">No if(compat) in shared code</text>
+<text x="230" y="120" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(910,45)"><rect width="250" height="130" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="125" y="20" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">RhiTypes + Capability</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Handle&lt;Tag&gt; [gen16|idx32|type16]</text>
+<text x="8" y="52" fill="#adb5bd" font-size="10">GpuCapabilityProfile (immutable)</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">Tier1 | Tier2 | Tier3 | Tier4</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">MeshShader, RT, VRS, 64-bit atomics</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">DescBuffer, CoopMatrix, Format</text>
+<text x="220" y="120" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(1170,45)"><rect width="370" height="130" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="185" y="20" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">RHI Utilities</text>
+<text x="8" y="40" fill="#adb5bd" font-size="10" font-weight="bold">OffscreenTarget</text><text x="160" y="40" fill="#8b949e" font-size="9">Render w/o swapchain, ReadbackBuffer</text>
+<text x="8" y="56" fill="#adb5bd" font-size="10" font-weight="bold">FrameManager</text><text x="160" y="56" fill="#8b949e" font-size="9">Double-buffered, fence-per-frame</text>
+<text x="8" y="72" fill="#adb5bd" font-size="10" font-weight="bold">StagingUploader</text><text x="160" y="72" fill="#8b949e" font-size="9">Ring buffer CPU->GPU</text>
+<text x="8" y="88" fill="#adb5bd" font-size="10" font-weight="bold">ImGuiBackend</text><text x="160" y="88" fill="#8b949e" font-size="9">All 5 backends</text>
+<text x="8" y="104" fill="#adb5bd" font-size="10" font-weight="bold">ShaderWatcher</text><text x="160" y="104" fill="#8b949e" font-size="9">Hot-reload .slang (P1b)</text>
+<text x="340" y="120" fill="#555" font-size="9">P1a-1b</text></g>
+
+<!-- 5 Backends row -->
+<g transform="translate(20,190)"><rect width="330" height="140" rx="6" fill="#1c2333" stroke="#e94560" stroke-width="1.5" filter="url(#sh)"/>
+<text x="165" y="20" text-anchor="middle" fill="#e94560" font-size="13" font-weight="bold">VulkanDevice (Tier1)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Vulkan 1.4+ | SPIR-V | VMA</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Task/Mesh | sync2 | dynamicRendering</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">Timeline semaphore | RT ray query</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">256B push const | Descriptor buffer</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">VSM | GTAO/RTAO | TAA+FSR | LL OIT</text>
+<text x="8" y="108" fill="#8b949e" font-size="9">ClusterDAG | GPU HLR | RT Picking</text>
+<text x="300" y="130" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(360,190)"><rect width="310" height="140" rx="6" fill="#1c2333" stroke="#4fc3f7" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="20" text-anchor="middle" fill="#4fc3f7" font-size="13" font-weight="bold">D3D12Device (Tier1)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">D3D12 FL12.2 | DXIL | D3D12MA</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Mesh Shader | DXR 1.1</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">Root constants 128B | Bindless heap</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">Timeline fence | Enhanced barriers</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">Windows-only MIKI_BUILD_D3D12=ON</text>
+<text x="8" y="108" fill="#8b949e" font-size="9">Same MainPipelineFactory as Vulkan</text>
+<text x="280" y="130" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(680,190)"><rect width="310" height="140" rx="6" fill="#1c2333" stroke="#ffb74d" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="20" text-anchor="middle" fill="#ffb74d" font-size="13" font-weight="bold">Vulkan Compat (Tier2)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Vulkan 1.1+ | Vertex + MDI</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">CPU frustum cull | GBuffer direct</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">CSM 4-cascade | SSAO | FXAA/MSAA 4x</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">Weighted OIT | CPU BVH pick</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">CPU+VS HLR | Flat LOD</text>
+<text x="8" y="108" fill="#8b949e" font-size="9">GTX10xx, RX500, Intel UHD</text>
+<text x="280" y="130" fill="#555" font-size="9">P1b</text></g>
+
+<g transform="translate(1000,190)"><rect width="290" height="140" rx="6" fill="#1c2333" stroke="#81c784" stroke-width="1.5" filter="url(#sh)"/>
+<text x="145" y="20" text-anchor="middle" fill="#81c784" font-size="13" font-weight="bold">WebGpuDevice (Tier3)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Dawn/wgpu | WGSL (Slang)</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Push const->256B UBO (set0 slot0)</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">CSM 2-cascade | SSAO 8-sample</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">FXAA only | CPU BVH WASM pick</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">Emscripten+WASM | Browser-native</text>
+<text x="8" y="108" fill="#8b949e" font-size="9">No RT/VRS/64-bit atomics</text>
+<text x="260" y="130" fill="#555" font-size="9">P1b</text></g>
+
+<g transform="translate(1300,190)"><rect width="290" height="140" rx="6" fill="#1c2333" stroke="#ce93d8" stroke-width="1.5" filter="url(#sh)"/>
+<text x="145" y="20" text-anchor="middle" fill="#ce93d8" font-size="13" font-weight="bold">OpenGlDevice (Tier4)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">GL 4.3+ | GLSL 4.30 (Slang)</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Vertex+MDI | Push->128B UBO</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">FBO render targets | glFenceSync</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">GL_KHR_debug | Optional bindless tex</text>
+<text x="8" y="94" fill="#8b949e" font-size="9">Mesa llvmpipe CI | VirtualGL remote</text>
+<text x="8" y="108" fill="#8b949e" font-size="9">Hardened in P11c</text>
+<text x="260" y="130" fill="#555" font-size="9">P1b</text></g>
+
+<g transform="translate(1600,190)"><rect width="200" height="100" rx="6" fill="#1c2333" stroke="#90a4ae" filter="url(#sh)"/>
+<text x="100" y="20" text-anchor="middle" fill="#90a4ae" font-size="13" font-weight="bold">MockDevice</text>
+<text x="8" y="38" fill="#8b949e" font-size="9">CPU-side, no-GPU CI</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">Resource lifecycle track</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">Call sequence validate</text>
+<text x="8" y="80" fill="#8b949e" font-size="9">Leak detect + error inject</text>
+<text x="170" y="90" fill="#555" font-size="9">P1a</text></g>
+
+<!-- Tier comparison table -->
+<g transform="translate(1810,190)"><rect width="730" height="240" rx="6" fill="#161b22" stroke="#30363d" filter="url(#sh)"/>
+<text x="365" y="20" text-anchor="middle" fill="#8b949e" font-size="13" font-weight="bold">Backend Tier Comparison</text>
+<text x="10" y="42" fill="#adb5bd" font-size="10" font-weight="bold">Feature</text>
+<text x="180" y="42" fill="#e94560" font-size="10" font-weight="bold">Vk Tier1</text>
+<text x="290" y="42" fill="#4fc3f7" font-size="10" font-weight="bold">D3D12</text>
+<text x="390" y="42" fill="#ffb74d" font-size="10" font-weight="bold">Compat T2</text>
+<text x="510" y="42" fill="#81c784" font-size="10" font-weight="bold">WebGPU T3</text>
+<text x="630" y="42" fill="#ce93d8" font-size="10" font-weight="bold">GL T4</text>
+<line x1="10" y1="48" x2="720" y2="48" stroke="#30363d"/>
+<text x="10" y="62" fill="#7c8894" font-size="9">Geometry</text><text x="180" y="62" fill="#bbb" font-size="9">Task/Mesh</text><text x="290" y="62" fill="#bbb" font-size="9">Mesh</text><text x="390" y="62" fill="#bbb" font-size="9">Vert+MDI</text><text x="510" y="62" fill="#bbb" font-size="9">Vert+Draw</text><text x="630" y="62" fill="#bbb" font-size="9">Vert+MDI</text>
+<text x="10" y="78" fill="#7c8894" font-size="9">Shadows</text><text x="180" y="78" fill="#bbb" font-size="9">VSM</text><text x="290" y="78" fill="#bbb" font-size="9">VSM</text><text x="390" y="78" fill="#bbb" font-size="9">CSM 4</text><text x="510" y="78" fill="#bbb" font-size="9">CSM 2</text><text x="630" y="78" fill="#bbb" font-size="9">CSM 4</text>
+<text x="10" y="94" fill="#7c8894" font-size="9">AO</text><text x="180" y="94" fill="#bbb" font-size="9">GTAO/RTAO</text><text x="290" y="94" fill="#bbb" font-size="9">GTAO/RTAO</text><text x="390" y="94" fill="#bbb" font-size="9">SSAO</text><text x="510" y="94" fill="#bbb" font-size="9">SSAO 8s</text><text x="630" y="94" fill="#bbb" font-size="9">SSAO</text>
+<text x="10" y="110" fill="#7c8894" font-size="9">AA</text><text x="180" y="110" fill="#bbb" font-size="9">TAA+FSR</text><text x="290" y="110" fill="#bbb" font-size="9">TAA+FSR</text><text x="390" y="110" fill="#bbb" font-size="9">FXAA/MSAA4</text><text x="510" y="110" fill="#bbb" font-size="9">FXAA</text><text x="630" y="110" fill="#bbb" font-size="9">FXAA/MSAA4</text>
+<text x="10" y="126" fill="#7c8894" font-size="9">OIT</text><text x="180" y="126" fill="#bbb" font-size="9">Linked-List</text><text x="290" y="126" fill="#bbb" font-size="9">LL</text><text x="390" y="126" fill="#bbb" font-size="9">Weighted</text><text x="510" y="126" fill="#bbb" font-size="9">Weighted</text><text x="630" y="126" fill="#bbb" font-size="9">Weighted</text>
+<text x="10" y="142" fill="#7c8894" font-size="9">Picking</text><text x="180" y="142" fill="#bbb" font-size="9">RT Pick</text><text x="290" y="142" fill="#bbb" font-size="9">DXR</text><text x="390" y="142" fill="#bbb" font-size="9">CPU BVH</text><text x="510" y="142" fill="#bbb" font-size="9">CPU WASM</text><text x="630" y="142" fill="#bbb" font-size="9">CPU BVH</text>
+<text x="10" y="158" fill="#7c8894" font-size="9">HLR</text><text x="180" y="158" fill="#bbb" font-size="9">GPU HLR</text><text x="290" y="158" fill="#bbb" font-size="9">GPU HLR</text><text x="390" y="158" fill="#bbb" font-size="9">CPU+VS</text><text x="510" y="158" fill="#bbb" font-size="9">CPU+VS</text><text x="630" y="158" fill="#bbb" font-size="9">CPU+VS</text>
+<text x="10" y="174" fill="#7c8894" font-size="9">LOD</text><text x="180" y="174" fill="#bbb" font-size="9">ClusterDAG</text><text x="290" y="174" fill="#bbb" font-size="9">ClusterDAG</text><text x="390" y="174" fill="#bbb" font-size="9">Flat LOD</text><text x="510" y="174" fill="#bbb" font-size="9">Flat LOD</text><text x="630" y="174" fill="#bbb" font-size="9">Flat LOD</text>
+<text x="10" y="190" fill="#7c8894" font-size="9">Shader</text><text x="180" y="190" fill="#bbb" font-size="9">SPIR-V</text><text x="290" y="190" fill="#bbb" font-size="9">DXIL</text><text x="390" y="190" fill="#bbb" font-size="9">SPIR-V</text><text x="510" y="190" fill="#bbb" font-size="9">WGSL</text><text x="630" y="190" fill="#bbb" font-size="9">GLSL430</text>
+<text x="10" y="206" fill="#7c8894" font-size="9">Target</text><text x="180" y="206" fill="#bbb" font-size="9">Vk1.4+</text><text x="290" y="206" fill="#bbb" font-size="9">FL12.2</text><text x="390" y="206" fill="#bbb" font-size="9">Vk1.1+</text><text x="510" y="206" fill="#bbb" font-size="9">Dawn/wgpu</text><text x="630" y="206" fill="#bbb" font-size="9">GL4.3+</text>
+<text x="10" y="224" fill="#7c8894" font-size="9">10M tri</text><text x="180" y="224" fill="#bbb" font-size="9">60fps</text><text x="290" y="224" fill="#bbb" font-size="9">60fps</text><text x="390" y="224" fill="#bbb" font-size="9">30fps</text><text x="510" y="224" fill="#bbb" font-size="9">25fps</text><text x="630" y="224" fill="#bbb" font-size="9">25fps</text>
+</g>
+</g>
+
+<!-- ================= L3-L4: SHADER + RESOURCE + SCENE ================= -->
+<g id="L3L4" transform="translate(50,2170)">
+<rect width="4100" height="540" rx="10" fill="url(#gS)" stroke="#3d5070" stroke-width="2" filter="url(#gsh)" opacity="0.95"/>
+<text x="20" y="30" fill="#e6edf3" font-size="20" font-weight="bold">Shader / L3 Resource / L4 Scene</text>
+<text x="420" y="30" fill="#8b949e" font-size="13">miki::core(shader)+resource+scene+kernel | P1a-5</text>
+
+<g transform="translate(20,45)"><rect width="340" height="110" rx="6" fill="#2a1f3d" stroke="#bb86fc" stroke-width="1.5" filter="url(#sh)"/>
+<text x="170" y="18" text-anchor="middle" fill="#bb86fc" font-size="13" font-weight="bold">SlangCompiler</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Quad: SPIR-V+DXIL+GLSL430+WGSL</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Reflection, disk cache, Pimpl ABI</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">PermutationKey(64b)+PermutationCache</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">LRU, thread-safe, background compile</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">SlangFeatureProbe: ~30 regression tests</text>
+<text x="310" y="100" fill="#555" font-size="9">P1a</text></g>
+
+<g transform="translate(370,45)"><rect width="290" height="110" rx="6" fill="#2a1f3d" stroke="#bb86fc" stroke-width="1.5" filter="url(#sh)"/>
+<text x="145" y="18" text-anchor="middle" fill="#bb86fc" font-size="13" font-weight="bold">Material + Forward (P2)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">StandardPBR: Cook-Torrance+GGX</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Anisotropic, clearcoat, sheen, emissive</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Forward shading + depth pre-pass</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">BackgroundMode, WireframeOverlay</text>
+<text x="260" y="100" fill="#555" font-size="9">P2</text></g>
+
+<g transform="translate(670,45)"><rect width="280" height="110" rx="6" fill="#1b3332" stroke="#26a69a" stroke-width="1.5" filter="url(#sh)"/>
+<text x="140" y="18" text-anchor="middle" fill="#26a69a" font-size="13" font-weight="bold">TextRenderer (miki::text)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">FreeType+HarfBuzz->MSDF atlas</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">GPU instanced quad, SDF AA</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">GD&amp;T symbol atlas, CJK support</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">RichTextSpan, RichTextInput</text>
+<text x="250" y="100" fill="#555" font-size="9">P2</text></g>
+
+<g transform="translate(960,45)"><rect width="310" height="110" rx="6" fill="#21262d" stroke="#4db6ac" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="18" text-anchor="middle" fill="#4db6ac" font-size="13" font-weight="bold">Bindless+BDA (miki::resource)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">BindlessTable (global desc set)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">BindlessIndex(4B), BDAPointer(16B)+FNV1a</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Tier2/3/4: UBO array fallback</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">DescBuffer(Vk)/Heap(D3D12)</text>
+<text x="280" y="100" fill="#555" font-size="9">P4</text></g>
+
+<g transform="translate(1280,45)"><rect width="310" height="110" rx="6" fill="#21262d" stroke="#4db6ac" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="18" text-anchor="middle" fill="#4db6ac" font-size="13" font-weight="bold">Streaming &amp; Memory</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">SlotMap, StagingRing, ChunkLoader</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">MemBudget, ResidencyFeedback</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">LRU eviction, transient aliasing</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">4-layer VRAM for 2B+ tri</text>
+<text x="280" y="100" fill="#555" font-size="9">P4</text></g>
+
+<g transform="translate(1600,45)"><rect width="250" height="60" rx="6" fill="#21262d" stroke="#ffa726" stroke-dasharray="4,2" filter="url(#sh)"/>
+<text x="125" y="18" text-anchor="middle" fill="#ffa726" font-size="12" font-weight="bold">GPU Trim Tech Spike</text>
+<text x="8" y="38" fill="#8b949e" font-size="9">SDF trim VRAM/accuracy (Week 22)</text></g>
+
+<!-- Row 2: Scene/ECS -->
+<g transform="translate(20,170)"><rect width="290" height="110" rx="6" fill="#1b2e1b" stroke="#66bb6a" stroke-width="1.5" filter="url(#sh)"/>
+<text x="145" y="18" text-anchor="middle" fill="#66bb6a" font-size="13" font-weight="bold">ECS (miki::scene)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Archetype SOA, QueryEngine</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">SystemScheduler (parallel iteration)</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">EventSystem (pub/sub)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Components: Transform,Mesh,Material...</text>
+<text x="260" y="100" fill="#555" font-size="9">P5</text></g>
+
+<g transform="translate(320,170)"><rect width="250" height="110" rx="6" fill="#1b2e1b" stroke="#66bb6a" stroke-width="1.5" filter="url(#sh)"/>
+<text x="125" y="18" text-anchor="middle" fill="#66bb6a" font-size="13" font-weight="bold">SpatialIndex</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">BVH+Octree (GPU build)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">SpatialHash, frustum cull, ray</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Reused: Pick,PointCloud,CAE,ICP</text>
+<text x="220" y="100" fill="#555" font-size="9">P5</text></g>
+
+<g transform="translate(580,170)"><rect width="230" height="110" rx="6" fill="#1b2e1b" stroke="#66bb6a" stroke-width="1.5" filter="url(#sh)"/>
+<text x="115" y="18" text-anchor="middle" fill="#66bb6a" font-size="13" font-weight="bold">RTE</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">float64->float32 GPU</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Sub-mm @100km, ULP heatmap</text>
+<text x="200" y="100" fill="#555" font-size="9">P5</text></g>
+
+<g transform="translate(820,170)"><rect width="300" height="110" rx="6" fill="#1b2e1b" stroke="#ffd700" stroke-width="1.5" filter="url(#sh)"/>
+<text x="150" y="18" text-anchor="middle" fill="#ffd700" font-size="13" font-weight="bold">IKernel (miki::kernel)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Pluggable geometry kernel</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">OcctKernel(ref) | SimKernel(test)</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">IGpuGeometry (GPU tess/boolean)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">KernelFactory, kernel-agnostic</text>
+<text x="270" y="100" fill="#555" font-size="9">P5</text></g>
+
+<g transform="translate(1130,170)"><rect width="250" height="110" rx="6" fill="#1b2e1b" stroke="#66bb6a" stroke-width="1.5" filter="url(#sh)"/>
+<text x="125" y="18" text-anchor="middle" fill="#66bb6a" font-size="13" font-weight="bold">TopoGraph (miki::topo)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">BRep topology, MeshTopoMap</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">TopoHighlighter, edge adjacency</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Non-manifold detection</text>
+<text x="220" y="100" fill="#555" font-size="9">P5</text></g>
+
+<g transform="translate(1390,170)"><rect width="280" height="110" rx="6" fill="#1b2e1b" stroke="#66bb6a" stroke-width="1.5" filter="url(#sh)"/>
+<text x="140" y="18" text-anchor="middle" fill="#66bb6a" font-size="13" font-weight="bold">IUiBridge (miki::ui)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">OnInputEvent, OnContinuousInput</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">ImGuiBridge | NullBridge</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Skeleton P3a, full contract P8</text>
+<text x="250" y="100" fill="#555" font-size="9">P3a</text></g>
+
+<g transform="translate(1680,170)"><rect width="310" height="110" rx="6" fill="#1b2838" stroke="#58a6ff" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="18" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">Coca Async+OOP (P13)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">co_await IPC, MessageChannel&lt;T&gt;</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">ComputeDispatcher OOP workers</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">ProcessSupervisor, heartbeat</text>
+<text x="280" y="100" fill="#555" font-size="9">P13</text></g>
+
+<!-- Row 3: Import + Plugin -->
+<g transform="translate(20,295)"><rect width="1350" height="70" rx="6" fill="#161b22" stroke="#30363d" filter="url(#sh)"/>
+<text x="675" y="18" text-anchor="middle" fill="#8b949e" font-size="13" font-weight="bold">Import Pipeline (miki::import) — P7b+</text>
+<text x="8" y="38" fill="#7c8894" font-size="10">STEP(AP203/214/242) | glTF2.0 | JT(Siemens) | DXF(2D) | OBJ/STL/PLY | 3DXML(P20) | ITranslator plugin</text>
+<text x="8" y="54" fill="#7c8894" font-size="9">ParallelTessellator (Coca N-worker) | PMI from AP242 | Assembly tree mapping</text></g>
+
+<g transform="translate(1380,295)"><rect width="500" height="70" rx="6" fill="#21262d" stroke="#484f58" filter="url(#sh)"/>
+<text x="250" y="18" text-anchor="middle" fill="#ce93d8" font-size="13" font-weight="bold">L10 Plugin System (miki::plugin)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">IPlugin: Discover->Load->Init->Activate->Deactivate->Unload</text>
+<text x="8" y="54" fill="#8b949e" font-size="9">PluginRegistry, PluginManifest(JSON), ext points: ITranslator, IKernel, IUiBridge, RG passes</text></g>
+
+<!-- Row 4: Namespace map -->
+<g transform="translate(20,380)"><rect width="4060" height="130" rx="6" fill="#161b22" stroke="#30363d" filter="url(#sh)"/>
+<text x="2030" y="18" text-anchor="middle" fill="#8b949e" font-size="13" font-weight="bold">Target Namespace Map (~21 namespaces)</text>
+<text x="10" y="40" fill="#7c8894" font-size="9"><tspan fill="#bb86fc">miki::</tspan> Root | <tspan fill="#bb86fc">miki::math</tspan> Math/BVH | <tspan fill="#bb86fc">miki::gfx</tspan> Format/GPU structs | <tspan fill="#bb86fc">miki::coca</tspan> Coroutine | <tspan fill="#bb86fc">miki::rhi</tspan> IDevice+backends | <tspan fill="#bb86fc">miki::resource</tspan> Bindless/BDA/Streaming</text>
+<text x="10" y="58" fill="#7c8894" font-size="9"><tspan fill="#66bb6a">miki::scene</tspan> ECS/Spatial | <tspan fill="#66bb6a">miki::core</tspan> RenderGraph/Slang/Shadows | <tspan fill="#66bb6a">miki::vgeo</tspan> ClusterDAG/VisBuffer | <tspan fill="#66bb6a">miki::topo</tspan> TopoGraph | <tspan fill="#66bb6a">miki::kernel</tspan> IKernel/IGpuGeometry</text>
+<text x="10" y="76" fill="#7c8894" font-size="9"><tspan fill="#ffb74d">miki::cad</tspan> HLR/Section/OIT/Pick | <tspan fill="#ffb74d">miki::cadscene</tspan> CadScene/Layers | <tspan fill="#ffb74d">miki::text</tspan> TextRenderer | <tspan fill="#ffb74d">miki::import</tspan> STEP/JT/glTF | <tspan fill="#ffb74d">miki::cae</tspan> FEM/Scalar/Vector</text>
+<text x="10" y="94" fill="#7c8894" font-size="9"><tspan fill="#81c784">miki::tools</tspan> Gizmo/Snap/OpHistory | <tspan fill="#81c784">miki::pointcloud</tspan> Loader/ICP | <tspan fill="#81c784">miki::ui</tspan> IUiBridge | <tspan fill="#81c784">miki::debug</tspan> Profilers | <tspan fill="#81c784">miki::plugin</tspan> IPlugin | <tspan fill="#81c784">miki::sdk</tspan> MikiEngine</text>
+<text x="10" y="112" fill="#7c8894" font-size="9"><tspan fill="#58a6ff">neko::platform</tspan> Event/Window/EventLoop (external) | <tspan fill="#58a6ff">neko::ipc</tspan> SharedMem/Pipe/MappedFile (external)</text>
+</g>
+</g>
+
+<!-- ================= L5: CORE RENDERING ================= -->
+<g id="L5" transform="translate(50,1650)">
+<rect width="4100" height="490" rx="10" fill="url(#gC)" stroke="#8b2252" stroke-width="2" filter="url(#gsh)" opacity="0.95"/>
+<text x="20" y="30" fill="#e6edf3" font-size="20" font-weight="bold">L5 Core Rendering</text>
+<text x="250" y="30" fill="#fce4ec" font-size="13">miki::core | P3a-3b, P11-13 | RenderGraph, Deferred, Shadows, AA, AO, IBL</text>
+
+<g transform="translate(20,45)"><rect width="360" height="130" rx="6" fill="#21262d" stroke="#ffd700" stroke-width="2" filter="url(#sh)"/>
+<text x="180" y="18" text-anchor="middle" fill="#ffd700" font-size="14" font-weight="bold">RenderGraph</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Declarative pass DAG, Kahn topo sort</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Auto barriers, transient aliasing (30-50% VRAM)</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Conditional passes, async compute (P13)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Split barriers, single-queue GL/WebGPU</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">Layer stack: Scene/Preview/Overlay/HUD (L7)</text>
+<text x="8" y="106" fill="#8b949e" font-size="9">Multi-view: VK_KHR_multiview (P12)</text>
+<text x="330" y="120" fill="#555" font-size="9">P3a</text></g>
+
+<g transform="translate(390,45)"><rect width="300" height="130" rx="6" fill="#21262d" stroke="#ef5350" stroke-width="1.5" filter="url(#sh)"/>
+<text x="150" y="18" text-anchor="middle" fill="#ef5350" font-size="13" font-weight="bold">Deferred (GBuffer)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Albedo,Normal,MetalRough,Depth</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Motion vectors, deferred resolve</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">PBR: Cook-Torrance+GGX+Smith</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Tier2/3/4: GBuffer direct render</text>
+<text x="270" y="120" fill="#555" font-size="9">P3a</text></g>
+
+<g transform="translate(700,45)"><rect width="240" height="130" rx="6" fill="#21262d" stroke="#ef5350" stroke-width="1.5" filter="url(#sh)"/>
+<text x="120" y="18" text-anchor="middle" fill="#ef5350" font-size="13" font-weight="bold">IBL &amp; Env</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">HDRI, prefiltered specular</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Irradiance conv, BRDF LUT</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Equirect->cubemap GPU</text>
+<text x="210" y="120" fill="#555" font-size="9">P3a</text></g>
+
+<g transform="translate(950,45)"><rect width="280" height="130" rx="6" fill="#21262d" stroke="#ef5350" stroke-width="1.5" filter="url(#sh)"/>
+<text x="140" y="18" text-anchor="middle" fill="#ef5350" font-size="13" font-weight="bold">Shadows</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">VSM(T1): 16K virtual,128x128 tiles</text>
+<text x="8" y="54" fill="#8b949e" font-size="9">CSM(T2/4): 4-cascade | CSM(T3): 2-cascade</text>
+<text x="8" y="70" fill="#8b949e" font-size="9">Dir+spot+point lights, PCF filter</text>
+<text x="250" y="120" fill="#555" font-size="9">P3b</text></g>
+
+<g transform="translate(1240,45)"><rect width="250" height="130" rx="6" fill="#21262d" stroke="#ef5350" stroke-width="1.5" filter="url(#sh)"/>
+<text x="125" y="18" text-anchor="middle" fill="#ef5350" font-size="13" font-weight="bold">AA + Upscale</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">TAA(T1)+jitter | FSR/DLSS</text>
+<text x="8" y="54" fill="#8b949e" font-size="9">FXAA(T2/3) | MSAA 4x compat</text>
+<text x="8" y="70" fill="#8b949e" font-size="9">VRS integration (P3b)</text>
+<text x="220" y="120" fill="#555" font-size="9">P3b</text></g>
+
+<g transform="translate(1500,45)"><rect width="240" height="130" rx="6" fill="#21262d" stroke="#ef5350" stroke-width="1.5" filter="url(#sh)"/>
+<text x="120" y="18" text-anchor="middle" fill="#ef5350" font-size="13" font-weight="bold">Ambient Occlusion</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">GTAO(T1) | RTAO(P7a-2)</text>
+<text x="8" y="54" fill="#8b949e" font-size="9">SSAO(T2/4) | SSAO 8s(T3)</text>
+<text x="8" y="70" fill="#8b949e" font-size="9">Bilateral blur, half-res</text>
+<text x="210" y="120" fill="#555" font-size="9">P3b</text></g>
+
+<g transform="translate(1750,45)"><rect width="280" height="130" rx="6" fill="#21262d" stroke="#ef5350" stroke-width="1.5" filter="url(#sh)"/>
+<text x="140" y="18" text-anchor="middle" fill="#ef5350" font-size="13" font-weight="bold">VRS + PostFX</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">VRS: edge-adaptive rate map</text>
+<text x="8" y="54" fill="#8b949e" font-size="9">Tone: ACES/Neutral | Bloom</text>
+<text x="8" y="70" fill="#8b949e" font-size="9">Visual Regression CI (golden img)</text>
+<text x="250" y="120" fill="#555" font-size="9">P3b</text></g>
+
+<!-- Row 2 -->
+<g transform="translate(20,190)"><rect width="360" height="110" rx="6" fill="#21262d" stroke="#64b5f6" stroke-width="1.5" filter="url(#sh)"/>
+<text x="180" y="18" text-anchor="middle" fill="#64b5f6" font-size="13" font-weight="bold">Multi-Window/View (P12)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">MultiWindowManager, RenderSurface/win</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Single cull all frustums, VK_KHR_multiview</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">ViewRenderer, PresentationManager</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Multi-doc (multi-CadScene per viewport)</text>
+<text x="330" y="100" fill="#555" font-size="9">P12</text></g>
+
+<g transform="translate(390,190)"><rect width="360" height="110" rx="6" fill="#21262d" stroke="#58a6ff" stroke-width="1.5" filter="url(#sh)"/>
+<text x="180" y="18" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="bold">AsyncComputeScheduler (P13)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">RG auto-assign ComputeOnly passes</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Timeline semaphore, overlap HiZ||Shadow</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Queue priority GFX>Compute, 15%+ gain</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Single-queue fallback GL/WebGPU</text>
+<text x="330" y="100" fill="#555" font-size="9">P13</text></g>
+
+<g transform="translate(760,190)"><rect width="370" height="110" rx="6" fill="#21262d" stroke="#9575cd" stroke-width="1.5" filter="url(#sh)"/>
+<text x="185" y="18" text-anchor="middle" fill="#9575cd" font-size="13" font-weight="bold">Debug Vis + EventRecorder (P11)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">GPU debug: buffer heatmap, AS viz, overdraw</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Cull stats overlay, FrameBudgetAllocator</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">EventRecorder: deterministic record/replay</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">PerfRegressionRunner CI gate</text>
+<text x="340" y="100" fill="#555" font-size="9">P11</text></g>
+
+<g transform="translate(1140,190)"><rect width="350" height="50" rx="6" fill="#161b22" stroke="#30363d" filter="url(#sh)"/>
+<text x="175" y="18" text-anchor="middle" fill="#8b949e" font-size="12" font-weight="bold">L7 Rendering Layer Stack</text>
+<text x="8" y="38" fill="#7c8894" font-size="9">Scene | Preview | Overlay | HUD — per-layer RG, composited</text></g>
+
+<!-- Hardening row -->
+<g transform="translate(20,315)"><rect width="650" height="70" rx="6" fill="#21262d" stroke="#9575cd" filter="url(#sh)"/>
+<text x="325" y="18" text-anchor="middle" fill="#9575cd" font-size="13" font-weight="bold">Compat &amp; GL Hardening (P11b/11c)</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Golden image: T1 vs T2 &lt;5% | T2 vs T4 &lt;2% | SwiftShader+llvmpipe CI</text>
+<text x="8" y="54" fill="#8b949e" font-size="9">VirtualGL remote | VRAM stress 4GB/6GB | 10M tri@30fps GTX1060</text></g>
+
+<g transform="translate(680,315)"><rect width="760" height="70" rx="6" fill="#21262d" stroke="#ffd700" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="380" y="18" text-anchor="middle" fill="#ffd700" font-size="13" font-weight="bold">Scale Validation &amp; Optimization (P14) — Milestone</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">Benchmark 1M-10B tri | 4K: 100M@60fps, 1B@30fps | VRAM &lt;8GB/1B</text>
+<text x="8" y="54" fill="#8b949e" font-size="9">Shader PGO top-5, VGPR opt | Stress 10K frames, TSAN, TDR | All 5 backends</text></g>
+
+<g transform="translate(2040,45)"><rect width="260" height="80" rx="6" fill="#21262d" stroke="#ef5350" stroke-width="1.5" filter="url(#sh)"/>
+<text x="130" y="18" text-anchor="middle" fill="#ef5350" font-size="13" font-weight="bold">Adaptive Grid</text>
+<text x="8" y="38" fill="#8b949e" font-size="9">SDF shader, AA edge, snap-to-grid</text>
+<text x="8" y="52" fill="#8b949e" font-size="9">2-level major/minor, distance fade</text>
+<text x="8" y="66" fill="#8b949e" font-size="9">GroundPlane + infinite overlay</text></g>
+</g>
+
+<!-- ================= L6: GPU-DRIVEN GEOMETRY ================= -->
+<g id="L6" transform="translate(50,1140)">
+<rect width="4100" height="480" rx="10" fill="url(#gV)" stroke="#a52020" stroke-width="2" filter="url(#gsh)" opacity="0.95"/>
+<text x="20" y="30" fill="#e6edf3" font-size="20" font-weight="bold">L6 GPU-Driven Geometry</text>
+<text x="320" y="30" fill="#ffcdd2" font-size="13">miki::vgeo | P6a-6b | Task/Mesh, VisBuffer, ClusterDAG, GPU Scene, Radix Sort</text>
+
+<g transform="translate(20,45)"><rect width="340" height="120" rx="6" fill="#21262d" stroke="#ff6e6e" stroke-width="1.5" filter="url(#sh)"/>
+<text x="170" y="18" text-anchor="middle" fill="#ff6e6e" font-size="13" font-weight="bold">Task/Mesh Amplification</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Task: per-meshlet frustum+occlusion cull</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Mesh: decode meshlet->triangles</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">2-pass HiZ, zero CPU draws from P6a</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">64V/124T meshlets, NV_mesh_shader</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">Compat: Vertex+MDI fallback</text>
+<text x="310" y="110" fill="#555" font-size="9">P6a</text></g>
+
+<g transform="translate(370,45)"><rect width="300" height="120" rx="6" fill="#21262d" stroke="#ff6e6e" stroke-width="1.5" filter="url(#sh)"/>
+<text x="150" y="18" text-anchor="middle" fill="#ff6e6e" font-size="13" font-weight="bold">Visibility Buffer</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">uint64 (instanceID+primitiveID)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Material resolve in screen-space compute</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Eliminates overdraw for opaque</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">HybridRasterizer: VisBuffer+GBuffer</text>
+<text x="270" y="110" fill="#555" font-size="9">P6a</text></g>
+
+<g transform="translate(680,45)"><rect width="320" height="120" rx="6" fill="#21262d" stroke="#ff6e6e" stroke-width="1.5" filter="url(#sh)"/>
+<text x="160" y="18" text-anchor="middle" fill="#ff6e6e" font-size="13" font-weight="bold">GPU Scene Submission</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">SceneBuffer: GPU-side descriptor</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Transform+Material+MeshletRef/instance</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">GPU frustum cull, indirect draw gen</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Persistent compute: incremental update</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">Compat: CPU submit + MDI batching</text>
+<text x="290" y="110" fill="#555" font-size="9">P6a</text></g>
+
+<g transform="translate(1010,45)"><rect width="230" height="80" rx="6" fill="#21262d" stroke="#ff6e6e" stroke-width="1.5" filter="url(#sh)"/>
+<text x="115" y="18" text-anchor="middle" fill="#ff6e6e" font-size="13" font-weight="bold">GPU Radix Sort</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Onesweep (Adinets 2022)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Sort depth/material, 100M &lt;5ms</text>
+<text x="200" y="70" fill="#555" font-size="9">P6a</text></g>
+
+<g transform="translate(1250,45)"><rect width="240" height="80" rx="6" fill="#21262d" stroke="#ff6e6e" stroke-width="1.5" filter="url(#sh)"/>
+<text x="120" y="18" text-anchor="middle" fill="#ff6e6e" font-size="13" font-weight="bold">Cooperative Matrix</text>
+<text x="8" y="36" fill="#8b949e" font-size="9">VK_KHR_cooperative_matrix WMMA</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Neural Denoiser+Materials (P19)</text>
+<text x="210" y="70" fill="#555" font-size="9">P6a</text></g>
+
+<!-- Row 2: ClusterDAG etc -->
+<g transform="translate(20,180)"><rect width="360" height="120" rx="6" fill="#21262d" stroke="#ff9999" stroke-width="1.5" filter="url(#sh)"/>
+<text x="180" y="18" text-anchor="middle" fill="#ff9999" font-size="13" font-weight="bold">ClusterDAG (Nanite LOD)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">DAG meshlet clusters, GPU LOD selection</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Screen-space error threshold, seamless</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Offline BVH partition+simplify build</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Handles 2B+ tri via streaming</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">Compat: flat LOD (discrete levels)</text>
+<text x="330" y="110" fill="#555" font-size="9">P6b</text></g>
+
+<g transform="translate(390,180)"><rect width="310" height="120" rx="6" fill="#21262d" stroke="#ff9999" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="18" text-anchor="middle" fill="#ff9999" font-size="13" font-weight="bold">Cluster Streaming</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Octree page table, async I/O</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">GPU residency->CPU page fault</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Sparse binding, VRAM &lt;8GB/1B tri</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Transfer queue dedicated</text>
+<text x="280" y="110" fill="#555" font-size="9">P6b</text></g>
+
+<g transform="translate(710,180)"><rect width="260" height="80" rx="6" fill="#21262d" stroke="#ff9999" stroke-width="1.5" filter="url(#sh)"/>
+<text x="130" y="18" text-anchor="middle" fill="#ff9999" font-size="13" font-weight="bold">Meshlet Compression</text>
+<text x="8" y="36" fill="#8b949e" font-size="9">Pos: 16-bit norm+AABB | Normal: oct 8-bit</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Index: stripify ~60% | Decode in mesh shader</text>
+<text x="230" y="70" fill="#555" font-size="9">P6b</text></g>
+
+<g transform="translate(980,180)"><rect width="260" height="80" rx="6" fill="#21262d" stroke="#ff9999" stroke-width="1.5" filter="url(#sh)"/>
+<text x="130" y="18" text-anchor="middle" fill="#ff9999" font-size="13" font-weight="bold">GPU QEM (Mesh Simplify)</text>
+<text x="8" y="36" fill="#8b949e" font-size="9">QEM edge-collapse, GPU parallel contract</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Boundary preserve, LOD gen for DAG</text>
+<text x="230" y="70" fill="#555" font-size="9">P6b</text></g>
+
+<!-- Perf targets -->
+<g transform="translate(1250,180)"><rect width="500" height="120" rx="6" fill="#161b22" stroke="#30363d" filter="url(#sh)"/>
+<text x="250" y="18" text-anchor="middle" fill="#8b949e" font-size="13" font-weight="bold">GPU-Driven Performance Targets</text>
+<text x="8" y="38" fill="#7c8894" font-size="10">10M tri: 60fps(T1), 30fps(T2), 25fps(T3/4)</text>
+<text x="8" y="54" fill="#7c8894" font-size="10">100M tri: 60fps@4K(T1,ClusterDAG+streaming)</text>
+<text x="8" y="70" fill="#7c8894" font-size="10">1B tri: 30fps@4K(T1,streaming,&lt;8GB VRAM)</text>
+<text x="8" y="86" fill="#7c8894" font-size="10">GPU cull: &lt;1ms/10M meshlets | Sort: &lt;5ms/100M</text>
+<text x="8" y="102" fill="#7c8894" font-size="10">Pick: &lt;0.5ms(RT), &lt;4ms(CPU BVH)</text></g>
+
+<!-- Phase timeline -->
+<g transform="translate(20,315)"><rect width="1720" height="50" rx="6" fill="#161b22" stroke="#30363d" filter="url(#sh)"/>
+<text x="860" y="18" text-anchor="middle" fill="#8b949e" font-size="12" font-weight="bold">Critical Path: P1a->1b->2->3a->3b||4||5->6a->6b->[Cooldown#1 W33-35]->7a-1->7a-2||7b->8->[Cooldown#2 W55-57]->9||10||12->11->13->14->[Cooldown#3 W83-85]->15a->15b [1.0 W98]</text>
+<text x="860" y="38" text-anchor="middle" fill="#7c8894" font-size="10">1.1: P16||17->18->19->20->21 [W133] | Parallelizable: P3b||4||5, P9||10||12, P16||17</text></g>
+</g>
+
+<!-- ================= L8a: CAD CORE + CADSCENE ================= -->
+<g id="L8a" transform="translate(50,520)">
+<rect width="4100" height="590" rx="10" fill="url(#gD)" stroke="#7a5500" stroke-width="2" filter="url(#gsh)" opacity="0.95"/>
+<text x="20" y="30" fill="#e6edf3" font-size="20" font-weight="bold">L8a CAD Core + CadScene</text>
+<text x="340" y="30" fill="#fff3e0" font-size="13">miki::cad+cadscene | P7a-1,7a-2,7b,8 | HLR,Section,OIT,Pick,PMI,CadScene</text>
+
+<g transform="translate(20,45)"><rect width="270" height="100" rx="6" fill="#21262d" stroke="#ffb74d" stroke-width="1.5" filter="url(#sh)"/>
+<text x="135" y="18" text-anchor="middle" fill="#ffb74d" font-size="13" font-weight="bold">GPU HLR</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Compute: edge classify (silhouette)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Smooth/sharp, depth-test line AA</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Line style: solid/dash/dot/phantom</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Compat: CPU+VS fallback</text>
+<text x="240" y="90" fill="#555" font-size="9">P7a-1</text></g>
+
+<g transform="translate(300,45)"><rect width="260" height="100" rx="6" fill="#21262d" stroke="#ffb74d" stroke-width="1.5" filter="url(#sh)"/>
+<text x="130" y="18" text-anchor="middle" fill="#ffb74d" font-size="13" font-weight="bold">SectionPlane</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">GPU clip+cap (stencil capping)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">SectionHatch compute shader</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">SectionVolume (multi-plane bool)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Interactive drag, offset/array</text>
+<text x="230" y="90" fill="#555" font-size="9">P7a-1</text></g>
+
+<g transform="translate(570,45)"><rect width="250" height="100" rx="6" fill="#21262d" stroke="#ffcc80" stroke-width="1.5" filter="url(#sh)"/>
+<text x="125" y="18" text-anchor="middle" fill="#ffcc80" font-size="13" font-weight="bold">OIT (Transparency)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Linked-List(T1) | Weighted(T2/3/4)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Hybrid: LL near, weighted far</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Ghost/XRay display styles</text>
+<text x="220" y="90" fill="#555" font-size="9">P7a-2</text></g>
+
+<g transform="translate(830,45)"><rect width="250" height="100" rx="6" fill="#21262d" stroke="#ffcc80" stroke-width="1.5" filter="url(#sh)"/>
+<text x="125" y="18" text-anchor="middle" fill="#ffcc80" font-size="13" font-weight="bold">RayPicking</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">RT Pick(T1) BLAS/TLAS ray query</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">CPU BVH(T2/3/4), Part/Face/Edge/Vtx</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">&lt;0.5ms RT, &lt;4ms CPU, SelectionMgr</text>
+<text x="220" y="90" fill="#555" font-size="9">P7a-2</text></g>
+
+<g transform="translate(1090,45)"><rect width="230" height="100" rx="6" fill="#21262d" stroke="#ffcc80" stroke-width="1.5" filter="url(#sh)"/>
+<text x="115" y="18" text-anchor="middle" fill="#ffcc80" font-size="13" font-weight="bold">RTAO + Explode</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">RTAO: BLAS->ray query AO</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">ExplodeView: radial/linear/hier</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Animated transition, JFA outline</text>
+<text x="200" y="90" fill="#555" font-size="9">P7a-2</text></g>
+
+<g transform="translate(1330,45)"><rect width="260" height="100" rx="6" fill="#21262d" stroke="#ffe0b2" stroke-width="1.5" filter="url(#sh)"/>
+<text x="130" y="18" text-anchor="middle" fill="#ffe0b2" font-size="13" font-weight="bold">Measurement (P7b)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Pt-Pt, Pt-Edge, Edge-Edge, Face-Face</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Radius/diameter from BRep</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">GPU snap, AnnotationOverlay</text>
+<text x="230" y="90" fill="#555" font-size="9">P7b</text></g>
+
+<g transform="translate(1600,45)"><rect width="250" height="100" rx="6" fill="#21262d" stroke="#ffe0b2" stroke-width="1.5" filter="url(#sh)"/>
+<text x="125" y="18" text-anchor="middle" fill="#ffe0b2" font-size="13" font-weight="bold">PMI Renderer (P7b)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">AP242 PMI, GD&amp;T MSDF atlas</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Datum, tolerances, billboard/anchored</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">DrawingProjector (2D views)</text>
+<text x="220" y="90" fill="#555" font-size="9">P7b</text></g>
+
+<g transform="translate(1860,45)"><rect width="260" height="100" rx="6" fill="#21262d" stroke="#ffe0b2" stroke-width="1.5" filter="url(#sh)"/>
+<text x="130" y="18" text-anchor="middle" fill="#ffe0b2" font-size="13" font-weight="bold">Boolean+GPU Tess</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">BooleanPreview (CSG compute)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">GPU adaptive tessellation</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">ParallelTessellator, SketchRenderer</text>
+<text x="230" y="90" fill="#555" font-size="9">P7b</text></g>
+
+<!-- Row 2: CadScene + DFM -->
+<g transform="translate(20,160)"><rect width="400" height="120" rx="6" fill="#21262d" stroke="#ffd700" stroke-width="2" filter="url(#sh)"/>
+<text x="200" y="18" text-anchor="middle" fill="#ffd700" font-size="14" font-weight="bold">CadScene (miki::cadscene)</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Hierarchical segment tree + attr inheritance</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">LayerStack, DisplayStyles (shaded/wire/HLR/xray)</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">ConfigurationManager (named configs+BOM)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">CadScene History (undo/redo, OpHistory)</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">Serialization .mkscene, Topology Cull</text>
+<text x="370" y="110" fill="#555" font-size="9">P8</text></g>
+
+<g transform="translate(430,160)"><rect width="340" height="120" rx="6" fill="#21262d" stroke="#ffe0b2" stroke-width="1.5" filter="url(#sh)"/>
+<text x="170" y="18" text-anchor="middle" fill="#ffe0b2" font-size="13" font-weight="bold">DFM Tools</text>
+<text x="8" y="38" fill="#adb5bd" font-size="10">DraftAngle: GPU face-normal vs pull (P7b)</text>
+<text x="8" y="54" fill="#8b949e" font-size="9">Interference: GPU distance field (P9)</text>
+<text x="8" y="70" fill="#8b949e" font-size="9">WallThickness: sphere tracing (P16, 1.1)</text>
+<text x="8" y="86" fill="#8b949e" font-size="9">Undercut: mold shadow map (P16, 1.1)</text>
+<text x="8" y="102" fill="#8b949e" font-size="9">MassProps: GPU parallel reduction (P16)</text>
+<text x="310" y="110" fill="#555" font-size="9">P7b-16</text></g>
+
+<g transform="translate(780,160)"><rect width="260" height="70" rx="6" fill="#21262d" stroke="#ffe0b2" stroke-width="1.5" filter="url(#sh)"/>
+<text x="130" y="18" text-anchor="middle" fill="#ffe0b2" font-size="13" font-weight="bold">2D Markup (P15a)</text>
+<text x="8" y="36" fill="#8b949e" font-size="9">Screenshot->annotate (arrow,rect,text)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">SVG/PDF export, MarkupLayer overlay</text>
+<text x="230" y="60" fill="#555" font-size="9">P15a</text></g>
+
+<g transform="translate(1050,160)"><rect width="230" height="70" rx="6" fill="#21262d" stroke="#ffb74d" stroke-width="1.5" filter="url(#sh)"/>
+<text x="115" y="18" text-anchor="middle" fill="#ffb74d" font-size="13" font-weight="bold">SelectionOutline</text>
+<text x="8" y="36" fill="#8b949e" font-size="9">JFA (Jump Flood Algorithm)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Stencil v1(P2)->JFA v2(P7a-2)</text>
+<text x="200" y="60" fill="#555" font-size="9">P7a-2</text></g>
+
+<!-- Row 3: Tools -->
+<g transform="translate(20,295)"><rect width="4060" height="155" rx="6" fill="#1a3a1a" stroke="#2e5c2e" stroke-width="1.5" filter="url(#sh)"/>
+<text x="20" y="18" fill="#81c784" font-size="14" font-weight="bold">L9 Interactive Tools (miki::tools) — P9</text>
+
+<g transform="translate(10,30)"><rect width="220" height="90" rx="5" fill="#21262d" stroke="#81c784" filter="url(#sh)"/>
+<text x="110" y="16" text-anchor="middle" fill="#81c784" font-size="12" font-weight="bold">Gizmo</text>
+<text x="6" y="32" fill="#8b949e" font-size="9">Translate/Rotate/Scale</text>
+<text x="6" y="46" fill="#8b949e" font-size="9">Axis/plane constraint</text>
+<text x="6" y="60" fill="#8b949e" font-size="9">Undo integ, multi-obj</text></g>
+
+<g transform="translate(240,30)"><rect width="220" height="90" rx="5" fill="#21262d" stroke="#81c784" filter="url(#sh)"/>
+<text x="110" y="16" text-anchor="middle" fill="#81c784" font-size="12" font-weight="bold">Compass+Snap</text>
+<text x="6" y="32" fill="#8b949e" font-size="9">ViewCube: click->orient</text>
+<text x="6" y="46" fill="#8b949e" font-size="9">SnapEngine: grid/vtx/edge</text>
+<text x="6" y="60" fill="#8b949e" font-size="9">Smooth SLERP transition</text></g>
+
+<g transform="translate(470,30)"><rect width="260" height="90" rx="5" fill="#21262d" stroke="#81c784" filter="url(#sh)"/>
+<text x="130" y="16" text-anchor="middle" fill="#81c784" font-size="12" font-weight="bold">CommandBus+OpHistory</text>
+<text x="6" y="32" fill="#8b949e" font-size="9">Command: execute/undo/redo</text>
+<text x="6" y="46" fill="#8b949e" font-size="9">OpCommand: atomic, composable</text>
+<text x="6" y="60" fill="#8b949e" font-size="9">Macro recording, history tree</text></g>
+
+<g transform="translate(740,30)"><rect width="260" height="90" rx="5" fill="#21262d" stroke="#81c784" filter="url(#sh)"/>
+<text x="130" y="16" text-anchor="middle" fill="#81c784" font-size="12" font-weight="bold">PreviewManager</text>
+<text x="6" y="32" fill="#8b949e" font-size="9">Phantom preview (translucent)</text>
+<text x="6" y="46" fill="#8b949e" font-size="9">PreviewMeshPool, PreviewChain</text>
+<text x="6" y="60" fill="#8b949e" font-size="9">PhantomStyle, multi-step seq</text></g>
+
+<g transform="translate(1010,30)"><rect width="250" height="90" rx="5" fill="#21262d" stroke="#81c784" filter="url(#sh)"/>
+<text x="125" y="16" text-anchor="middle" fill="#81c784" font-size="12" font-weight="bold">TopoEditEngine</text>
+<text x="6" y="32" fill="#8b949e" font-size="9">Fillet,Chamfer,Offset,Shell</text>
+<text x="6" y="46" fill="#8b949e" font-size="9">IKernel delegation, live preview</text>
+<text x="6" y="60" fill="#8b949e" font-size="9">MeshEditor, RichTextInput</text></g>
+
+<g transform="translate(1270,30)"><rect width="250" height="90" rx="5" fill="#21262d" stroke="#81c784" filter="url(#sh)"/>
+<text x="125" y="16" text-anchor="middle" fill="#81c784" font-size="12" font-weight="bold">Interference+Curvature</text>
+<text x="6" y="32" fill="#8b949e" font-size="9">GPU distance field intersection</text>
+<text x="6" y="46" fill="#8b949e" font-size="9">CurvatureAnalyzer: min/max/Gauss</text>
+<text x="6" y="60" fill="#8b949e" font-size="9">Color-mapped curvature display</text></g>
+
+<g transform="translate(1530,30)"><rect width="220" height="90" rx="5" fill="#21262d" stroke="#81c784" filter="url(#sh)"/>
+<text x="110" y="16" text-anchor="middle" fill="#81c784" font-size="12" font-weight="bold">FEM Vertex Edit</text>
+<text x="6" y="32" fill="#8b949e" font-size="9">Direct vertex manipulation</text>
+<text x="6" y="46" fill="#8b949e" font-size="9">Laplacian smooth, relax</text>
+<text x="6" y="60" fill="#8b949e" font-size="9">BC assign, FEM re-mesh</text></g>
+</g>
+
+<!-- Row 4: CAE + PointCloud -->
+<g transform="translate(20,465)"><rect width="4060" height="95" rx="6" fill="#1a2a4a" stroke="#3d5a80" stroke-width="1.5" filter="url(#sh)"/>
+<text x="20" y="18" fill="#64b5f6" font-size="14" font-weight="bold">L8b CAE/PointCloud (miki::cae + miki::pointcloud) — P10</text>
+<text x="15" y="40" fill="#adb5bd" font-size="10" font-weight="bold">FEM Mesh</text><text x="110" y="40" fill="#8b949e" font-size="9">Wireframe+fill dual, Tet/Hex/Wedge, element shrink, node numbering, deformation viz</text>
+<text x="15" y="56" fill="#adb5bd" font-size="10" font-weight="bold">Scalar/Vector</text><text x="110" y="56" fill="#8b949e" font-size="9">Color map(jet/viridis), contour lines, arrow glyphs, LIC, streamlines, isosurface, tensor ellipsoid</text>
+<text x="15" y="72" fill="#adb5bd" font-size="10" font-weight="bold">PointCloud</text><text x="110" y="72" fill="#8b949e" font-size="9">LAS/LAZ/PLY/E57, GPU splat 1B+@30fps, IcpRegistrator, ScanToCadAligner, PointCloudFilter | Animation+Compare: TimeStep, A/B split, ProbePoint</text>
+<text x="4020" y="82" fill="#555" font-size="9">P10</text>
+</g>
+</g>
+
+<!-- ================= L11: SDK + CLOUD + POST-SHIP ================= -->
+<g id="L11" transform="translate(50,150)">
+<rect width="4100" height="340" rx="10" fill="url(#gK)" stroke="#1a4a7a" stroke-width="2" filter="url(#gsh)" opacity="0.95"/>
+<text x="20" y="30" fill="#e6edf3" font-size="20" font-weight="bold">L11 Application + Integration + 1.1 Post-Ship</text>
+<text x="560" y="30" fill="#bbdefb" font-size="13">miki::sdk + Cloud | P15a-15b (1.0) | P16-21 (1.1)</text>
+
+<!-- SDK -->
+<g transform="translate(20,45)"><rect width="370" height="120" rx="6" fill="#21262d" stroke="#42a5f5" stroke-width="1.5" filter="url(#sh)"/>
+<text x="185" y="18" text-anchor="middle" fill="#42a5f5" font-size="14" font-weight="bold">SDK (miki::sdk) - P15a</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">MikiEngine (facade), MikiScene, MikiView</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">MikiPicker, MikiExporter</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">C wrapper: miki_c.h (FFI Python/C#/Java)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Python: pybind11 (pip install miki)</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">Pimpl ABI stable, frozen at Cooldown#3</text>
+<text x="340" y="110" fill="#555" font-size="9">P15a</text></g>
+
+<!-- Headless -->
+<g transform="translate(400,45)"><rect width="310" height="120" rx="6" fill="#21262d" stroke="#42a5f5" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="18" text-anchor="middle" fill="#42a5f5" font-size="13" font-weight="bold">Headless + Batch - P15a</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">HeadlessDevice (EGL/OSMesa/Dawn)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">CLI: miki-render model.step -o img.png</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Batch: multi-model, PDF report</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Thumbnail 256x256, Docker nvidia/cuda</text>
+<text x="280" y="110" fill="#555" font-size="9">P15a</text></g>
+
+<!-- Cloud -->
+<g transform="translate(720,45)"><rect width="340" height="120" rx="6" fill="#21262d" stroke="#42a5f5" stroke-width="1.5" filter="url(#sh)"/>
+<text x="170" y="18" text-anchor="middle" fill="#42a5f5" font-size="13" font-weight="bold">Cloud Render - P15b</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">WebRTC streaming (H.264/VP9)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Adaptive bitrate, &lt;50ms latency</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Session manager (multi-tenant)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">REST API: upload/render/download</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">k8s auto-scale GPU pods</text>
+<text x="310" y="110" fill="#555" font-size="9">P15b</text></g>
+
+<!-- Collab -->
+<g transform="translate(1070,45)"><rect width="310" height="120" rx="6" fill="#21262d" stroke="#42a5f5" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="18" text-anchor="middle" fill="#42a5f5" font-size="13" font-weight="bold">Collaboration - P15b</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">SharedSession, CursorSync</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">AnnotationSync (real-time markup)</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Conflict resolution (last-writer-wins)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">WebSocket relay, presence indicators</text>
+<text x="280" y="110" fill="#555" font-size="9">P15b</text></g>
+
+<!-- Cross-Platform -->
+<g transform="translate(1390,45)"><rect width="310" height="120" rx="6" fill="#21262d" stroke="#42a5f5" stroke-width="1.5" filter="url(#sh)"/>
+<text x="155" y="18" text-anchor="middle" fill="#42a5f5" font-size="13" font-weight="bold">Cross-Platform - P15a</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Windows (Vk/D3D12/GL) primary</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Linux (Vk/GL) headless+desktop</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">macOS (MoltenVK) best-effort</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Web (WebGPU/Dawn via Emscripten)</text>
+<text x="8" y="92" fill="#8b949e" font-size="9">Android (Vk1.1) stretch goal</text>
+<text x="280" y="110" fill="#555" font-size="9">P15a</text></g>
+
+<!-- ========= 1.1 POST-SHIP SECTION ========= -->
+<text x="20" y="185" fill="#90caf9" font-size="16" font-weight="bold">--- 1.1 Post-Ship Extensions (P16-P21, Week 99-133) ---</text>
+
+<!-- P16 GPU DFM -->
+<g transform="translate(20,200)"><rect width="330" height="110" rx="6" fill="#2a2a2a" stroke="#bdbdbd" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="165" y="18" text-anchor="middle" fill="#bdbdbd" font-size="13" font-weight="bold">P16 GPU DFM Completion</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">WallThickness: sphere tracing SDF</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Undercut: mold shadow map</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">MassProperties: GPU parallel reduction</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">DFM report: PDF + color-coded viz</text>
+<text x="300" y="100" fill="#555" font-size="9">P16</text></g>
+
+<!-- P17 CAE Volume -->
+<g transform="translate(360,200)"><rect width="340" height="110" rx="6" fill="#2a2a2a" stroke="#90caf9" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="170" y="18" text-anchor="middle" fill="#90caf9" font-size="13" font-weight="bold">P17 CAE Volume Render</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">VolumeRenderer: ray march 3D texture</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Polyhedral CFD->voxel grid</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Transfer function editor</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">SurfaceLIC, Section+Isosurface combo</text>
+<text x="310" y="100" fill="#555" font-size="9">P17</text></g>
+
+<!-- P18 Product Viz -->
+<g transform="translate(710,200)"><rect width="330" height="110" rx="6" fill="#2a2a2a" stroke="#bdbdbd" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="165" y="18" text-anchor="middle" fill="#bdbdbd" font-size="13" font-weight="bold">P18 Product Visualization</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Decal projection (GPU compute)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Procedural textures (noise, marble)</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Turntable animation (MP4 export)</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">HDRI rotation, floor shadow, studio</text>
+<text x="300" y="100" fill="#555" font-size="9">P18</text></g>
+
+<!-- P19 GI + Neural -->
+<g transform="translate(1050,200)"><rect width="380" height="110" rx="6" fill="#2a2a2a" stroke="#ce93d8" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="190" y="18" text-anchor="middle" fill="#ce93d8" font-size="13" font-weight="bold">P19 Advanced GI + Neural</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">ReSTIR DI/GI (spatiotemporal reservoir)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Neural Denoiser: cooperative matrix inference</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Neural Materials: MLP texture evaluation</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Path tracer reference, DDGI probe grid</text>
+<text x="350" y="100" fill="#555" font-size="9">P19</text></g>
+
+<!-- P20 Platform Expansion -->
+<g transform="translate(1440,200)"><rect width="370" height="110" rx="6" fill="#2a2a2a" stroke="#a5d6a7" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="185" y="18" text-anchor="middle" fill="#a5d6a7" font-size="13" font-weight="bold">P20 Platform + Collaboration</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">XR/OpenXR: stereo render, hand tracking</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">DGC / Work Graphs (VK_NV_dgc)</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Digital Twin: real-time sensor overlay</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Collaborative OT undo, 3DXML import</text>
+<text x="340" y="100" fill="#555" font-size="9">P20</text></g>
+
+<!-- P21 Editor Shell -->
+<g transform="translate(1820,200)"><rect width="310" height="110" rx="6" fill="#2a2a2a" stroke="#fff59d" stroke-width="1.5" stroke-dasharray="5,3" filter="url(#sh)"/>
+<text x="155" y="18" text-anchor="middle" fill="#fff59d" font-size="13" font-weight="bold">P21 Editor Shell</text>
+<text x="8" y="36" fill="#adb5bd" font-size="10">Reference UI (Qt/Dear ImGui)</text>
+<text x="8" y="50" fill="#8b949e" font-size="9">Docking, property panel, scene tree</text>
+<text x="8" y="64" fill="#8b949e" font-size="9">Theme engine, keybind system</text>
+<text x="8" y="78" fill="#8b949e" font-size="9">Plugin UI extension points</text>
+<text x="280" y="100" fill="#555" font-size="9">P21</text></g>
+
+<!-- ========= DEPENDENCY ARROWS ========= -->
+<!-- Vertical dependency arrows between layers -->
+<g id="deps" opacity="0.4">
+<line x1="2100" y1="3220" x2="2100" y2="3195" stroke="#58a6ff" stroke-width="2" stroke-dasharray="6,3"/>
+<line x1="2100" y1="2740" x2="2100" y2="2715" stroke="#4db6ac" stroke-width="2" stroke-dasharray="6,3"/>
+<line x1="2100" y1="2170" x2="2100" y2="2145" stroke="#bb86fc" stroke-width="2" stroke-dasharray="6,3"/>
+<line x1="2100" y1="1650" x2="2100" y2="1625" stroke="#ef5350" stroke-width="2" stroke-dasharray="6,3"/>
+<line x1="2100" y1="1140" x2="2100" y2="1115" stroke="#ff6e6e" stroke-width="2" stroke-dasharray="6,3"/>
+<line x1="2100" y1="520" x2="2100" y2="495" stroke="#ffb74d" stroke-width="2" stroke-dasharray="6,3"/>
+</g>
+
+<!-- Left-side layer labels -->
+<g id="layer-labels" opacity="0.6">
+<text x="25" y="3450" fill="#58a6ff" font-size="14" font-weight="bold" transform="rotate(-90,25,3450)">L1 Foundation</text>
+<text x="25" y="3000" fill="#4db6ac" font-size="14" font-weight="bold" transform="rotate(-90,25,3000)">L2 RHI + Backends</text>
+<text x="25" y="2470" fill="#bb86fc" font-size="14" font-weight="bold" transform="rotate(-90,25,2470)">L3-4 Shader/Resource/Scene</text>
+<text x="25" y="1920" fill="#ef5350" font-size="14" font-weight="bold" transform="rotate(-90,25,1920)">L5 Core Rendering</text>
+<text x="25" y="1400" fill="#ff6e6e" font-size="14" font-weight="bold" transform="rotate(-90,25,1400)">L6 GPU-Driven</text>
+<text x="25" y="850" fill="#ffb74d" font-size="14" font-weight="bold" transform="rotate(-90,25,850)">L8 CAD+Tools+CAE</text>
+<text x="25" y="340" fill="#42a5f5" font-size="14" font-weight="bold" transform="rotate(-90,25,340)">L11 SDK+Cloud+1.1</text>
+</g>
+
+<!-- Cooldown badges -->
+<g id="cooldowns">
+<rect x="3850" y="1615" width="230" height="26" rx="4" fill="#ffd700" opacity="0.2"/>
+<text x="3965" y="1633" text-anchor="middle" fill="#ffd700" font-size="10" font-weight="bold">Cooldown #1 (W33-35)</text>
+<rect x="3850" y="1108" width="230" height="26" rx="4" fill="#ffd700" opacity="0.2"/>
+<text x="3965" y="1126" text-anchor="middle" fill="#ffd700" font-size="10" font-weight="bold">Cooldown #2 (W55-57)</text>
+<rect x="3850" y="490" width="230" height="26" rx="4" fill="#ffd700" opacity="0.2"/>
+<text x="3965" y="508" text-anchor="middle" fill="#ffd700" font-size="10" font-weight="bold">Cooldown #3 (W83-85)</text>
+</g>
+
+<!-- Milestone badge -->
+<g transform="translate(3500,70)">
+<rect width="600" height="80" rx="8" fill="#161b22" stroke="#ffd700" stroke-width="2" filter="url(#sh)"/>
+<text x="300" y="22" text-anchor="middle" fill="#ffd700" font-size="15" font-weight="bold">miki Renderer v1.0 (Week 98) + v1.1 (Week 133)</text>
+<text x="300" y="42" text-anchor="middle" fill="#8b949e" font-size="10">27 phases | ~10K tests | 5 backends | 500+ headers | ~21 namespaces</text>
+<text x="300" y="58" text-anchor="middle" fill="#7c8894" font-size="9">LLVM20+Clang20+libc++20 | C++23 | Slang | Vulkan1.4/D3D12/GL4.3/WebGPU/Mock</text>
+<text x="300" y="72" text-anchor="middle" fill="#7c8894" font-size="9">GPU-driven everything | CAD-native | Injection-first architecture</text>
+</g>
+</g>
+
+</svg>

@@ -1,0 +1,30 @@
+[submodule "third_party/glm"]
+	path = third_party/glm
+	url = https://github.com/g-truc/glm.git
+[submodule "third_party/googletest"]
+	path = third_party/googletest
+	url = https://github.com/google/googletest.git
+[submodule "third_party/vma"]
+	path = third_party/vma
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "third_party/glfw"]
+	path = third_party/glfw
+	url = https://github.com/glfw/glfw.git
+[submodule "third_party/slang"]
+	path = third_party/slang
+	url = https://github.com/shader-slang/slang.git
+[submodule "third_party/d3d12ma"]
+	path = third_party/d3d12ma
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator.git
+[submodule "third_party/directx_headers"]
+	path = third_party/directx_headers
+	url = https://github.com/microsoft/DirectX-Headers.git
+[submodule "third_party/imgui"]
+	path = third_party/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "third_party/stb"]
+	path = third_party/stb
+	url = https://github.com/nothings/stb.git
+[submodule "third_party/freetype"]
+	path = third_party/freetype
+	url = https://github.com/freetype/freetype.git

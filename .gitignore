@@ -1,0 +1,62 @@
+# Build
+build/
+out/
+cmake-build-*/
+*.obj
+*.o
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# IDE
+.vs/
+!.vscode/launch.json
+.idea/
+*.suo
+*.user
+*.sln.docstates
+CMakeUserPresets.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Dependencies (built locally)
+third_party/**/build/
+
+# Shader intermediate
+*.spv
+*.dxil
+*.cso
+
+# RenderDoc captures
+*.rdc
+
+# Backup / archive / generated docs
+*.bak.md
+*.bak.*.md
+*.copy.md
+*.zip
+*.txt
+!CMakeLists.txt
+!**/CMakeLists.txt
+imgui.ini
+specs/*.html
+specs/llm-agent-best-practices.md
+
+# Third-party tools with their own git repos
+tools/RenderDocMCP/
+
+# Misc
+*.log
+*.tmp
+*.swp
+*~
+third_party

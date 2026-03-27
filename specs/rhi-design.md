@@ -1,0 +1,1440 @@
+# miki RHI (Rendering Hardware Interface) Design
+
+> **Status**: Design blueprint  
+> **Scope**: Multi-backend RHI supporting Vulkan 1.4, Vulkan 1.1 (Compat), D3D12, WebGPU, OpenGL 4.3  
+> **Audience**: Engine team — architecture reference  
+> **Companion**: `specs/rhi-migration-plan.md` (implementation roadmap)
+
+---
+
+## 1. Design Goals & Constraints
+
+### 1.1 Primary Goals
+
+| # | Goal | Rationale |
+|---|------|-----------|
+| G1 | **Zero-overhead abstraction on Tier1** | Vulkan 1.4 / D3D12 must achieve native-level performance; no virtual dispatch in hot paths |
+| G2 | **Maximum capability extraction per tier** | Each backend must expose its highest-performance path, not LCD (lowest common denominator) |
+| G3 | **Compile-time backend selection** | Backend chosen at build time (template/`if constexpr`), not runtime vtable; eliminates branch misprediction in command recording |
+| G4 | **Thin abstraction** | RHI is a vocabulary layer, not a framework; no hidden resource tracking, no implicit barriers |
+| G5 | **RenderGraph-friendly** | All barrier/transition/aliasing decisions delegated to RenderGraph; RHI provides primitives, not policy |
+| G6 | **Shader IR agnostic** | RHI accepts pre-compiled blobs (SPIR-V, DXIL, GLSL, WGSL); Slang compilation is external |
+| G7 | **Deterministic resource lifetime** | Explicit create/destroy with deferred-destruction queue (2-frame latency); no ref-counting in hot path |
+
+### 1.2 Tier Mapping
+
+| Tier | Backend | API Version | Shader IR | Key Differentiator |
+|------|---------|-------------|-----------|-------------------|
+| **T1-Vulkan** | Vulkan | 1.4 (Roadmap 2026) | SPIR-V | Descriptor heap, mesh shader, ray query, timeline semaphore, async compute |
+| **T1-D3D12** | Direct3D 12 | Agility SDK 1.719+ | DXIL | Root signature, descriptor heap, mesh shader, DXR, work graphs, enhanced barriers |
+| **T2** | Vulkan Compat | 1.1 + select extensions | SPIR-V | Traditional descriptor sets, no mesh shader, MDI |
+| **T3** | WebGPU | Dawn/wgpu | WGSL | Bind groups, 128MB SSBO limit, no MDI, single queue |
+| **T4** | OpenGL | 4.3+ | GLSL 4.30 | Direct state access, MDI, UBO/SSBO binding points |
+
+### 1.3 Non-Goals
+
+- **Runtime backend switching**: Backend is a compile-time decision. No `IDevice` vtable polymorphism.
+- **Automatic barrier insertion**: That is RenderGraph's job. RHI exposes `CmdPipelineBarrier()` / `CmdTransition()`.
+- **Implicit resource state tracking**: Caller (RenderGraph) tracks states. RHI trusts the caller.
+- **Shader compilation**: Slang → target IR is a separate pipeline. RHI accepts blobs.
+- **Window/surface creation**: Platform layer creates surfaces; RHI attaches to them.
+
+---
+
+## 2. Architecture Overview
+
+### 2.1 Layer Diagram
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Application / Scene                    │
+├─────────────────────────────────────────────────────────┤
+│                      RenderGraph                         │
+│  (barrier insertion, transient aliasing, pass scheduling) │
+├─────────────────────────────────────────────────────────┤
+│                     RHI Public API                        │
+│  Device · CommandBuffer · Pipeline · Resource · Sync      │
+├──────────┬──────────┬──────────┬──────────┬─────────────┤
+│ Vulkan   │  D3D12   │ Vk Compat│  WebGPU  │  OpenGL     │
+│ 1.4      │  12      │  1.1     │  Dawn    │  4.3        │
+│ (T1)     │  (T1)    │  (T2)    │  (T3)    │  (T4)       │
+└──────────┴──────────┴──────────┴──────────┴─────────────┘
+```
+
+### 2.2 Compile-Time Polymorphism (CRTP)
+
+RHI uses **CRTP (Curiously Recurring Template Pattern)** instead of virtual dispatch:
+
+```cpp
+template <typename Impl>
+class DeviceBase {
+public:
+    auto CreateBuffer(const BufferDesc& desc) -> Result<BufferHandle> {
+        return static_cast<Impl*>(this)->CreateBufferImpl(desc);
+    }
+    auto CreateTexture(const TextureDesc& desc) -> Result<TextureHandle> {
+        return static_cast<Impl*>(this)->CreateTextureImpl(desc);
+    }
+    // ...
+};
+
+class VulkanDevice : public DeviceBase<VulkanDevice> { /* ... */ };
+class D3D12Device  : public DeviceBase<D3D12Device>  { /* ... */ };
+```
+
+**Rationale**: Command recording is the hottest path (millions of calls/frame on Compat tiers). Virtual dispatch adds ~2-5ns per call due to indirect branch + cache miss. CRTP eliminates this entirely — the compiler inlines backend-specific code at each call site.
+
+**Type-erased facade** (for RenderGraph and higher layers that need backend-agnostic code):
+
+```cpp
+// Thin type-erased wrapper — used ONLY by RenderGraph and init code, never in per-draw paths
+class DeviceHandle {
+    // Stores a pointer + backend tag; dispatches via switch (5 cases)
+    // Acceptable overhead: called O(passes/frame) ≈ 50-100 times, not O(draws)
+};
+```
+
+### 2.3 Module Decomposition
+
+| Module | Responsibility | Header |
+|--------|---------------|--------|
+| **Core Types** | Enums, formats, handles, descriptors | `rhi/RhiTypes.h`, `rhi/RhiEnums.h`, `rhi/RhiFormats.h` |
+| **Device** | GPU device creation, capability query, resource factory | `rhi/Device.h` |
+| **CommandBuffer** | Command recording (graphics, compute, transfer) | `rhi/CommandBuffer.h` |
+| **Pipeline** | PSO creation (graphics, compute, ray tracing, mesh) | `rhi/Pipeline.h` |
+| **Resources** | Buffer, Texture, Sampler, AccelerationStructure | `rhi/Resources.h` |
+| **Descriptors** | Descriptor layout, binding, bindless table | `rhi/Descriptors.h` |
+| **Synchronization** | Fence, Semaphore (timeline + binary), Event | `rhi/Sync.h` |
+| **Swapchain** | Surface attachment, present | `rhi/Swapchain.h` |
+| **Query** | Timestamp, occlusion, pipeline statistics | `rhi/Query.h` |
+| **Shader** | Shader module creation from pre-compiled blobs | `rhi/Shader.h` |
+
+---
+
+## 3. Handle System
+
+### 3.1 Typed Opaque Handles
+
+All GPU resources are represented as **typed 64-bit handles** — no raw pointers cross the API boundary:
+
+```cpp
+// 64-bit handle: [generation:16 | index:32 | type:8 | backend:8]
+template <typename Tag>
+struct Handle {
+    uint64_t value = 0;
+    [[nodiscard]] constexpr bool IsValid() const noexcept { return value != 0; }
+    constexpr auto operator<=>(const Handle&) const = default;
+};
+
+using BufferHandle       = Handle<struct BufferTag>;
+using TextureHandle      = Handle<struct TextureTag>;
+using SamplerHandle      = Handle<struct SamplerTag>;
+using PipelineHandle     = Handle<struct PipelineTag>;
+using PipelineLayoutHandle = Handle<struct PipelineLayoutTag>;
+using ShaderModuleHandle = Handle<struct ShaderModuleTag>;
+using FenceHandle        = Handle<struct FenceTag>;
+using SemaphoreHandle    = Handle<struct SemaphoreTag>;
+using QueryPoolHandle    = Handle<struct QueryPoolTag>;
+using AccelStructHandle  = Handle<struct AccelStructTag>;
+using SwapchainHandle    = Handle<struct SwapchainTag>;
+using TextureViewHandle  = Handle<struct TextureViewTag>;
+using DeviceMemoryHandle = Handle<struct DeviceMemoryTag>; // Shared heap for aliasing / sparse
+```
+
+### 3.2 Generation Counter
+
+16-bit generation prevents use-after-free:
+
+```
+Create buffer → Handle{gen=1, idx=42, type=Buffer, backend=Vulkan}
+Destroy buffer → slot 42 freed, gen incremented to 2
+Stale handle {gen=1, idx=42} → lookup fails (gen mismatch) → debug assert
+```
+
+### 3.3 Handle Pool
+
+Each backend maintains a `HandlePool<T, Capacity>` — a slot array with free-list:
+
+- **O(1)** create (pop free list)
+- **O(1)** destroy (push free list, increment generation)
+- **O(1)** lookup (index + generation check)
+- No heap allocation after init (pre-allocated fixed-size pool)
+
+---
+
+## 4. Device & Capability System
+
+### 4.1 Device Creation
+
+```cpp
+struct DeviceDesc {
+    BackendType          backend;          // Vulkan14, D3D12, VulkanCompat, WebGPU, OpenGL43
+    uint32_t             adapterIndex;     // GPU selection (0 = default)
+    bool                 enableValidation; // Debug layers
+    bool                 enableGpuCapture; // RenderDoc / PIX integration
+    std::span<const char*> requiredExtensions; // Backend-specific
+};
+
+// Returns concrete device type (no virtual)
+auto CreateDevice(const DeviceDesc&) -> Result<VulkanDevice>;   // or D3D12Device, etc.
+```
+
+### 4.2 Capability Profile
+
+Queried once at device creation, immutable thereafter:
+
+```cpp
+struct GpuCapabilityProfile {
+    CapabilityTier       tier;                    // T1_Vulkan, T1_D3D12, T2, T3, T4
+
+    // Geometry
+    bool                 hasMeshShader;
+    bool                 hasTaskShader;
+    bool                 hasMultiDrawIndirect;
+    bool                 hasMultiDrawIndirectCount;
+    uint32_t             maxDrawIndirectCount;
+
+    // Descriptors
+    DescriptorModel      descriptorModel;         // DescriptorHeap, DescriptorBuffer, DescriptorSet, BindGroup, DirectBind
+    bool                 hasBindless;
+    bool                 hasPushDescriptors;
+    uint32_t             maxPushConstantSize;      // 128-256 bytes
+    uint32_t             maxBoundDescriptorSets;
+    uint64_t             maxStorageBufferSize;     // 128MB (WebGPU) to unlimited
+
+    // Compute
+    bool                 hasAsyncCompute;
+    bool                 hasTimelineSemaphore;
+    uint32_t             maxComputeWorkGroupCount[3];
+    uint32_t             maxComputeWorkGroupSize[3];
+
+    // Ray Tracing
+    bool                 hasRayQuery;
+    bool                 hasRayTracingPipeline;
+    bool                 hasAccelerationStructure;
+
+    // Shading
+    bool                 hasVariableRateShading;
+    bool                 hasFloat64;
+    bool                 hasInt64Atomics;
+    bool                 hasSubgroupOps;
+    uint32_t             subgroupSize;             // 32 (NVIDIA/Intel) or 64 (AMD)
+
+    // Memory
+    uint64_t             deviceLocalMemoryBytes;
+    uint64_t             hostVisibleMemoryBytes;
+    bool                 hasResizableBAR;
+    bool                 hasSparseBinding;
+    bool                 hasHardwareDecompression;  // GDeflate HW decode (VK_NV_memory_decompression / DirectStorage)
+    bool                 hasMemoryBudgetQuery;
+
+    // Limits
+    uint32_t             maxColorAttachments;       // 4-8
+    uint32_t             maxTextureSize2D;           // 4096-16384
+    uint32_t             maxTextureSizeCube;
+    uint32_t             maxFramebufferWidth;
+    uint32_t             maxFramebufferHeight;
+    uint32_t             maxViewports;
+    uint32_t             maxClipDistances;
+
+    // Format support (queried per-format)
+    auto IsFormatSupported(Format, FormatFeatureFlags) const -> bool;
+};
+```
+
+### 4.3 Tier Detection Logic
+
+```
+Vulkan 1.4 + mesh_shader + ray_query + descriptor_heap/buffer + timeline_semaphore → T1_Vulkan
+D3D12 + SM 6.5+ + mesh_shader + DXR 1.1                                           → T1_D3D12
+Vulkan 1.1 + ¬mesh_shader                                                          → T2
+WebGPU (Dawn/wgpu)                                                                  → T3
+OpenGL 4.3+                                                                         → T4
+```
+
+---
+
+## 5. Resource System
+
+### 5.1 Buffer
+
+```cpp
+enum class BufferUsage : uint32_t {
+    Vertex          = 1 << 0,
+    Index           = 1 << 1,
+    Uniform         = 1 << 2,
+    Storage         = 1 << 3,
+    Indirect        = 1 << 4,
+    TransferSrc     = 1 << 5,
+    TransferDst     = 1 << 6,
+    AccelStructInput = 1 << 7,
+    AccelStructStorage = 1 << 8,
+    ShaderDeviceAddress = 1 << 9,  // BDA (Vulkan/D3D12)
+    SparseBinding    = 1 << 10, // Sparse residency (T1 only): page commit/evict without realloc
+};
+
+enum class MemoryLocation : uint8_t {
+    GpuOnly,        // DEVICE_LOCAL
+    CpuToGpu,       // HOST_VISIBLE | HOST_COHERENT (staging, uniform ring)
+    GpuToCpu,       // HOST_VISIBLE | HOST_CACHED (readback)
+    Auto,           // Backend decides (ReBAR if available for small buffers)
+};
+
+struct BufferDesc {
+    uint64_t         size;
+    BufferUsage      usage;
+    MemoryLocation   memory;
+    bool             transient = false;  // RenderGraph transient: eligible for memory aliasing
+    const char*      debugName = nullptr;
+};
+
+// Device API
+auto CreateBuffer(const BufferDesc&) -> Result<BufferHandle>;
+void DestroyBuffer(BufferHandle);
+auto MapBuffer(BufferHandle) -> Result<void*>;
+void UnmapBuffer(BufferHandle);
+auto GetBufferDeviceAddress(BufferHandle) -> uint64_t;  // BDA, T1 only
+```
+
+### 5.2 Texture
+
+```cpp
+enum class TextureUsage : uint32_t {
+    Sampled         = 1 << 0,
+    Storage         = 1 << 1,
+    ColorAttachment = 1 << 2,
+    DepthStencil    = 1 << 3,
+    TransferSrc     = 1 << 4,
+    TransferDst     = 1 << 5,
+    InputAttachment = 1 << 6,
+    ShadingRate     = 1 << 7,
+    SparseBinding   = 1 << 8,  // Sparse residency (T1 only)
+};
+
+enum class TextureDimension : uint8_t {
+    Tex1D, Tex2D, Tex3D, TexCube, Tex2DArray, TexCubeArray,
+};
+
+struct TextureDesc {
+    TextureDimension dimension;
+    Format           format;
+    uint32_t         width, height, depth;
+    uint32_t         mipLevels;
+    uint32_t         arrayLayers;
+    uint32_t         sampleCount;        // MSAA: 1, 2, 4, 8
+    TextureUsage     usage;
+    MemoryLocation   memory;             // GpuOnly for render targets
+    bool             transient = false;  // RenderGraph transient: eligible for memory aliasing
+    const char*      debugName = nullptr;
+};
+
+struct TextureViewDesc {
+    TextureHandle    texture;
+    TextureDimension viewDimension;
+    Format           format;             // Reinterpret (e.g., SRGB view of UNORM)
+    uint32_t         baseMipLevel, mipLevelCount;
+    uint32_t         baseArrayLayer, arrayLayerCount;
+    TextureAspect    aspect;             // Color, Depth, Stencil
+};
+
+auto CreateTexture(const TextureDesc&) -> Result<TextureHandle>;
+auto CreateTextureView(const TextureViewDesc&) -> Result<TextureViewHandle>;
+void DestroyTexture(TextureHandle);
+```
+
+### 5.3 Sampler
+
+```cpp
+struct SamplerDesc {
+    Filter           magFilter, minFilter, mipFilter;
+    AddressMode      addressU, addressV, addressW;
+    float            mipLodBias;
+    float            maxAnisotropy;      // 0 = disabled, 1-16
+    CompareOp        compareOp;          // None = no compare
+    float            minLod, maxLod;
+    BorderColor      borderColor;
+};
+
+auto CreateSampler(const SamplerDesc&) -> Result<SamplerHandle>;
+```
+
+### 5.4 Deferred Destruction Queue
+
+Resources are not destroyed immediately — they enter a per-frame destruction queue:
+
+```
+Frame N: user calls DestroyBuffer(h)
+  → h pushed to destructionQueue_[frameIndex % kMaxFramesInFlight]
+Frame N+2: fence for frame N signaled
+  → destructionQueue_[frameIndex] drained, actual API objects freed
+```
+
+This eliminates use-after-free when GPU is still referencing the resource. No ref-counting overhead.
+
+### 5.5 Sparse Binding (T1 Only)
+
+Sparse binding enables page-granular memory commitment without reallocating the backing resource. Required by ClusterDAG streaming (§5.6 of rendering-pipeline-architecture) and VSM physical page management (§8).
+
+```cpp
+struct SparsePageSize {
+    uint64_t bufferPageSize;         // Typical: 64KB
+    uint64_t imagePageSize;          // Typical: 64KB (standard) or 2MB (large page)
+};
+
+auto GetSparsePageSize() const -> SparsePageSize;
+
+struct SparseBufferBind {
+    BufferHandle     buffer;
+    uint64_t         resourceOffset;  // Byte offset (must be page-aligned)
+    uint64_t         size;            // Byte count (must be page-aligned)
+    DeviceMemoryHandle memory;        // Null = unbind (evict page)
+    uint64_t         memoryOffset;
+};
+
+struct SparseTextureBind {
+    TextureHandle    texture;
+    TextureSubresourceRange subresource;
+    Offset3D         offset;          // Texel offset (page-aligned)
+    Extent3D         extent;          // Texel extent (page-aligned)
+    DeviceMemoryHandle memory;        // Null = unbind
+    uint64_t         memoryOffset;
+};
+
+// SemaphoreSubmitInfo defined in §7.4
+struct SparseBindDesc {
+    std::span<const SparseBufferBind>  bufferBinds;
+    std::span<const SparseTextureBind> textureBinds;
+    std::span<const SemaphoreSubmitInfo> waitSemaphores;   // Sync with prior GPU work
+    std::span<const SemaphoreSubmitInfo> signalSemaphores; // Signal after bind completes
+};
+
+void SubmitSparseBinds(const SparseBindDesc&);
+```
+
+**Backend mapping**:
+
+| RHI | Vulkan 1.4 | D3D12 |
+|-----|-----------|-------|
+| `SubmitSparseBinds` | `vkQueueBindSparse` (on sparse-capable queue) | `UpdateTileMappings` on reserved resource |
+| `SparseBufferBind` | `VkSparseBufferMemoryBindInfo` + `VkSparseMemoryBind` | `D3D12_TILED_RESOURCE_COORDINATE` + `D3D12_TILE_RANGE_FLAGS` |
+| `SparseTextureBind` | `VkSparseImageMemoryBindInfo` + `VkSparseImageMemoryBind` | `UpdateTileMappings` with subresource tiling |
+
+T2/T3/T4: sparse binding unavailable. Streaming on these tiers uses full-resource reallocation or CPU-side paging.
+
+### 5.6 Transient & Memory Aliasing API
+
+RenderGraph-owned transient resources use `transient = true` in `BufferDesc` / `TextureDesc`. The RHI provides memory aliasing primitives; aliasing policy is determined by RenderGraph.
+
+```cpp
+// Allocate a shared memory heap for aliasing
+struct MemoryHeapDesc {
+    uint64_t         size;
+    MemoryLocation   memory;          // Typically GpuOnly
+    const char*      debugName = nullptr;
+};
+
+auto CreateMemoryHeap(const MemoryHeapDesc&) -> Result<DeviceMemoryHandle>;
+void DestroyMemoryHeap(DeviceMemoryHandle);
+
+// Bind a transient resource to an offset within a shared heap
+void AliasBufferMemory(BufferHandle, DeviceMemoryHandle heap, uint64_t offset);
+void AliasTextureMemory(TextureHandle, DeviceMemoryHandle heap, uint64_t offset);
+
+// Query alignment/size requirements for aliasing
+struct MemoryRequirements {
+    uint64_t size;
+    uint64_t alignment;
+    uint32_t memoryTypeBits;   // Backend-specific type mask
+};
+
+auto GetBufferMemoryRequirements(BufferHandle) -> MemoryRequirements;
+auto GetTextureMemoryRequirements(TextureHandle) -> MemoryRequirements;
+```
+
+**Backend mapping**:
+
+| RHI | Vulkan 1.4 | D3D12 | WebGPU / OpenGL |
+|-----|-----------|-------|-----------------|
+| `CreateMemoryHeap` | `vkAllocateMemory` | `CreateHeap` | N/A (no aliasing) |
+| `AliasBufferMemory` | `vkBindBufferMemory2` to shared `VkDeviceMemory` | `CreatePlacedResource` in shared `ID3D12Heap` | Fallback: separate allocation |
+| `AliasTextureMemory` | `vkBindImageMemory2` to shared `VkDeviceMemory` | `CreatePlacedResource` in shared `ID3D12Heap` | Fallback: separate allocation |
+
+---
+
+## 6. Descriptor & Binding System
+
+This is the most complex part of the RHI due to fundamental divergence across backends.
+
+### 6.1 Unified Binding Model
+
+The RHI exposes a **3-level binding hierarchy** that maps naturally to all backends:
+
+```
+Level 0: Push Constants / Root Constants     (per-draw, 128-256 bytes)
+Level 1: Per-Frame Bindings                  (camera UBO, global SSBOs)
+Level 2: Per-Material / Per-Pass Bindings    (textures, material UBOs)
+Level 3: Bindless Table                      (all textures/buffers by index)
+```
+
+### 6.2 Descriptor Layout
+
+```cpp
+enum class BindingType : uint8_t {
+    UniformBuffer,
+    StorageBuffer,
+    SampledTexture,
+    StorageTexture,
+    Sampler,
+    CombinedTextureSampler,  // OpenGL/Vulkan convenience
+    AccelerationStructure,
+    // Bindless variants (T1 only)
+    BindlessTextures,
+    BindlessBuffers,
+};
+
+struct BindingDesc {
+    uint32_t     binding;
+    BindingType  type;
+    ShaderStage  stages;
+    uint32_t     count;          // Array size, 0 = runtime-sized (bindless)
+};
+
+struct DescriptorLayoutDesc {
+    std::span<const BindingDesc> bindings;
+    bool                         pushDescriptor;  // Vulkan push descriptor optimization
+};
+
+auto CreateDescriptorLayout(const DescriptorLayoutDesc&) -> Result<DescriptorLayoutHandle>;
+```
+
+### 6.3 Pipeline Layout
+
+```cpp
+struct PipelineLayoutDesc {
+    std::span<const DescriptorLayoutHandle> setLayouts;  // max 4 sets
+    struct PushConstantRange {
+        ShaderStage stages;
+        uint32_t    offset;
+        uint32_t    size;
+    };
+    std::span<const PushConstantRange> pushConstants;    // max 256B total
+};
+
+auto CreatePipelineLayout(const PipelineLayoutDesc&) -> Result<PipelineLayoutHandle>;
+```
+
+### 6.4 Descriptor Set / Bind Group
+
+```cpp
+struct DescriptorWrite {
+    uint32_t         binding;
+    uint32_t         arrayElement;
+    BindingType      type;
+    // Union of resource references
+    BufferHandle     buffer;
+    uint64_t         bufferOffset, bufferRange;
+    TextureViewHandle textureView;
+    SamplerHandle    sampler;
+    AccelStructHandle accelStruct;
+};
+
+struct DescriptorSetDesc {
+    DescriptorLayoutHandle layout;
+    std::span<const DescriptorWrite> writes;
+};
+
+auto CreateDescriptorSet(const DescriptorSetDesc&) -> Result<DescriptorSetHandle>;
+void UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>);
+```
+
+### 6.5 Backend Mapping
+
+| RHI Concept | Vulkan 1.4 (T1) | D3D12 (T1) | Vulkan Compat (T2) | WebGPU (T3) | OpenGL (T4) |
+|-------------|-----------------|------------|-------------------|-------------|-------------|
+| DescriptorLayout | `VkDescriptorSetLayout` (or descriptor heap layout) | Root signature | `VkDescriptorSetLayout` | `GPUBindGroupLayout` | N/A (implicit) |
+| DescriptorSet | Descriptor heap offset | Descriptor table in CBV/SRV/UAV heap | `VkDescriptorSet` | `GPUBindGroup` | Direct `glBindBufferRange` / `glBindTextureUnit` |
+| PipelineLayout | `VkPipelineLayout` (or descriptor heap pipeline layout) | Root signature | `VkPipelineLayout` | `GPUPipelineLayout` | N/A |
+| Push constants | `vkCmdPushConstants` (256B) | Root constants (64 DWORDs) | `vkCmdPushConstants` | Emulated via 256B UBO | Emulated via 128B UBO |
+| Bindless | Descriptor heap indexing | CBV/SRV/UAV heap indexing | Descriptor indexing (Vk 1.2) | N/A (per-draw bind group) | `GL_ARB_bindless_texture` or array |
+| Update frequency | Offset into heap (zero-cost) | Offset into heap (zero-cost) | `vkUpdateDescriptorSets` | New `GPUBindGroup` | `glBindBufferRange` |
+
+### 6.6 Bindless Table
+
+The `BindlessTable` provides a unified resource indexing layer:
+
+```cpp
+class BindlessTable {
+public:
+    auto RegisterTexture(TextureViewHandle) -> uint32_t;   // Returns stable index
+    auto RegisterBuffer(BufferHandle, uint64_t offset, uint64_t range) -> uint32_t;
+    void Unregister(uint32_t index);
+
+    // Bind the table to a command buffer (once per frame)
+    void Bind(CommandBuffer&, uint32_t set);
+
+    // Backend-specific: returns descriptor heap / descriptor set / bind group
+    auto GetNativeBinding() const -> NativeBindingInfo;
+};
+```
+
+| Backend | Implementation |
+|---------|---------------|
+| Vulkan 1.4 | Descriptor heap with `VK_EXT_descriptor_heap`; fallback to `VK_EXT_descriptor_buffer` |
+| D3D12 | CBV/SRV/UAV descriptor heap (shader-visible) |
+| Vulkan Compat | Large descriptor set with `VK_EXT_descriptor_indexing` (update-after-bind) |
+| WebGPU | Per-draw bind group with sampled textures (no true bindless) |
+| OpenGL | `GL_ARB_bindless_texture` if available; else texture array + index |
+
+---
+
+## 7. Command Buffer System
+
+### 7.1 Command Buffer Types
+
+```cpp
+enum class QueueType : uint8_t {
+    Graphics,       // Graphics + compute + transfer
+    Compute,        // Compute + transfer (async compute)
+    Transfer,       // Transfer only (DMA / copy engine)
+};
+
+struct CommandBufferDesc {
+    QueueType type;
+};
+
+auto CreateCommandBuffer(const CommandBufferDesc&) -> Result<CommandBufferHandle>;
+```
+
+### 7.2 Command Recording API
+
+All commands are recorded into a `CommandBuffer`. The API is designed for **zero-allocation recording** — no heap allocations during command recording.
+
+```cpp
+// --- State Binding ---
+void CmdBindPipeline(PipelineHandle);
+void CmdBindDescriptorSet(uint32_t set, DescriptorSetHandle, std::span<const uint32_t> dynamicOffsets = {});
+void CmdPushConstants(ShaderStage stages, uint32_t offset, uint32_t size, const void* data);
+void CmdBindVertexBuffer(uint32_t binding, BufferHandle, uint64_t offset);
+void CmdBindIndexBuffer(BufferHandle, uint64_t offset, IndexType);
+
+// --- Draw ---
+void CmdDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance);
+void CmdDrawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance);
+void CmdDrawIndirect(BufferHandle, uint64_t offset, uint32_t drawCount, uint32_t stride);
+void CmdDrawIndexedIndirect(BufferHandle, uint64_t offset, uint32_t drawCount, uint32_t stride);
+void CmdDrawIndexedIndirectCount(BufferHandle argsBuffer, uint64_t argsOffset, BufferHandle countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride);
+void CmdDrawMeshTasks(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ);
+void CmdDrawMeshTasksIndirect(BufferHandle, uint64_t offset, uint32_t drawCount, uint32_t stride);
+void CmdDrawMeshTasksIndirectCount(BufferHandle argsBuffer, uint64_t argsOffset, BufferHandle countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride);
+
+// --- Compute ---
+void CmdDispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ);
+void CmdDispatchIndirect(BufferHandle, uint64_t offset);
+
+// --- Transfer ---
+void CmdCopyBuffer(BufferHandle src, uint64_t srcOffset, BufferHandle dst, uint64_t dstOffset, uint64_t size);
+void CmdCopyBufferToTexture(BufferHandle src, TextureHandle dst, const BufferTextureCopyRegion&);
+void CmdCopyTextureToBuffer(TextureHandle src, BufferHandle dst, const BufferTextureCopyRegion&);
+void CmdCopyTexture(TextureHandle src, TextureHandle dst, const TextureCopyRegion&);
+void CmdBlitTexture(TextureHandle src, TextureHandle dst, const TextureBlitRegion&, Filter);
+void CmdFillBuffer(BufferHandle, uint64_t offset, uint64_t size, uint32_t value);
+void CmdClearColorTexture(TextureHandle, const ClearColor&, const TextureSubresourceRange&);
+void CmdClearDepthStencil(TextureHandle, float depth, uint8_t stencil, const TextureSubresourceRange&);
+
+// --- Synchronization (explicit, RenderGraph-driven) ---
+void CmdPipelineBarrier(const PipelineBarrierDesc&);
+void CmdBufferBarrier(BufferHandle, const BufferBarrierDesc&);
+void CmdTextureBarrier(TextureHandle, const TextureBarrierDesc&);
+
+// --- Dynamic Rendering (no render pass objects) ---
+struct RenderingAttachment {
+    TextureViewHandle  view;
+    AttachmentLoadOp   loadOp;
+    AttachmentStoreOp  storeOp;
+    ClearValue         clearValue;
+    TextureViewHandle  resolveView;  // MSAA resolve target
+};
+
+struct RenderingDesc {
+    Rect2D                              renderArea;
+    std::span<const RenderingAttachment> colorAttachments;
+    const RenderingAttachment*          depthAttachment;
+    const RenderingAttachment*          stencilAttachment;
+    uint32_t                            viewMask;  // Multiview (XR)
+};
+
+void CmdBeginRendering(const RenderingDesc&);
+void CmdEndRendering();
+
+// --- Dynamic State ---
+void CmdSetViewport(const Viewport&);
+void CmdSetScissor(const Rect2D&);
+void CmdSetDepthBias(float constantFactor, float clamp, float slopeFactor);
+void CmdSetStencilReference(uint32_t ref);
+void CmdSetBlendConstants(const float[4]);
+void CmdSetLineWidth(float);  // T4 only
+
+// --- Variable Rate Shading (T1 only) ---
+enum class ShadingRate : uint8_t {
+    Rate1x1 = 0,   // Full rate
+    Rate1x2 = 1,
+    Rate2x1 = 2,
+    Rate2x2 = 3,   // Quarter rate
+    Rate2x4 = 4,
+    Rate4x2 = 5,
+    Rate4x4 = 6,   // 1/16 rate
+};
+
+enum class ShadingRateCombinerOp : uint8_t {
+    Keep,           // Use pipeline rate
+    Replace,        // Use primitive/attachment rate
+    Min,
+    Max,
+    Mul,            // Multiply rates (product)
+};
+
+// Set per-draw pipeline shading rate + combiner ops for [primitive, attachment] stages
+void CmdSetShadingRate(ShadingRate baseRate, const ShadingRateCombinerOp combinerOps[2]);
+
+// Bind a shading rate image (R8_UINT, per 16x16 tile) for attachment-based VRS
+void CmdSetShadingRateImage(TextureViewHandle rateImage);  // Null = disable attachment VRS
+
+// --- Query ---
+void CmdBeginQuery(QueryPoolHandle, uint32_t index);
+void CmdEndQuery(QueryPoolHandle, uint32_t index);
+void CmdWriteTimestamp(PipelineStage, QueryPoolHandle, uint32_t index);
+void CmdResetQueryPool(QueryPoolHandle, uint32_t first, uint32_t count);
+
+// --- Debug ---
+void CmdBeginDebugLabel(const char* name, const float color[4]);
+void CmdEndDebugLabel();
+void CmdInsertDebugLabel(const char* name, const float color[4]);
+```
+
+### 7.3 Backend Mapping for Dynamic Rendering
+
+| RHI | Vulkan 1.4 | D3D12 | Vulkan Compat | WebGPU | OpenGL |
+|-----|-----------|-------|--------------|--------|--------|
+| `CmdBeginRendering` | `vkCmdBeginRendering` (dynamic rendering, core 1.3) | `OMSetRenderTargets` + `BeginRenderPass` (enhanced barriers) | `vkCmdBeginRendering` (if ext available) or `vkCmdBeginRenderPass` | `beginRenderPass()` on encoder | `glBindFramebuffer` + `glClear` |
+| `CmdEndRendering` | `vkCmdEndRendering` | `EndRenderPass` | `vkCmdEndRendering` / `vkCmdEndRenderPass` | `end()` on encoder | (implicit) |
+
+### 7.4 Command Buffer Submission
+
+```cpp
+// Semaphore synchronization info for GPU-GPU submit (binary or timeline)
+struct SemaphoreSubmitInfo {
+    SemaphoreHandle semaphore;
+    uint64_t        value;          // Timeline value (ignored for Binary semaphores)
+    PipelineStage   stageMask;      // Stage to wait/signal at
+};
+
+struct SubmitDesc {
+    std::span<const CommandBufferHandle> commandBuffers;
+    std::span<const SemaphoreSubmitInfo> waitSemaphores;
+    std::span<const SemaphoreSubmitInfo> signalSemaphores;
+    FenceHandle                          signalFence;
+};
+
+void Submit(QueueType, const SubmitDesc&);
+void Present(SwapchainHandle, SemaphoreHandle renderFinished);
+```
+
+**Queue management**: The device internally manages queue families and indices. `Submit(QueueType, ...)` routes to the appropriate queue. The device guarantees:
+
+- **Graphics queue**: always available (all tiers)
+- **Async compute queue**: separate queue when `GpuCapabilityProfile::hasAsyncCompute` is true (T1). Falls back to graphics queue otherwise.
+- **Transfer queue**: dedicated transfer queue when available (T1 Vulkan 1.4 dedicated transfer). Falls back to graphics queue otherwise.
+
+Queue creation and family selection are internal to the device — no explicit `GetQueue()` API. This keeps the public interface thin while the backend selects optimal queue families at `CreateDevice` time. Timeline semaphores (`SemaphoreSubmitInfo::value`) synchronize work across different queue types.
+
+---
+
+## 8. Pipeline System
+
+### 8.1 Graphics Pipeline
+
+```cpp
+struct VertexInputBinding {
+    uint32_t    binding;
+    uint32_t    stride;
+    VertexInputRate inputRate;  // PerVertex, PerInstance
+};
+
+struct VertexInputAttribute {
+    uint32_t    location;
+    uint32_t    binding;
+    Format      format;
+    uint32_t    offset;
+};
+
+struct VertexInputState {
+    std::span<const VertexInputBinding>   bindings;
+    std::span<const VertexInputAttribute> attributes;
+};
+
+struct GraphicsPipelineDesc {
+    // Shaders (set what's needed; mesh shader path ignores vertex input)
+    ShaderModuleHandle   vertexShader;
+    ShaderModuleHandle   fragmentShader;
+    ShaderModuleHandle   taskShader;       // T1 mesh shader path
+    ShaderModuleHandle   meshShader;       // T1 mesh shader path
+
+    // Vertex input (ignored when meshShader is set)
+    VertexInputState     vertexInput;
+
+    // Fixed-function state
+    PrimitiveTopology    topology;
+    bool                 primitiveRestart;
+    PolygonMode          polygonMode;
+    CullMode             cullMode;
+    FrontFace            frontFace;
+    float                lineWidth;
+
+    // Depth/stencil
+    bool                 depthTestEnable;
+    bool                 depthWriteEnable;
+    CompareOp            depthCompareOp;
+    bool                 stencilTestEnable;
+    StencilOpState       stencilFront, stencilBack;
+    bool                 depthBiasEnable;
+    bool                 depthClampEnable;
+
+    // Blend (per color attachment)
+    struct ColorAttachmentBlend {
+        bool             blendEnable;
+        BlendFactor      srcColor, dstColor;
+        BlendOp          colorOp;
+        BlendFactor      srcAlpha, dstAlpha;
+        BlendOp          alphaOp;
+        ColorWriteMask   writeMask;
+    };
+    std::span<const ColorAttachmentBlend> colorBlends;
+
+    // Render target formats (dynamic rendering — no render pass object)
+    std::span<const Format> colorFormats;
+    Format               depthFormat;
+    Format               stencilFormat;
+    uint32_t             sampleCount;
+    uint32_t             viewMask;         // Multiview (XR)
+
+    // Layout
+    PipelineLayoutHandle pipelineLayout;
+
+    // Specialization constants (Vulkan/Slang)
+    std::span<const SpecializationConstant> specializationConstants;
+
+    constexpr bool IsMeshShaderPipeline() const noexcept {
+        return meshShader.IsValid();
+    }
+};
+
+auto CreateGraphicsPipeline(const GraphicsPipelineDesc&) -> Result<PipelineHandle>;
+```
+
+### 8.2 Compute Pipeline
+
+```cpp
+struct ComputePipelineDesc {
+    ShaderModuleHandle   computeShader;
+    PipelineLayoutHandle pipelineLayout;
+    std::span<const SpecializationConstant> specializationConstants;
+};
+
+auto CreateComputePipeline(const ComputePipelineDesc&) -> Result<PipelineHandle>;
+```
+
+### 8.3 Ray Tracing Pipeline (T1 only)
+
+```cpp
+struct RayTracingPipelineDesc {
+    std::span<const ShaderModuleHandle> shaderStages;
+    std::span<const RayTracingShaderGroup> shaderGroups;
+    uint32_t             maxRecursionDepth;
+    PipelineLayoutHandle pipelineLayout;
+};
+
+auto CreateRayTracingPipeline(const RayTracingPipelineDesc&) -> Result<PipelineHandle>;
+```
+
+### 8.4 Pipeline Cache
+
+```cpp
+auto CreatePipelineCache(std::span<const uint8_t> initialData = {}) -> Result<PipelineCacheHandle>;
+auto GetPipelineCacheData(PipelineCacheHandle) -> std::vector<uint8_t>;
+```
+
+All pipeline creation functions accept an optional `PipelineCacheHandle` for disk-persistent caching.
+
+---
+
+## 9. Synchronization Primitives
+
+### 9.1 Fence (CPU-GPU)
+
+```cpp
+auto CreateFence(bool signaled = false) -> Result<FenceHandle>;
+void WaitFence(FenceHandle, uint64_t timeout = UINT64_MAX);
+void ResetFence(FenceHandle);
+auto GetFenceStatus(FenceHandle) -> bool;
+```
+
+### 9.2 Semaphore (GPU-GPU)
+
+```cpp
+enum class SemaphoreType : uint8_t {
+    Binary,         // Swapchain acquire/present
+    Timeline,       // Async compute sync (T1 only)
+};
+
+struct SemaphoreDesc {
+    SemaphoreType type;
+    uint64_t      initialValue;  // Timeline only
+};
+
+auto CreateSemaphore(const SemaphoreDesc&) -> Result<SemaphoreHandle>;
+void SignalSemaphore(SemaphoreHandle, uint64_t value);    // Timeline, CPU signal
+void WaitSemaphore(SemaphoreHandle, uint64_t value, uint64_t timeout); // Timeline, CPU wait
+auto GetSemaphoreValue(SemaphoreHandle) -> uint64_t;      // Timeline
+```
+
+### 9.3 Barrier (In-Command-Buffer)
+
+```cpp
+struct BufferBarrierDesc {
+    PipelineStage  srcStage, dstStage;
+    AccessFlags    srcAccess, dstAccess;
+    uint64_t       offset, size;         // WHOLE_SIZE = entire buffer
+    QueueType      srcQueue, dstQueue;   // Queue ownership transfer
+};
+
+struct TextureBarrierDesc {
+    PipelineStage  srcStage, dstStage;
+    AccessFlags    srcAccess, dstAccess;
+    TextureLayout  oldLayout, newLayout;
+    TextureSubresourceRange subresource;
+    QueueType      srcQueue, dstQueue;
+};
+
+struct PipelineBarrierDesc {
+    PipelineStage  srcStage, dstStage;
+    AccessFlags    srcAccess, dstAccess;  // Global memory barrier
+};
+```
+
+### 9.4 Backend Mapping
+
+| RHI | Vulkan 1.4 | D3D12 | Vulkan Compat | WebGPU | OpenGL |
+|-----|-----------|-------|--------------|--------|--------|
+| Fence | `VkFence` | `ID3D12Fence` | `VkFence` | `mapAsync` callback | `glFenceSync` |
+| Timeline Semaphore | `VkSemaphore` (timeline) | `ID3D12Fence` (inherently timeline) | `VkSemaphore` (if ext) | N/A | N/A |
+| Binary Semaphore | `VkSemaphore` (binary) | N/A (use fence) | `VkSemaphore` | N/A | N/A |
+| Buffer Barrier | `vkCmdPipelineBarrier2` | Enhanced barrier / legacy `ResourceBarrier` | `vkCmdPipelineBarrier` | Implicit | `glMemoryBarrier` |
+| Texture Barrier | `vkCmdPipelineBarrier2` (image) | Enhanced barrier (texture) | `vkCmdPipelineBarrier` (image) | Implicit | `glMemoryBarrier` + `glTextureBarrier` |
+
+**D3D12 Enhanced Barriers mapping note**: The RHI barrier model is Vulkan-centric (stage + access flags). D3D12 Enhanced Barriers use a **layout-based** model (`D3D12_BARRIER_LAYOUT`). The D3D12 backend maps RHI barriers as follows:
+
+| RHI Concept | D3D12 Enhanced Barrier Equivalent |
+|-------------|-----------------------------------|
+| `TextureLayout` | `D3D12_BARRIER_LAYOUT` (1:1 mapping: `ColorAttachment` → `DIRECT_QUEUE_SHADER_RESOURCE`, etc.) |
+| `srcStage` / `dstStage` | `D3D12_BARRIER_SYNC` flags (merge stage masks into sync scope) |
+| `srcAccess` / `dstAccess` | `D3D12_BARRIER_ACCESS` flags (direct mapping) |
+| Queue ownership transfer | `D3D12_TEXTURE_BARRIER` with cross-queue layout transition |
+
+The D3D12 backend detects Enhanced Barriers support at init (`ID3D12Device10::CheckFeatureSupport`) and falls back to legacy `ResourceBarrier` if unavailable. The RHI public API remains unchanged — the mapping is internal to the D3D12 backend.
+
+---
+
+## 10. Acceleration Structure (T1 Only)
+
+```cpp
+struct AccelStructGeometryDesc {
+    AccelStructGeometryType type;  // Triangles, AABBs
+    BufferHandle     vertexBuffer;
+    uint64_t         vertexOffset;
+    uint32_t         vertexStride;
+    Format           vertexFormat;
+    uint32_t         vertexCount;
+    BufferHandle     indexBuffer;
+    uint64_t         indexOffset;
+    IndexType        indexType;
+    uint32_t         triangleCount;
+    BufferHandle     transformBuffer;  // Optional 3x4 row-major
+    uint64_t         transformOffset;
+    AccelStructGeometryFlags flags;   // Opaque, NoDuplicateAnyHit
+};
+
+struct BLASDesc {
+    std::span<const AccelStructGeometryDesc> geometries;
+    AccelStructBuildFlags flags;  // PreferFastTrace, PreferFastBuild, AllowUpdate
+};
+
+struct TLASDesc {
+    BufferHandle     instanceBuffer;   // Array of AccelStructInstance (64B each)
+    uint32_t         instanceCount;
+    AccelStructBuildFlags flags;
+};
+
+auto CreateBLAS(const BLASDesc&) -> Result<AccelStructHandle>;
+auto CreateTLAS(const TLASDesc&) -> Result<AccelStructHandle>;
+
+// Build commands (in command buffer)
+void CmdBuildBLAS(AccelStructHandle, BufferHandle scratch);
+void CmdBuildTLAS(AccelStructHandle, BufferHandle scratch);
+void CmdUpdateBLAS(AccelStructHandle, BufferHandle scratch);  // Refit
+```
+
+---
+
+## 11. Swapchain
+
+```cpp
+struct SwapchainDesc {
+    NativeSurfaceHandle surface;       // Platform-specific (HWND, wl_surface, etc.)
+    uint32_t            width, height;
+    Format              preferredFormat;  // BGRA8_SRGB typical
+    PresentMode         presentMode;     // Immediate, Mailbox, Fifo, FifoRelaxed
+    uint32_t            imageCount;      // 2-3
+    bool                hdr;             // HDR10 / scRGB
+};
+
+auto CreateSwapchain(const SwapchainDesc&) -> Result<SwapchainHandle>;
+void DestroySwapchain(SwapchainHandle);
+auto ResizeSwapchain(SwapchainHandle, uint32_t width, uint32_t height) -> Result<void>;
+auto AcquireNextImage(SwapchainHandle, SemaphoreHandle signalSemaphore, FenceHandle signalFence = {}) -> Result<uint32_t>;
+auto GetSwapchainTexture(SwapchainHandle, uint32_t imageIndex) -> TextureHandle;
+void Present(SwapchainHandle, std::span<const SemaphoreHandle> waitSemaphores);
+```
+
+---
+
+## 12. Shader Module
+
+```cpp
+enum class ShaderStage : uint32_t {
+    Vertex      = 1 << 0,
+    Fragment    = 1 << 1,
+    Compute     = 1 << 2,
+    Task        = 1 << 3,
+    Mesh        = 1 << 4,
+    RayGen      = 1 << 5,
+    AnyHit      = 1 << 6,
+    ClosestHit  = 1 << 7,
+    Miss        = 1 << 8,
+    Intersection = 1 << 9,
+    Callable    = 1 << 10,
+    AllGraphics = Vertex | Fragment,
+    All         = 0x7FF,
+};
+
+struct ShaderModuleDesc {
+    ShaderStage              stage;
+    std::span<const uint8_t> code;        // SPIR-V, DXIL, GLSL text, WGSL text
+    const char*              entryPoint;  // "main" typical
+    const char*              debugName;
+};
+
+auto CreateShaderModule(const ShaderModuleDesc&) -> Result<ShaderModuleHandle>;
+```
+
+---
+
+## 13. Memory Management Strategy
+
+### 13.1 Allocator Architecture
+
+```
+┌────────────────────────────────────────────────┐
+│              RHI Memory Allocator               │
+├──────────┬──────────┬──────────┬───────────────┤
+│ VMA      │ D3D12MA  │ VMA      │ WebGPU/GL     │
+│ (Vk 1.4) │          │ (Compat) │ (API-managed) │
+└──────────┴──────────┴──────────┴───────────────┘
+```
+
+| Backend | Allocator | Strategy |
+|---------|-----------|----------|
+| Vulkan 1.4 | VMA (Vulkan Memory Allocator) | Dedicated alloc for large (>256KB); sub-alloc for small; sparse binding for streaming |
+| D3D12 | D3D12MA (D3D12 Memory Allocator) | Placed resources in heaps; reserved resources for sparse |
+| Vulkan Compat | VMA | Same as T1 minus sparse |
+| WebGPU | API-managed | `createBuffer` / `createTexture` (no explicit memory) |
+| OpenGL | API-managed | `glBufferStorage` / `glTexStorage2D` (immutable) |
+
+### 13.2 Staging Ring Buffer
+
+Per-frame ring buffer for CPU→GPU uploads:
+
+```cpp
+class StagingRing {
+    BufferHandle ring_;          // CpuToGpu, persistent-mapped
+    uint64_t     capacity_;     // 64MB default (configurable)
+    uint64_t     writeOffset_;  // Monotonically increasing, wraps
+
+    struct Allocation {
+        void*    cpuPtr;
+        uint64_t gpuOffset;
+        uint64_t size;
+    };
+
+    auto Allocate(uint64_t size, uint64_t alignment) -> Result<Allocation>;
+    void Reset(uint64_t fenceValue);  // Reclaim after GPU consumption
+};
+```
+
+### 13.3 Transient Resource Pool (RenderGraph-Owned)
+
+RenderGraph allocates transient textures (GBuffer, HiZ, etc.) from a pool that aliases non-overlapping lifetimes:
+
+```
+RenderGraph lifetime analysis (Kahn sort) → aliasing groups
+  → VkDeviceMemory / ID3D12Heap shared by non-overlapping resources
+  → 30-50% VRAM savings on render targets
+```
+
+The RHI provides the primitives (see §5.6 Transient & Memory Aliasing API):
+
+- `BufferDesc::transient` / `TextureDesc::transient` — marks resources eligible for aliasing
+- `CreateMemoryHeap` — allocates a shared heap
+- `AliasBufferMemory` / `AliasTextureMemory` — binds transient resources to offsets within shared heaps
+- `GetBufferMemoryRequirements` / `GetTextureMemoryRequirements` — queries size/alignment for placement
+
+Aliasing policy (lifetime analysis, group assignment, heap sizing) is entirely in RenderGraph — RHI provides primitives only.
+
+---
+
+## 14. Error Handling
+
+All fallible operations return `std::expected<T, RhiError>`:
+
+```cpp
+enum class RhiError : uint32_t {
+    OutOfDeviceMemory,
+    OutOfHostMemory,
+    DeviceLost,
+    SurfaceLost,
+    FormatNotSupported,
+    FeatureNotSupported,
+    InvalidHandle,
+    InvalidParameter,
+    ShaderCompilationFailed,
+    PipelineCreationFailed,
+    TooManyObjects,
+};
+
+template <typename T>
+using Result = std::expected<T, RhiError>;
+```
+
+No exceptions in hot paths. `DeviceLost` triggers graceful recovery (re-create device + all resources).
+
+---
+
+## 15. Debug & Profiling Integration
+
+### 15.1 Object Naming
+
+All `*Desc` structs have `const char* debugName`. Backends forward to:
+
+| Backend | API |
+|---------|-----|
+| Vulkan | `vkSetDebugUtilsObjectNameEXT` |
+| D3D12 | `SetName` (wide string) |
+| OpenGL | `glObjectLabel` |
+| WebGPU | `label` field |
+
+### 15.2 Debug Labels
+
+`CmdBeginDebugLabel` / `CmdEndDebugLabel` map to:
+
+| Backend | API |
+|---------|-----|
+| Vulkan | `vkCmdBeginDebugUtilsLabelEXT` |
+| D3D12 | `PIXBeginEvent` / `PIXEndEvent` |
+| OpenGL | `glPushDebugGroup` / `glPopDebugGroup` |
+| WebGPU | `pushDebugGroup` / `popDebugGroup` |
+
+### 15.3 GPU Timestamps
+
+```cpp
+auto CreateQueryPool(QueryType type, uint32_t count) -> Result<QueryPoolHandle>;
+auto GetQueryResults(QueryPoolHandle, uint32_t first, uint32_t count, std::span<uint64_t> results) -> Result<void>;
+auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
+```
+
+---
+
+## 16. Per-Tier Optimization Paths
+
+### 16.1 Tier1 Vulkan 1.4 — Maximum Performance Path
+
+| Feature | Implementation |
+|---------|---------------|
+| Descriptor binding | `VK_EXT_descriptor_heap` (2026); fallback `VK_EXT_descriptor_buffer` |
+| Push constants | Native 256B `vkCmdPushConstants` |
+| Mesh shaders | `VK_EXT_mesh_shader` (task + mesh) |
+| Dynamic rendering | `VK_KHR_dynamic_rendering` (core 1.3) |
+| Barriers | `vkCmdPipelineBarrier2` (core 1.3) with `VK_KHR_synchronization2` |
+| Async compute | Dedicated compute queue + timeline semaphore |
+| Transfer | Dedicated transfer queue (Vulkan 1.4 streaming) |
+| BDA | `VK_KHR_buffer_device_address` (core 1.2) |
+| Ray tracing | `VK_KHR_ray_query` + `VK_KHR_acceleration_structure` |
+| VRS | `VK_KHR_fragment_shading_rate` |
+| Sparse binding | `VkSparseBufferMemoryBindInfo` for streaming pages |
+| Subgroup ops | `VK_KHR_shader_subgroup_extended_types` (core 1.2) |
+
+### 16.2 Tier1 D3D12 — Maximum Performance Path
+
+| Feature | Implementation |
+|---------|---------------|
+| Descriptor binding | Root signature + CBV/SRV/UAV descriptor heap (shader-visible) |
+| Root constants | 64 DWORDs in root signature |
+| Mesh shaders | Amplification + Mesh shader (SM 6.5) |
+| Render pass | `BeginRenderPass` / `EndRenderPass` with enhanced barriers |
+| Barriers | Enhanced barriers (`D3D12_BARRIER_*`) |
+| Async compute | Compute command queue + `ID3D12Fence` |
+| Transfer | Copy command queue |
+| BDA | `GetGPUVirtualAddress()` on buffers |
+| Ray tracing | DXR 1.1 (inline ray query in any shader) |
+| VRS | `RSSetShadingRate` + `RSSetShadingRateImage` |
+| Work graphs | `DispatchGraph` for GPU-driven work (future) |
+
+### 16.3 Tier2 Vulkan Compat — Broad Compatibility
+
+| Feature | Implementation |
+|---------|---------------|
+| Descriptor binding | Traditional `VkDescriptorSet` with auto-growing pool |
+| Push constants | Native (256B) |
+| Geometry | Vertex shader + `vkCmdDrawIndexedIndirect` (MDI) |
+| Rendering | `vkCmdBeginRenderPass` (legacy) or dynamic rendering if ext available |
+| Barriers | `vkCmdPipelineBarrier` (Vulkan 1.0 style) |
+| No async compute | Single queue |
+| No ray tracing | CPU BVH fallback |
+
+### 16.4 Tier3 WebGPU — Browser Target
+
+| Feature | Implementation |
+|---------|---------------|
+| Descriptor binding | `GPUBindGroup` per material/pass (immutable) |
+| Push constants | Emulated via 256B uniform buffer (offset 0, set 0) |
+| Geometry | `draw()` / `drawIndexed()` (no MDI) |
+| Rendering | Render pass encoder |
+| Barriers | Implicit (Dawn/wgpu handles transitions) |
+| SSBO limit | 128MB `maxStorageBufferBindingSize` → chunked binding |
+| Shader | WGSL (Slang → WGSL) |
+| Single queue | No async compute |
+
+### 16.5 Tier4 OpenGL 4.3 — Legacy / VM Target
+
+| Feature | Implementation |
+|---------|---------------|
+| Descriptor binding | Direct `glBindBufferRange` / `glBindTextureUnit` / `glBindSampler` |
+| Push constants | Emulated via 128B UBO (binding 0) |
+| Geometry | `glMultiDrawElementsIndirect` (MDI) |
+| Rendering | FBO bind/unbind |
+| Barriers | `glMemoryBarrier` (coarse) |
+| State | Direct State Access (DSA, GL 4.5 preferred) |
+| Compute | `glDispatchCompute` (GL 4.3 core) |
+
+---
+
+## 17. Thread Safety Model
+
+| Operation | Thread Safety |
+|-----------|--------------|
+| Device creation/destruction | Main thread only |
+| Resource creation/destruction | Thread-safe (internal lock on handle pool) |
+| Command buffer recording | **Per-command-buffer single-thread** (no lock needed) |
+| Command buffer submission | Thread-safe (queue lock) |
+| Descriptor set creation | Thread-safe |
+| Pipeline creation | Thread-safe (pipeline cache has internal lock) |
+| Swapchain operations | Main thread only |
+| Staging ring allocation | Per-thread ring or lock-free ring |
+
+**Design principle**: Command recording is lock-free. Multiple threads record into separate command buffers concurrently. Submission serializes at the queue level.
+
+---
+
+## 18. Extension & Future-Proofing
+
+### 18.1 Vulkan Extension Negotiation
+
+```cpp
+struct VulkanDeviceExtensions {
+    bool descriptorHeap;        // VK_EXT_descriptor_heap (preferred)
+    bool descriptorBuffer;      // VK_EXT_descriptor_buffer (fallback)
+    bool meshShader;            // VK_EXT_mesh_shader
+    bool rayQuery;              // VK_KHR_ray_query
+    bool accelStruct;           // VK_KHR_acceleration_structure
+    bool fragmentShadingRate;   // VK_KHR_fragment_shading_rate
+    bool cooperativeMatrix;     // VK_KHR_cooperative_matrix
+    bool memoryDecompression;   // VK_NV_memory_decompression (GDeflate)
+    bool pipelineLibrary;       // VK_EXT_graphics_pipeline_library
+    // ...
+};
+```
+
+### 18.2 Future Extensions
+
+| Feature | Vulkan | D3D12 | RHI Impact |
+|---------|--------|-------|-----------|
+| Descriptor heap | `VK_EXT_descriptor_heap` (2026) | Already native | New descriptor path, coexists with descriptor buffer |
+| Work graphs | N/A (Vulkan equivalent TBD) | `DispatchGraph` (SM 6.8) | New `CmdDispatchGraph` command |
+| Cooperative matrix | `VK_KHR_cooperative_matrix` | SM 6.9 wave matrix | New shader intrinsics, no RHI API change |
+| GDeflate HW decode | `VK_NV_memory_decompression` | DirectStorage | New `CmdDecompressBuffer` command (see below) |
+| Fence barriers | N/A | D3D12 Fence Barriers (Tier-1) | Enhanced barrier model (see §9.4 mapping note) |
+
+**`CmdDecompressBuffer` signature preview** (Phase 6b+, not yet active):
+
+```cpp
+enum class CompressionFormat : uint8_t {
+    GDeflate,       // NVIDIA RTX 40+ / RDNA3+ hardware decode
+    // Future: LZ4_HW, Zstd_HW
+};
+
+struct DecompressBufferDesc {
+    BufferHandle     srcBuffer;       // Compressed source
+    uint64_t         srcOffset;
+    uint64_t         srcSize;
+    BufferHandle     dstBuffer;       // Decompressed destination
+    uint64_t         dstOffset;
+    uint64_t         dstSize;         // Expected decompressed size
+    CompressionFormat format;
+};
+
+// T1 only. Requires GpuCapabilityProfile.hasHardwareDecompression.
+// Falls back to async compute shader decode or CPU LZ4 (not RHI scope).
+void CmdDecompressBuffer(const DecompressBufferDesc&);
+```
+
+| Backend | Implementation |
+|---------|---------------|
+| Vulkan (NV) | `vkCmdDecompressMemoryNV` (`VK_NV_memory_decompression`) |
+| D3D12 | DirectStorage `IDStorageQueue::EnqueueRequest` with GPU decompression |
+| Others | Not available — fallback to compute shader or CPU decode (handled by ChunkLoader, not RHI) |
+
+---
+
+## 19. Naming Conventions & Code Style
+
+```
+Namespace:        miki::rhi
+Types:            PascalCase (BufferDesc, TextureHandle)
+Functions:        PascalCase (CreateBuffer, CmdDraw)
+Enums:            PascalCase values (BufferUsage::Storage)
+Constants:        kPascalCase (kMaxFramesInFlight)
+Handles:          <Type>Handle (BufferHandle, PipelineHandle)
+Backend impl:     miki::rhi::vk, miki::rhi::d3d12, miki::rhi::gl, miki::rhi::wgpu
+Files:            PascalCase.h / PascalCase.cpp
+```
+
+---
+
+## 20. Summary: Design Decisions & Rationale
+
+| Decision | Alternatives Considered | Rationale |
+|----------|------------------------|-----------|
+| CRTP over virtual dispatch | vtable (NVRHI), type-erasure (wgpu) | Zero overhead in command recording hot path; backend known at compile time |
+| Explicit barriers over auto-tracking | NVRHI auto-tracking, wgpu implicit | RenderGraph already tracks states; double-tracking wastes CPU; explicit is debuggable |
+| 64-bit typed handles over raw pointers | COM pointers (D3D), shared_ptr | Cache-friendly (8B), generation-safe, no ref-count overhead, trivially copyable |
+| Dynamic rendering over render pass objects | VkRenderPass (Vulkan 1.0) | Simpler API, matches D3D12/WebGPU/GL model, core in Vulkan 1.3 |
+| Deferred destruction over ref-counting | COM AddRef/Release, shared_ptr | Deterministic, no atomic ref-count in hot path, 2-frame latency matches frames-in-flight |
+| Descriptor heap (Vk 1.4) as primary | Descriptor sets, descriptor buffer | Descriptor heap is the Vulkan Roadmap 2026 direction; maps 1:1 to D3D12; replaces descriptor buffer |
+| Slang as shader language | HLSL, GLSL, hand-written per-backend | Single source → all targets; Slang v2026.5 has mature WGSL/GLSL/SPIR-V/DXIL output |
+| No built-in render graph | Integrated RG (UE5 RDG) | Separation of concerns; RHI is reusable without RG; RG can be replaced independently |
+
+---
+
+## Appendix A: Format Table (Subset)
+
+```cpp
+enum class Format : uint32_t {
+    Undefined = 0,
+    // 8-bit
+    R8_UNORM, R8_SNORM, R8_UINT, R8_SINT,
+    RG8_UNORM, RG8_SNORM, RG8_UINT, RG8_SINT,
+    RGBA8_UNORM, RGBA8_SNORM, RGBA8_UINT, RGBA8_SINT, RGBA8_SRGB,
+    BGRA8_UNORM, BGRA8_SRGB,
+    // 16-bit
+    R16_UNORM, R16_SNORM, R16_UINT, R16_SINT, R16_SFLOAT,
+    RG16_UNORM, RG16_SNORM, RG16_UINT, RG16_SINT, RG16_SFLOAT,
+    RGBA16_UNORM, RGBA16_SNORM, RGBA16_UINT, RGBA16_SINT, RGBA16_SFLOAT,
+    // 32-bit
+    R32_UINT, R32_SINT, R32_SFLOAT,
+    RG32_UINT, RG32_SINT, RG32_SFLOAT,
+    RGB32_UINT, RGB32_SINT, RGB32_SFLOAT,
+    RGBA32_UINT, RGBA32_SINT, RGBA32_SFLOAT,
+    // Depth/stencil
+    D16_UNORM, D32_SFLOAT, D24_UNORM_S8_UINT, D32_SFLOAT_S8_UINT,
+    // Compressed
+    BC1_RGBA_UNORM, BC1_RGBA_SRGB,
+    BC3_RGBA_UNORM, BC3_RGBA_SRGB,
+    BC4_R_UNORM, BC4_R_SNORM,
+    BC5_RG_UNORM, BC5_RG_SNORM,
+    BC6H_RGB_UFLOAT, BC6H_RGB_SFLOAT,
+    BC7_RGBA_UNORM, BC7_RGBA_SRGB,
+    // ASTC (mobile/WebGPU)
+    ASTC_4x4_UNORM, ASTC_4x4_SRGB,
+};
+```
+
+## Appendix B: Pipeline Stage & Access Flags
+
+```cpp
+enum class PipelineStage : uint32_t {
+    TopOfPipe           = 1 << 0,
+    DrawIndirect        = 1 << 1,
+    VertexInput         = 1 << 2,
+    VertexShader        = 1 << 3,
+    TaskShader          = 1 << 4,
+    MeshShader          = 1 << 5,
+    FragmentShader      = 1 << 6,
+    EarlyFragmentTests  = 1 << 7,
+    LateFragmentTests   = 1 << 8,
+    ColorAttachmentOutput = 1 << 9,
+    ComputeShader       = 1 << 10,
+    Transfer            = 1 << 11,
+    BottomOfPipe        = 1 << 12,
+    Host                = 1 << 13,
+    AllGraphics         = 1 << 14,
+    AllCommands         = 1 << 15,
+    AccelStructBuild    = 1 << 16,
+    RayTracingShader    = 1 << 17,
+    ShadingRateImage    = 1 << 18,
+};
+
+enum class AccessFlags : uint32_t {
+    None                    = 0,
+    IndirectCommandRead     = 1 << 0,
+    IndexRead               = 1 << 1,
+    VertexAttributeRead     = 1 << 2,
+    UniformRead             = 1 << 3,
+    InputAttachmentRead     = 1 << 4,
+    ShaderRead              = 1 << 5,
+    ShaderWrite             = 1 << 6,
+    ColorAttachmentRead     = 1 << 7,
+    ColorAttachmentWrite    = 1 << 8,
+    DepthStencilRead        = 1 << 9,
+    DepthStencilWrite       = 1 << 10,
+    TransferRead            = 1 << 11,
+    TransferWrite           = 1 << 12,
+    HostRead                = 1 << 13,
+    HostWrite               = 1 << 14,
+    MemoryRead              = 1 << 15,
+    MemoryWrite             = 1 << 16,
+    AccelStructRead         = 1 << 17,
+    AccelStructWrite        = 1 << 18,
+    ShadingRateImageRead    = 1 << 19,
+};
+
+enum class TextureLayout : uint8_t {
+    Undefined,
+    General,
+    ColorAttachment,
+    DepthStencilAttachment,
+    DepthStencilReadOnly,
+    ShaderReadOnly,
+    TransferSrc,
+    TransferDst,
+    Present,
+    ShadingRate,
+};
+```

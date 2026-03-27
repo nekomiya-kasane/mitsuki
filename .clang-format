@@ -1,0 +1,70 @@
+# miki C++ style — matches project conventions (see include/miki, src/miki, tests/unit).
+# Key overrides vs stock Google: 4-space indent, ctor init breaks before comma,
+# block indent for wrapped calls, namespace body indentation, includes not auto-sorted.
+
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 120
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# Includes: order is often intentional (local / miki / system).
+SortIncludes: false
+IncludeBlocks: Preserve
+
+# Line breaking
+BreakBeforeBinaryOperators: All
+BreakConstructorInitializers: BeforeComma
+ConstructorInitializerIndentWidth: 4
+BreakInheritanceList: BeforeComma
+BreakStringLiterals: true
+
+# Short forms (helpers, tests)
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: true
+
+# Braces: K&R / attach (opening brace on same line as if/for/while/function)
+InsertBraces: true
+BreakBeforeBraces: Attach
+BracedInitializerIndentWidth: 4
+
+# Alignment / wrapping
+AlignAfterOpenBracket: BlockIndent
+AlignOperands: Align
+AlignTrailingComments: true
+PointerAlignment: Left
+DerivePointerAlignment: false
+
+# Namespaces & preprocessor
+NamespaceIndentation: All
+CompactNamespaces: false
+FixNamespaceComments: true
+IndentPPDirectives: AfterHash
+IndentWrappedFunctionNames: false
+
+# Spacing
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: true
+SpaceBeforeInheritanceColon: true
+SpaceBeforeParens: ControlStatementsExceptControlMacros
+SpaceBeforeRangeBasedForLoopColon: true
+SpacesBeforeTrailingComments: 2
+SpacesInAngles: Never
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+Cpp11BracedListStyle: true
+EmptyLineBeforeAccessModifier: LogicalBlock
+IndentCaseLabels: true
+ReflowComments: true
+

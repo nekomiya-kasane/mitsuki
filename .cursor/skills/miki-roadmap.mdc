@@ -1,0 +1,405 @@
+---
+alwaysApply: false
+---
+# miki Development Workflow (Main)
+
+> This is the **main orchestration workflow** — session entry, execution loop, gate check.
+>
+> **Three-layer workflow hierarchy**:
+> ```
+> miki-roadmap.mdc  → (this) session entry, execute Tasks, gate check, session end
+> miki-phase.mdc    → phase planning ONLY: Component→Task decomposition
+> miki-task.mdc     → task execution: Steps, code, tests, verification
+> ```
+>
+> **File outputs**:
+> ```
+> specs/phases/phase-{nn}-{id}.md             → phase overview + Task listing
+> specs/phases/phase-{nn}-{id}/T{id}.X.Y.md  → individual Task files (Steps)
+> specs/phases/api-surface-index.md           → Locked API Surface hub (Phase→Layer map)
+> specs/phases/api-surface-L{NN}.md           → per-layer locked API tables
+> ```
+
+---
+
+## 1. Session Startup
+
+1.1. Read the authoritative roadmap (full, segmented for large files)
+```
+read_file specs/roadmap.md 1 900
+read_file specs/roadmap.md 901 1800
+read_file specs/roadmap.md 1801 2700
+read_file specs/roadmap.md 2701 3585
+```
+
+1.2. Check existing phase specs and workflow context
+```
+find_by_name specs/phases/ -type f
+```
+
+1.3. Load **API Surface Index** (layer-based — NOT full monolith)
+```
+read_file specs/phases/api-surface-index.md
+```
+     This loads the hub (~90 lines): Phase→Layer mapping + dependency table.
+     Then compute the current phase's **transitive dependency chain** from
+     the table, map dependent phases to Layer numbers, and read only those
+     layer files that exist:
+```
+# Example: if current phase is 6a (deps: 3b→3a→2→1a,1b + 4→2 + 5→4)
+# Layers needed: L01(1a,1b), L02(2,4), L03(3a,3b), L04(5)
+read_file specs/phases/api-surface-L01.md
+read_file specs/phases/api-surface-L02.md
+read_file specs/phases/api-surface-L03.md
+read_file specs/phases/api-surface-L04.md
+```
+     Token cost = O(number of dependent layers), not O(total completed phases).
+     At Phase 10+, you load ~5-6 layer files (~150 lines each) instead of
+     one 1000+ line monolith.
+
+1.4. Identify current phase by scanning `roadmap.md` for the first phase
+     heading that does NOT have a `[DONE]` marker. Report to user:
+     - Current phase name + sequence number
+     - Whether `specs/phases/phase-{nn}-{id}.md` already exists
+     - Last completed phase
+     - If phase spec exists: next incomplete Task ID
+
+1.5. **Re-read current phase section** from `roadmap.md` (attention anchoring)
+     - Read only the current phase's section (offset/limit) a second time
+     - This places the active phase at the end of startup context,
+       countering lost-in-the-middle attention decay
+
+1.6. **Adjacent Phase Detail Re-read** (attention hotzone expansion)
+     - Re-read **Detail subsections** of previous 2 phases (N-2, N-1):
+       produced types, function signatures, design constraints.
+     - Re-read **Component table + Detail subsections** of next 2 phases
+       (N+1, N+2): what APIs/types they expect to consume.
+     - Skip Goal paragraphs and test/demo/CI sections.
+     - Token cost: ~4 phases x ~150 lines = ~600 lines (~2-3K tokens).
+
+<!-- CHECKPOINT: must output Startup Summary -->
+
+1.7. **Startup Summary** — output this table to confirm startup completeness:
+
+     | Item | Status | Detail |
+     |---|-----|-----|
+     | Roadmap read | OK/FAIL | lines read, version date |
+     | Phase specs found | OK/FAIL | list of existing phase-*.md |
+     | API Surface Index | OK/FAIL | N locked headers loaded |
+     | Current phase | — | Phase {nn}-{id}: {Name} |
+     | Phase spec exists | YES/NO | — |
+     | Next Task | — | T{id}.X.Y or "needs planning" |
+     | Adjacent re-read | OK/FAIL | phases N-2..N+2 loaded |
+
+---
+
+## 2. Phase Dispatch
+
+2.1. If `specs/phases/phase-{nn}-{id}.md` does NOT exist for the current phase:
+     - Invoke miki-phase workflow (planning only)
+     - This produces:
+       - Phase spec: `specs/phases/phase-{nn}-{id}.md`
+       - Task files: `specs/phases/phase-{nn}-{id}/T{id}.X.Y.md`
+
+2.2. If the phase spec already exists:
+     - Read it and locate the next incomplete Task (`[ ]` in Task table)
+     - Verify its dependency Tasks are all `[x]`
+
+---
+
+## 3. Task Execution Loop
+
+### 3.1 Execute current Task
+
+Invoke miki-task workflow on the current Task file.
+
+miki-task handles:
+- Setting `todo_list` to the Task's Steps
+- Implementing each Step with per-Step Anchor re-read
+- Verifying build and tests
+- Contract Verification (for public/shared files only)
+- Marking Steps `[x]` in Task file
+
+### 3.2 On Task completion
+
+- Mark Task `[x]` in phase spec's Component table
+- If all Tasks in a Component are `[x]`:
+  mark Component `[DONE]` in `roadmap.md`
+
+### 3.3 Auto-Advance Rules
+
+After a Task completes, the agent **automatically** starts the next Task
+WITHOUT pausing for user confirmation, UNLESS one of these conditions is met:
+
+| Condition | Action |
+|-----|-----|
+| **Component boundary** — next Task is in a different Component | **Pause**: report Component completion, ask user to confirm before starting new Component |
+| **Previous Task had Contract Verification FAIL** | **Pause**: report failure details, await user decision |
+| **Next Task has `[verify: visual]` or `[verify: manual]` Step** | **Pause**: these require human judgment |
+| **Session token budget > 75% consumed** (estimated) | **Pause**: suggest ending session to avoid quality degradation |
+
+If none of the above apply: proceed directly to the next Task (back to 3.1).
+
+### 3.4 Periodic Anchor Audit
+
+Every **5 completed Tasks**, randomly select 1 completed Task from the
+current phase and verify its Anchor Card's "Downstream Consumers" are
+still accurate against the current implementation. Report result inline.
+
+---
+
+## 4. Phase Completion (Gate Check)
+
+<!-- CHECKPOINT: must output Gate Check evidence table for user approval -->
+
+**User approves each check individually** — agent outputs evidence, user confirms.
+
+### 4.1 Acceptance Criteria (10 checks)
+
+| # | Check | Evidence required |
+|---|----|----|
+| 1 | All Tasks `[x]` in phase spec | List all Tasks with status |
+| 2 | All tests pass (zero errors, zero failures) | Build + test output (last 20 lines) |
+| 3 | Demo verified (if applicable) — see **Demo Checklist** below | Structured checklist output |
+| 4 | No TODO/stub/placeholder in phase code | `grep_search` results for `TODO\|STUB\|FIXME\|placeholder` |
+| 5 | Contract Verification PASS for all public/shared Tasks | List of Task IDs + their §4 verdict |
+| 6 | Forward Design Notes table is non-empty (if downstream phases exist) | Show table |
+| 7 | Phase complexity metrics (from planning) still hold | Critical path + total Tasks vs actual |
+| 8 | **Test count vs roadmap target** | Compare: phase spec "Test Summary" actual vs `roadmap.md` test target. Deficit > 20% = FAIL |
+| 9 | **Success Criteria spot-check** (Phase 6a+) | Read `roadmap.md` Part VII for metrics applicable to this phase. Verify each met or documented as "deferred to Phase 14" |
+| 10 | **Perf sanity** (Phase 3a+) | Run one representative demo for 3 seconds. Report avg FPS. If < 30fps on dev hardware, flag for investigation |
+| 11 | **Include direction spot-check** | Sample 3 headers from this phase. Verify `#include` paths only reference same-layer or lower-layer modules (per §7 namespace map). FAIL if upper-layer dependency found |
+| 12 | **Pitfall log review** | Read `.cursor/rules/pitfalls.mdc`. Confirm all errors from this phase are recorded. Promote recurring items to miki-rules §9 if needed |
+
+**Demo Checklist** (for check #3):
+
+> Output this table for each demo in the phase. Skip if phase has no demo.
+
+| Item | Status | Evidence |
+|---|-----|----|
+| Demo compiles on all required backends | PASS/FAIL | Build output |
+| Demo launches without crash (5-second run) | PASS/FAIL | Exit code |
+| Visual output matches expectation | PASS/FAIL | Screenshot via `renderdoc_thumbnail` or manual |
+| Performance acceptable (>30fps on dev hardware) | PASS/FAIL | FPS reading |
+| Golden image diff < threshold (if Phase >= 3b) | PASS/FAIL | Diff percentage |
+| Interactive features functional (if applicable) | PASS/FAIL/N/A | Manual verification |
+
+4.1.1. Build verification:
+```
+cmake --build build --config Debug 2>&1 | Select-Object -Last 20
+```
+4.1.2. Test verification:
+```
+ctest --test-dir build --output-on-failure 2>&1 | Select-Object -Last 30
+```
+4.1.3. Code cleanliness check:
+```
+grep_search src/ "TODO|STUB|FIXME|placeholder"
+grep_search include/ "TODO|STUB|FIXME|placeholder"
+```
+4.1.4. Test count comparison:
+     - Read phase spec "Test Summary" → actual count
+     - Read `roadmap.md` phase section → target count (from "Tests" row)
+     - Output: `Actual: N / Target: M (ratio: X%)`
+     - FAIL if ratio < 80%
+
+4.1.5. Success Criteria spot-check (Phase 6a+ only):
+     - Read `roadmap.md` Part VII (lines ~3284-3376)
+     - Identify rows applicable to the current phase
+     - For each: verify met, or record "deferred to Phase 14" with justification
+
+### 4.2 Forward Compatibility Audit
+
+> Reads **remaining phases only** (current+1 through Phase 18), NOT the full roadmap.
+> Token cost scales down as phases complete: at Phase 10 you read ~40% of roadmap.
+> At Phase 1a (first gate check) this IS effectively a full read — that's expected.
+
+```
+# Compute line offset for current phase +1 heading in roadmap.md,
+# then read from there to EOF. Example for Phase 2 onward:
+read_file specs/roadmap.md {phase_N+1_start_line} 3585
+```
+- Re-read remaining phases (current+1 through Phase 18)
+- For each remaining phase, verify:
+  a. Public headers match downstream `#include` / API expectations
+  b. Data structures are forward-compatible (adding fields won't break ABI)
+  c. Extension points exist where downstream phases need them
+  d. Implementation techniques match roadmap's technical direction
+- If incompatibilities found:
+  1. List with severity (breaking / friction / cosmetic)
+  2. Fix breaking issues before closing the phase
+  3. Log friction/cosmetic in "Known limitations"
+
+### 4.3 Archive phase completion
+
+- Fill "Test Summary" actual counts in phase spec
+- Fill "Completion Summary" section (date, test count, known limitations)
+- **Update the appropriate layer file** `specs/phases/api-surface-L{NN}.md` —
+  append this phase's Locked API Surface table (see hub file for Phase→Layer mapping).
+  Create the layer file from template if it doesn't exist yet.
+- **Update `specs/phases/api-surface-index.md`** hub — set this phase's Status to `Complete`
+- Mark the phase heading in `roadmap.md` with `[DONE]`
+
+### 4.4 Cooldown handling
+
+If a Cooldown period follows (Weeks 33-35, 55-57, 83-85):
+- No new features — only tech debt, test gap-fill, API review, docs
+- Create `specs/phases/cooldown-{n}.md`
+- **Mandatory Forward Compatibility Audit**:
+  a. Read ALL remaining phases from `roadmap.md`
+  b. For each locked public header in `api-surface-L{NN}.md` layer files:
+     verify it supports remaining phase needs
+  c. Breaking => design migration path NOW. Friction => record limitation.
+  d. Update the relevant `api-surface-L{NN}.md` if any API was extended
+
+### 4.5 Proceed to next phase (back to step 2)
+
+---
+
+## 5. Anchor Invalidation Protocol
+
+> When `roadmap.md` is modified, previously generated Context Anchor Cards
+> may become stale. This protocol ensures Anchors stay accurate.
+
+5.1. After any roadmap edit, identify affected types/APIs:
+```
+grep_search specs/phases/ "STALE"
+```
+     Also: `grep_search` for the changed type/API names across all
+     **incomplete** Task files (`specs/phases/*/T*.md`)
+
+5.2. For each hit where the Anchor references the changed API:
+     mark as `<!-- STALE: roadmap updated YYYY-MM-DD -->` at the top
+     of the Context Anchor section
+
+5.3. Before executing a Task with a STALE Anchor:
+     - Re-run miki-phase 1.2.0 (Per-Component Context Refresh)
+     - Regenerate Anchor Card (1.2.3) with updated content
+     - Remove STALE marker
+     - Update Cross-Component Contract Table if signatures changed
+
+5.4. If the change affects a **completed** Phase's Locked API Surface:
+     - Record as **breaking change** in current phase spec
+     - Plan a migration Task
+
+---
+
+## 6. Session End
+
+<!-- CHECKPOINT: must output Session End summary -->
+
+6.1. Ensure all tests pass on both build paths
+```
+cmake --build build --config Debug 2>&1 | Select-Object -Last 20
+ctest --test-dir build --output-on-failure 2>&1 | Select-Object -Last 30
+```
+
+6.2. Update `todo_list` with current status
+
+6.3. Update `specs/phases/phase-{nn}-{id}.md` with progress checkpoint
+     - Update current Task file: set `**Current Step**` and `**Resume Hint**`
+       (e.g., `"Step 3: IFoo.h done, FooImpl.cpp in progress"`)
+
+6.4. **Self-Audit** — compare workflow CHECKPOINTs executed in this session:
+
+     | CHECKPOINT | Executed? | Notes |
+     |---|-----|----|
+     | Startup Summary (§1.7) | YES/NO | — |
+     | Quality Gate (if planning) | YES/NO/N/A | — |
+     | Gate Check (if phase complete) | YES/NO/N/A | — |
+     | Anchor Audit (if 5+ Tasks done) | YES/NO/N/A | — |
+
+     If any mandatory CHECKPOINT was skipped, explain why.
+
+6.5. Provide brief summary:
+     - What was completed (list Task IDs)
+     - Current Task in progress (if any)
+     - Blockers or decisions needed
+     - Where to continue next session
+
+---
+
+## 7. Progress Tracking Convention
+
+### In `roadmap.md`
+- Phase heading: `### Phase Xa: Name (Weeks N-M) [DONE]`
+- Component row: append ` [DONE]` to deliverable cell
+
+### In `specs/phases/phase-{nn}-{id}.md` (phase spec)
+- Task = row in Component table (`[x]` or `[ ]`)
+- Phase-level overview only — no Step details here
+
+### In `specs/phases/phase-{nn}-{id}/T{id}.X.Y.md` (task file)
+- Step = checkbox (`- [x]` completed, `- [ ]` pending)
+- Steps ARE the acceptance criteria
+- Each Task file is self-contained: deps, files, steps, tests, notes
+
+### In `specs/phases/api-surface-index.md` (hub) + `api-surface-L{NN}.md` (per-layer)
+- Hub file: Phase→Layer mapping + dependency table (~90 lines, always loaded)
+- Layer files: locked APIs grouped by architecture layer (L01–L11)
+- Append-only: phase completion appends to the appropriate layer file
+- Layer-based loading keeps token cost O(dependent layers) not O(total phases)
+
+### In `todo_list` tool
+- Always reflects current session's active Task
+- Each todo item = one Step from the current Task
+- ID format: `T{phase_id}.{component}.{task}.{step}` for Step-level
+
+---
+
+## 8. Phase Sequence Reference
+
+### Phase ID → Filename Mapping Rules
+
+> **Iron rule**: every Phase has exactly one `{nn}` (2-digit sequence) and one `{id}` (slug).
+> File paths use `phase-{nn}-{id}` everywhere. No ambiguity.
+
+| Rule | Example | Result |
+|---|---|-----|
+| Base phase | Phase 2 | `phase-03-2` (nn=03, id=2) |
+| Sub-phase (letter) | Phase 1a | `phase-01-1a` (nn=01, id=1a) |
+| Sub-phase (letter+number) | Phase 7a-1 | `phase-11-7a1` (nn=11, id=7a1) |
+| Sub-phase (letter suffix) | Phase 11b | `phase-18-11b` (nn=18, id=11b) |
+| Cooldown | Cooldown #1 | `phase-cd1-cooldown1` (nn=cd1, id=cooldown1) |
+| Tech Spike | GPU Trim Spike | `phase-08-spike` (nn=08, id=spike) |
+
+**Slug rules**: lowercase, no hyphens inside `{id}` (use concatenation: `7a-1` → `7a1`).
+Task IDs follow the `{id}`: `T7a1.3.2`, `T11b.1.1`, `Tspike.1.1`, `Tcd1.1.1`.
+
+### Phase Lookup Table
+
+> `{nn}` = sequence number (for file ordering). `{id}` = slug (for filenames + Task IDs).
+> File: `phase-{nn}-{id}.md`. Task: `T{id}.X.Y`.
+
+| nn | Phase ID (display) | Slug `{id}` | Name |
+|----|----|----|---|
+| 01 | 1a  | `1a` | Core Architecture & Tier1 Backends |
+| 02 | 1b  | `1b` | Compat Backends & Full Coverage |
+| 03 | 2   | `2` | Forward Rendering & Depth |
+| 04 | 3a  | `3a` | Render Graph & Deferred Pipeline |
+| 05 | 3b  | `3b` | Shadows, Post-Processing & Visual Regression |
+| 06 | 4   | `4` | Resource Management & Bindless |
+| 07 | 5   | `5` | ECS & Scene |
+| 08 | spike | `spike` | GPU Trim Tech Spike |
+| 09 | 6a  | `6a` | GPU-Driven Rendering Core |
+| 10 | 6b  | `6b` | ClusterDAG, Streaming, LOD & GPU Mesh Simplification |
+| 11 | 7a-1 | `7a1` | CAD Rendering: Edges & Section |
+| 12 | 7a-2 | `7a2` | CAD Rendering: Transparency, Picking & Lighting |
+| 13 | 7b  | `7b` | CAD Rendering: Measurement, PMI, Tess & Import |
+| 14 | 8   | `8` | CadScene & Layer Stack |
+| 15 | 9   | `9` | Interactive Tools |
+| 16 | 10  | `10` | CAE Visualization & Point Cloud |
+| 17 | 11  | `11` | Debug & Profiling Infrastructure |
+| 18 | 11b | `11b` | Compat Pipeline Hardening & Golden Image |
+| 19 | 11c | `11c` | OpenGL Pipeline Hardening & Performance |
+| 20 | 12  | `12` | Multi-Window & Multi-View |
+| 21 | 13  | `13` | Coca Coroutine Integration |
+| 22 | 14  | `14` | Scale Validation & Optimization |
+| 23 | 15a | `15a` | SDK, Headless, Cross-Platform & 2D Markup |
+| 24 | 15b | `15b` | Cloud, Collaboration & Release |
+| cd1 | Cooldown #1 | `cooldown1` | GPU Pipeline Core Stabilization (after Phase 5, Week 33-35) |
+| cd2 | Cooldown #2 | `cooldown2` | CAD Core Stabilization (after Phase 8, Week 55-57) |
+| cd3 | Cooldown #3 | `cooldown3` | Performance & Pre-Release Stabilization (after Phase 14, Week 83-85) |
+| 25 | 16  | `16` | GPU Wall Thickness & DFM Completion |
+| 26 | 17  | `17` | CAE Extensions & Volume Rendering |
+| 27 | 18  | `18` | Product Visualization & Decals |

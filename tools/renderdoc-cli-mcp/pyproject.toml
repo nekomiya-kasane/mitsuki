@@ -1,0 +1,25 @@
+[project]
+name = "renderdoc-cli-mcp"
+version = "0.1.0"
+description = "MCP server wrapping RenderDoc CLI (renderdoccmd) for GPU frame capture and analysis"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.12.3",
+]
+
+[project.scripts]
+renderdoc-cli-mcp = "server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.hatch.build.targets.wheel.force-include]
+"server.py" = "server.py"
+
+[tool.uv]
+package = true
+dev-dependencies = []

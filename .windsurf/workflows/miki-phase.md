@@ -1,0 +1,284 @@
+---
+description: How to plan a single phase of the miki renderer roadmap
+---
+
+# miki Phase Workflow (Planning Layer)
+
+> Invoked by `/miki-roadmap` when entering a new phase.
+> Produces phase spec + Task files. Does NOT handle execution or gate check.
+>
+> **Position in hierarchy**:
+> ```
+> /miki-roadmap  → session entry, locate phase, execute Tasks, gate check
+> /miki-phase    → (this) phase planning ONLY: Component→Task decomposition
+> /miki-task     → Task execution: Steps, code, tests, verification
+> ```
+>
+> **Outputs** (see `/miki-roadmap` §8 for `{nn}`/`{id}` naming rules):
+> ```
+> specs/phases/phase-{nn}-{id}.md             → phase overview + Task listing
+> specs/phases/phase-{nn}-{id}/T{id}.X.Y.md  → individual Task files
+> ```
+> **Phase type dispatch**: before planning, check the Phase Lookup Table:
+> - If `{id}` starts with `cooldown` → use `specs/templates/cooldown-task-template.md`
+> - If `{id}` == `spike` → use `specs/templates/spike-task-template.md`
+> - Otherwise → use `specs/templates/task-template.md` (standard)
+
+---
+
+## 1. Phase Planning
+
+### 1.1 Read phase context
+
+// turbo
+1.1.0. **Resolve Phase filenames** — look up `{nn}` and `{id}` from
+       `/miki-roadmap` §8 Phase Lookup Table. All file paths below use
+       these resolved values. Example: Phase 7a-1 → nn=11, id=7a1.
+
+// turbo
+1.1.1. Read the phase section from `specs/roadmap.md`:
+       - Goal, Component table, Dependency graph (mermaid), Test target, Demo, CI
+// turbo
+1.1.2. Read dependency phases' archived specs:
+```
+find_by_name specs/phases/ -type f
+```
+// turbo
+1.1.3. Load locked API surfaces via layer-based protocol:
+       - Read `specs/phases/api-surface-index.md` (hub, ~90 lines)
+       - Compute transitive dependency chain from Phase→Layer Mapping table
+       - Read only the relevant `specs/phases/api-surface-L{NN}.md` layer files
+// turbo
+1.1.4. Read relevant existing source code (headers, tests) to understand
+       available APIs from completed phases.
+1.1.5. Read **Goal paragraphs of all downstream phases** that depend on
+       this phase's output. This ensures forward-looking design:
+       - Scan `roadmap.md` for phases whose dependency graph includes current phase
+       - Read only their Goal + Component table (not full detail)
+       - Note what APIs/interfaces they will consume from this phase
+
+### 1.2 Decompose: Component -> Task
+
+For **each Component row** in the roadmap table:
+
+// turbo
+1.2.0. **Per-Component Context Refresh** — before decomposing this Component,
+       re-read from `roadmap.md`:
+       - This Component's Detail subsection (if it has one)
+       - All downstream phases that reference this Component's output types/APIs:
+
+       **Search protocol** (lexical + semantic fallback):
+       1. `grep_search` for exact type names / Component ID in later phases
+       2. If grep yields **< 2 hits**, the roadmap text may use indirect
+          references (e.g., "hardware context interface" instead of `IDevice`).
+          In that case, **manually read** the Component tables + Detail
+          subsections of the next 3 phases and identify implicit dependencies
+          by semantic meaning. Record any found as explicit type-name references
+          in the Anchor Card.
+       3. Read only the matched paragraphs (offset/limit), NOT the full roadmap.
+
+       > **Semantic fallback warning**: if step 2 was triggered, the results depend
+       > on agent interpretation and are NOT reproducible. Log each semantic match
+       > with a confidence tag (`high` / `medium` / `low`). Any `low`-confidence
+       > match must be flagged in the Anchor Card for user review before execution.
+
+       > **Roadmap writing discipline**: when `roadmap.md` is edited, downstream
+       > phases MUST reference upstream deliverables by **exact type name or
+       > Component ID** (e.g., `IDevice`, `RenderGraph`, `T1a.3`), not by
+       > paraphrase. This eliminates lexical search gaps at the source.
+
+1.2.1. Split into **Tasks** — each Task is an atomic implementation unit
+       (1-4 hours of work, produces compilable + testable code).
+       Naming: `T{phase_id}.{component_seq}.{task_seq}`
+       Example: `T1a.1.3` = Phase 1a, Component 1 (Build System), Task 3
+
+       Splitting heuristic — a new Task boundary when ANY of:
+       - Different file group (new header + .cpp pair)
+       - Different subsystem (e.g., VMA init vs descriptor pool)
+       - Different test scope (unit vs integration)
+       - Logical dependency gate (Task B needs Task A's output)
+
+1.2.2. For each Task, record in the phase spec:
+       - **ID**, **Name**, **Component**, **Dependencies**, **Effort**
+       - Detailed Steps are written in the Task file (see 1.4)
+       - Steps that produce **public** or **shared** files MUST include an
+         `Expected API` sub-block with concrete type names, function signatures,
+         error model, and key `static_assert` (see `specs/templates/task-template.md`).
+         Steps that only produce **internal** files need functional description only.
+
+1.2.3. **Generate Context Anchor Card** — for each Task, distill a ~20-40 line
+       Context Anchor (written into the Task file). The Anchor is derived from
+       the Component's roadmap content + downstream phase references read in 1.2.0.
+       It must contain:
+       - **This Task's Contract**: produced types/APIs, error model, thread safety
+       - **Downstream Consumers**: precise to **file + Exposure level**.
+         Format: `Phase X: {Component} consumes \`File.h\` (**public**) — calls {API}`
+         or `T{id}.Z.W (same Phase): consumes \`Util.h\` (**shared**) — calls {helper}`
+       - **Upstream Contracts**: what dependency Tasks provide (verify actual APIs)
+       - **Technical Direction**: architectural principles and techniques relevant
+         to THIS specific Task (not generic platitudes)
+       The Anchor is the **sole direction reference** during implementation.
+
+       **Anchor Completeness Micro-Check** — immediately after generating each Anchor,
+       verify these 4 criteria before proceeding:
+       - [ ] **Contract**: at least 1 concrete type/function name with signature
+       - [ ] **Downstream**: at least 1 consumer with file + Exposure + API call
+       - [ ] **Upstream**: all dependency Task outputs listed with actual signatures
+       - [ ] **Direction**: at least 1 specific technique/principle (not generic)
+       If any fails, fix the Anchor before creating the next Task.
+
+1.2.3a. **Assign File Exposure + Ref Heat** — for each file in the Task's
+        Files table, assign **two** independent attributes:
+
+        **Exposure** (visibility scope):
+        - **public**: cross-Phase interface (under `include/miki/`). Breaking change if modified.
+        - **shared**: reused by other Tasks within the same Phase. Needs consumer notification.
+        - **internal**: pure implementation detail. Free to change.
+
+        **Ref Heat** (reference frequency — drives change cost awareness):
+        - **H (High)**: referenced by 3+ consumers or across 2+ Phases.
+          Signature changes are expensive (ripple to many Tasks/Phases).
+        - **M (Medium)**: referenced by 1-2 consumers in same or adjacent Phase.
+          Changes need consumer notification but are manageable.
+        - **L (Low)**: no external consumers. Free to refactor.
+
+        To determine Ref Heat, count downstream consumers from 1.2.3's
+        "Downstream Consumers" list. A typical Task produces 3-8 files;
+        expect 1-2 at heat H, 1-2 at M, and the rest at L.
+
+        Steps in the Task file are ordered by heat (H first) — this ensures
+        the cross-Phase contract is locked before internal code is written.
+        See `specs/templates/task-template.md` for the full Exposure x Heat
+        behavior matrix.
+
+1.2.4. **Modernity & Industry Benchmark** — for each Component, verify:
+       - Implementation uses **C++23 paradigms** (see `.windsurfrules` section 5.2)
+       - GPU approach matches **current best practice** (mesh shaders over
+         geometry shaders, descriptor buffer over descriptor sets where available,
+         dynamic rendering over render passes, bindless over per-draw binding)
+       - Design aligns with **CAD/CAE industry standards** (compare with
+         UE5 / Unity6 / HOOPS / Vulkan best practices for the specific feature)
+       - If a better technique exists, note it in "Forward Design Notes" and
+         discuss with USER before adopting
+
+### 1.3 Build task dependency graph
+
+1.3.1. Identify parallelizable task groups (Tasks with no mutual deps)
+1.3.2. Identify serial chains (Task A -> Task B -> Task C)
+1.3.3. Determine critical path (longest serial chain = minimum time)
+1.3.4. Group tasks into **Layers** for implementation order
+1.3.5. **Build Cross-Component Contract Table** — for every dependency edge
+       that crosses Component boundaries within this Phase, record the agreed
+       interface in the phase spec:
+
+       | Provider Task | File (Exposure) | Consumer Task | Agreed Signature |
+       |--------------|-----------------|---------------|------------------|
+       | T{id}.3.2 | `IDevice.h` (**public**) | T{id}.5.1 | `CreateOwned(DeviceCreateInfo) -> expected<DeviceHandle, ErrorCode>` |
+
+       Both Provider and Consumer Anchor Cards must reference the same
+       Agreed Signature. Any signature change during implementation must
+       update the table + all referencing Anchors.
+
+### 1.4 Create Task files
+
+For each Task, create `specs/phases/phase-{nn}-{id}/T{id}.X.Y.md`
+using the appropriate template (determined by Phase type dispatch in header):
+- Standard phases: `specs/templates/task-template.md`
+- Cooldown phases (`{id}` starts with `cooldown`): `specs/templates/cooldown-task-template.md`
+- Tech Spike phases (`{id}` == `spike`): `specs/templates/spike-task-template.md`
+
+### 1.5 Plan demo and integration tests
+
+1.5.1. Identify which Tasks must complete before demo compiles
+1.5.2. Plan integration tests that span multiple Components
+1.5.3. Plan visual regression tests (if Phase >= 3b)
+
+### 1.6 Write phase spec
+
+Create `specs/phases/phase-{nn}-{id}.md` using the template in
+`specs/templates/phase-template.md`.
+
+**Mandatory**: fill the **Roadmap Digest** section during planning (not deferred):
+- Distill the roadmap's Component table into the compact key-components table
+- Extract critical technical decisions relevant to this phase
+- Copy applicable Performance Targets from `roadmap.md` Part VII
+- List downstream phase expectations from §1.1.5 findings
+This digest is the primary context for Task execution — it replaces
+re-reading the full roadmap section, saving ~2-4K tokens per Task.
+
+---
+
+## 2. Quality Gate (mandatory self-check before execution)
+
+<!-- CHECKPOINT: must output Quality Gate results as a table -->
+
+Before returning to `/miki-roadmap` for execution, verify the plan.
+Use `todo_list` to track these 7 checks:
+
+2.1. **Coverage** — every Component row in `roadmap.md` for this phase
+     has at least one Task. No Component is skipped or partially covered.
+
+2.2. **Completeness** — each Task has:
+     - [ ] Context Anchor with all 4 subsections (verified by micro-check)
+     - [ ] Steps with Files + Exposure
+     - [ ] Steps with **public/shared** files have `Expected API` sub-block
+     - [ ] At least one test name
+     - [ ] Acyclic dependency chain
+
+2.3. **Dependency consistency** — no cycles, no dangling references,
+     every inter-Component dependency is explicit.
+
+2.4. **Cross-Component Contract consistency** — every cross-Component
+     dependency edge has a row in the Contract Table. Provider and Consumer
+     Anchors both reference the same Agreed Signature.
+
+2.5. **Test target & coverage** — verify both quantity and category coverage:
+
+     **(a) Count check**: sum of planned tests meets the roadmap's per-phase
+     test target. Output: `Planned: N / Roadmap target: ~M`. If below 80%,
+     add missing test Tasks or justify the gap.
+
+     **(b) Category coverage** (per `.windsurfrules` §4.4): for each Component,
+     verify at least 1 test exists in each of the 5 mandatory categories
+     (Positive, Boundary, Error, State, Integration). Output a coverage matrix:
+
+     | Component | Positive | Boundary | Error | State | Integration | Total | Min (P*3 or 8) |
+     |-----------|----------|----------|-------|-------|-------------|-------|-----------------|
+
+     Any cell = 0 is a **FAIL** — add missing tests before proceeding.
+
+     **(c) Integration test check**: every Component has at least 1 `EndToEnd_*`
+     test that exercises a multi-API real-world workflow. Missing = FAIL.
+
+2.6. **Modernity** — no outdated techniques planned (geometry shaders,
+     legacy descriptor sets, raw pointers instead of `Handle<Tag>`, etc.)
+
+2.7. **Phase complexity warning**:
+     | Metric | Green | Yellow (warn) | Red (must discuss) |
+     |--------|-------|---------------|--------------------|
+     | Critical path | <= 6 | 7-8 | > 8 Tasks |
+     | Total Tasks | <= 15 | 16-20 | > 20 |
+     Red => pause and ask user to split or confirm.
+
+2.8. **Stub/TODO audit** — scan ALL source files touched by the current phase
+     (and their callers) for stale placeholders from prior phases:
+     ```
+     grep_search "TODO|FIXME|HACK|VK_NULL_HANDLE.*TODO|stub|IsStub|placeholder" src/ demos/
+     ```
+     For each hit, classify:
+     - **Must fix now**: the stub blocks a feature listed in THIS phase's roadmap
+     - **Defer OK**: the stub is explicitly planned for a later phase (note which)
+     - **Dead code**: the stub is unreachable — delete it
+
+     Output a table:
+
+     | File:Line | Stub Content | Classification | Action |
+     |-----------|-------------|----------------|--------|
+
+     Any "Must fix now" item that is NOT covered by an existing Task Step
+     must be added as a new Step to the relevant Task (or a new Task if
+     no existing Task covers it). This prevents Phase N-1 technical debt
+     from silently blocking Phase N deliverables.
+
+**Output**: a summary table with PASS/FAIL per check + evidence.
+If any check fails, fix the plan before returning to `/miki-roadmap`.

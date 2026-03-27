@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="2400" height="1500" viewBox="0 0 2400 1500">
+<defs>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d0">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#58a6ff" />
+</marker>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d1">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#f85149" />
+</marker>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d2">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#f85149" />
+</marker>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d3">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#f85149" />
+</marker>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d4">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#f85149" />
+</marker>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d5">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#58a6ff" />
+</marker>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d6">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#f85149" />
+</marker>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d7">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#f85149" />
+</marker>
+<marker markerWidth="7.0" markerHeight="7.0" viewBox="-0.8 -0.5 1.0 1.0" orient="auto" id="d8">
+<path d="M-0.8,-0.5 L0,0 L-0.8,0.5 Z" fill="#f85149" />
+</marker>
+</defs>
+<rect x="0" y="0" width="2400" height="1500" fill="#0d1117" />
+<text x="1200.0" y="32" font-size="20" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">miki Tier1 (Vulkan 1.4) — Frame Pipeline Timeline Semaphore Synchronization</text>
+<text x="1200.0" y="55" font-size="13" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">2 Frames-in-Flight | 3 Queues (Graphics + Async Compute + Transfer) | Zero CPU/GPU Bubbles</text>
+<path d="M240,105 L240,655" stroke="#21262d" stroke-width="0.5" />
+<text x="240" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">0</text>
+<path d="M355,105 L355,655" stroke="#21262d" stroke-width="0.5" />
+<text x="355" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">1</text>
+<path d="M470,105 L470,655" stroke="#21262d" stroke-width="0.5" />
+<text x="470" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">2</text>
+<path d="M585,105 L585,655" stroke="#21262d" stroke-width="0.5" />
+<text x="585" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">3</text>
+<path d="M700,105 L700,655" stroke="#21262d" stroke-width="0.5" />
+<text x="700" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">4</text>
+<path d="M815,105 L815,655" stroke="#21262d" stroke-width="0.5" />
+<text x="815" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">5</text>
+<path d="M930,105 L930,655" stroke="#21262d" stroke-width="0.5" />
+<text x="930" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">6</text>
+<path d="M1045,105 L1045,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1045" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">7</text>
+<path d="M1160,105 L1160,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1160" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">8</text>
+<path d="M1275,105 L1275,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1275" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">9</text>
+<path d="M1390,105 L1390,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1390" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">10</text>
+<path d="M1505,105 L1505,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1505" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">11</text>
+<path d="M1620,105 L1620,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1620" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">12</text>
+<path d="M1735,105 L1735,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1735" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">13</text>
+<path d="M1850,105 L1850,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1850" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">14</text>
+<path d="M1965,105 L1965,655" stroke="#21262d" stroke-width="0.5" />
+<text x="1965" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">15</text>
+<path d="M2080,105 L2080,655" stroke="#21262d" stroke-width="0.5" />
+<text x="2080" y="100" font-size="9" fill="#8b949e" text-anchor="middle" font-family="Inter, system-ui, sans-serif">16</text>
+<path d="M240,85 L240,660" stroke="#58a6ff" stroke-width="1.8" stroke-dasharray="8,5" stroke-opacity="0.5" />
+<text x="246" y="82" font-size="13" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">Frame N</text>
+<path d="M1160,85 L1160,660" stroke="#3fb950" stroke-width="1.8" stroke-dasharray="8,5" stroke-opacity="0.5" />
+<text x="1166" y="82" font-size="13" fill="#3fb950" font-family="Inter, system-ui, sans-serif" font-weight="bold">Frame N+1</text>
+<path d="M2080,85 L2080,660" stroke="#8b949e" stroke-width="1.8" stroke-dasharray="8,5" stroke-opacity="0.5" />
+<text x="2086" y="82" font-size="13" fill="#8b949e" font-family="Inter, system-ui, sans-serif" font-weight="bold">Frame N+2</text>
+<rect x="230" y="115" width="2130" height="100" fill="#238636" fill-opacity="0.05" rx="6" ry="6" />
+<text x="15" y="169.0" font-size="12" fill="#238636" font-family="Inter, system-ui, sans-serif" font-weight="600">CPU Thread</text>
+<rect x="230" y="260" width="2130" height="100" fill="#1f6feb" fill-opacity="0.05" rx="6" ry="6" />
+<text x="15" y="314.0" font-size="12" fill="#1f6feb" font-family="Inter, system-ui, sans-serif" font-weight="600">Graphics Queue</text>
+<rect x="230" y="405" width="2130" height="100" fill="#8957e5" fill-opacity="0.05" rx="6" ry="6" />
+<text x="15" y="459.0" font-size="12" fill="#8957e5" font-family="Inter, system-ui, sans-serif" font-weight="600">Async Compute Queue</text>
+<rect x="230" y="550" width="2130" height="100" fill="#d29922" fill-opacity="0.05" rx="6" ry="6" />
+<text x="15" y="604.0" font-size="12" fill="#d29922" font-family="Inter, system-ui, sans-serif" font-weight="600">Transfer Queue</text>
+<rect x="240.0" y="137.0" width="138.0" height="56" fill="#238636" fill-opacity="0.82" rx="5" ry="5" stroke="#238636" stroke-width="1" stroke-opacity="0.5" />
+<text x="309.0" y="161.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Scene Upload</text>
+<text x="309.0" y="175.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">dirty instances → staging</text>
+<rect x="378.0" y="137.0" width="115.0" height="56" fill="#238636" fill-opacity="0.82" rx="5" ry="5" stroke="#238636" stroke-width="1" stroke-opacity="0.5" />
+<text x="435.5" y="161.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Record CB</text>
+<text x="435.5" y="175.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">graphics cmd buf</text>
+<rect x="493.0" y="137.0" width="69.0" height="56" fill="#238636" fill-opacity="0.82" rx="5" ry="5" stroke="#238636" stroke-width="1" stroke-opacity="0.5" />
+<text x="527.5" y="161.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Submit</text>
+<text x="527.5" y="175.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">vkQueueSubmit2</text>
+<rect x="412.5" y="282.0" width="92.0" height="56" fill="#1f6feb" fill-opacity="0.82" rx="5" ry="5" stroke="#1f6feb" stroke-width="1" stroke-opacity="0.5" />
+<text x="458.5" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Acquire</text>
+<text x="458.5" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">swapchain</text>
+<rect x="562.0" y="282.0" width="138.0" height="56" fill="#1f6feb" fill-opacity="0.82" rx="5" ry="5" stroke="#1f6feb" stroke-width="1" stroke-opacity="0.5" />
+<text x="631.0" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Depth+HiZ</text>
+<text x="631.0" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">pre-pass</text>
+<rect x="700.0" y="282.0" width="149.5" height="56" fill="#1f6feb" fill-opacity="0.82" rx="5" ry="5" stroke="#1f6feb" stroke-width="1" stroke-opacity="0.5" />
+<text x="774.75" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">GPU Cull</text>
+<text x="774.75" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">frustum+HiZ+LOD</text>
+<rect x="849.5" y="282.0" width="172.5" height="56" fill="#1f6feb" fill-opacity="0.82" rx="5" ry="5" stroke="#1f6feb" stroke-width="1" stroke-opacity="0.5" />
+<text x="935.75" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">VisBuffer</text>
+<text x="935.75" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">Task→Mesh→Vis</text>
+<rect x="1022.0" y="282.0" width="115.0" height="56" fill="#1f6feb" fill-opacity="0.82" rx="5" ry="5" stroke="#1f6feb" stroke-width="1" stroke-opacity="0.5" />
+<text x="1079.5" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Deferred+Post</text>
+<text x="1079.5" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">resolve+tone+TAA</text>
+<rect x="1137.0" y="282.0" width="23.0" height="56" fill="#3fb950" fill-opacity="0.82" rx="5" ry="5" stroke="#3fb950" stroke-width="1" stroke-opacity="0.5" />
+<text x="1148.5" y="310.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Present</text>
+<rect x="734.5" y="427.0" width="172.5" height="56" fill="#8957e5" fill-opacity="0.82" rx="5" ry="5" stroke="#8957e5" stroke-width="1" stroke-opacity="0.5" />
+<text x="820.75" y="451.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">GTAO</text>
+<text x="820.75" y="465.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">half-res AO</text>
+<rect x="907.0" y="427.0" width="172.5" height="56" fill="#8957e5" fill-opacity="0.82" rx="5" ry="5" stroke="#8957e5" stroke-width="1" stroke-opacity="0.5" />
+<text x="993.25" y="451.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Material Sort</text>
+<text x="993.25" y="465.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">tile resolve</text>
+<rect x="240.0" y="572.0" width="287.5" height="56" fill="#d29922" fill-opacity="0.82" rx="5" ry="5" stroke="#d29922" stroke-width="1" stroke-opacity="0.5" />
+<text x="383.75" y="596.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Cluster DMA</text>
+<text x="383.75" y="610.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">stream upload batch K</text>
+<rect x="585.0" y="572.0" width="287.5" height="56" fill="#d29922" fill-opacity="0.82" rx="5" ry="5" stroke="#d29922" stroke-width="1" stroke-opacity="0.5" />
+<text x="728.75" y="596.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Cluster DMA</text>
+<text x="728.75" y="610.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">stream upload batch K+1</text>
+<rect x="585.0" y="137.0" width="138.0" height="56" fill="#1a7a30" fill-opacity="0.82" rx="5" ry="5" stroke="#1a7a30" stroke-width="1" stroke-opacity="0.5" />
+<text x="654.0" y="161.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Scene Upload</text>
+<text x="654.0" y="175.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">dirty instances N+1</text>
+<rect x="723.0" y="137.0" width="115.0" height="56" fill="#1a7a30" fill-opacity="0.82" rx="5" ry="5" stroke="#1a7a30" stroke-width="1" stroke-opacity="0.5" />
+<text x="780.5" y="161.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Record CB</text>
+<text x="780.5" y="175.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">graphics cmd buf N+1</text>
+<rect x="838.0" y="137.0" width="69.0" height="56" fill="#1a7a30" fill-opacity="0.82" rx="5" ry="5" stroke="#1a7a30" stroke-width="1" stroke-opacity="0.5" />
+<text x="872.5" y="161.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Submit</text>
+<text x="872.5" y="175.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">vkQueueSubmit2</text>
+<rect x="1194.5" y="282.0" width="80.5" height="56" fill="#1a5cc7" fill-opacity="0.82" rx="5" ry="5" stroke="#1a5cc7" stroke-width="1" stroke-opacity="0.5" />
+<text x="1234.75" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Acquire</text>
+<text x="1234.75" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">swapchain</text>
+<rect x="1275.0" y="282.0" width="172.5" height="56" fill="#1a5cc7" fill-opacity="0.82" rx="5" ry="5" stroke="#1a5cc7" stroke-width="1" stroke-opacity="0.5" />
+<text x="1361.25" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Depth+HiZ</text>
+<text x="1361.25" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">pre-pass N+1</text>
+<rect x="1447.5" y="282.0" width="172.5" height="56" fill="#1a5cc7" fill-opacity="0.82" rx="5" ry="5" stroke="#1a5cc7" stroke-width="1" stroke-opacity="0.5" />
+<text x="1533.75" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">GPU Cull</text>
+<text x="1533.75" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">frustum+HiZ+LOD</text>
+<rect x="1620.0" y="282.0" width="172.5" height="56" fill="#1a5cc7" fill-opacity="0.82" rx="5" ry="5" stroke="#1a5cc7" stroke-width="1" stroke-opacity="0.5" />
+<text x="1706.25" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">VisBuffer</text>
+<text x="1706.25" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">Task→Mesh→Vis</text>
+<rect x="1792.5" y="282.0" width="172.5" height="56" fill="#1a5cc7" fill-opacity="0.82" rx="5" ry="5" stroke="#1a5cc7" stroke-width="1" stroke-opacity="0.5" />
+<text x="1878.75" y="306.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Deferred+Post</text>
+<text x="1878.75" y="320.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">resolve+tone+TAA</text>
+<rect x="1965.0" y="282.0" width="34.5" height="56" fill="#2ea043" fill-opacity="0.82" rx="5" ry="5" stroke="#2ea043" stroke-width="1" stroke-opacity="0.5" />
+<text x="1982.25" y="310.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Present</text>
+<rect x="1505.0" y="427.0" width="172.5" height="56" fill="#6d3fba" fill-opacity="0.82" rx="5" ry="5" stroke="#6d3fba" stroke-width="1" stroke-opacity="0.5" />
+<text x="1591.25" y="451.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">GTAO</text>
+<text x="1591.25" y="465.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">half-res AO N+1</text>
+<rect x="1677.5" y="427.0" width="172.5" height="56" fill="#6d3fba" fill-opacity="0.82" rx="5" ry="5" stroke="#6d3fba" stroke-width="1" stroke-opacity="0.5" />
+<text x="1763.75" y="451.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Material Sort</text>
+<text x="1763.75" y="465.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">tile resolve N+1</text>
+<rect x="930.0" y="572.0" width="287.5" height="56" fill="#a86a15" fill-opacity="0.82" rx="5" ry="5" stroke="#a86a15" stroke-width="1" stroke-opacity="0.5" />
+<text x="1073.75" y="596.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Cluster DMA</text>
+<text x="1073.75" y="610.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">stream upload batch K+2</text>
+<rect x="1275.0" y="572.0" width="287.5" height="56" fill="#a86a15" fill-opacity="0.82" rx="5" ry="5" stroke="#a86a15" stroke-width="1" stroke-opacity="0.5" />
+<text x="1418.75" y="596.0" font-size="10" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600">Cluster DMA</text>
+<text x="1418.75" y="610.0" font-size="8" fill="#e6edf3" text-anchor="middle" fill-opacity="0.65" font-family="Inter, system-ui, sans-serif">stream upload batch K+3</text>
+<circle cx="240.0" cy="143.0" r="6" fill="none" stroke="#f85149" stroke-width="1.8" />
+<text x="240.0" y="145.5" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">W</text>
+<text x="240.0" y="134.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">Wait framePacing ≥ N-1</text>
+<circle cx="504.5" cy="288.0" r="6" fill="#58a6ff" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="504.5" y="290.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="504.5" y="279.0" font-size="7" fill="#58a6ff" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">imgAvail[N%2]</text>
+<path d="M504.5,288.0 L562.0,310.0" stroke="#58a6ff" stroke-width="1.3" marker-end="url(#d0)" stroke-opacity="0.7" />
+<text x="538.25" y="294.0" font-size="7" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" fill-opacity="0.75">binary wait</text>
+<circle cx="527.5" cy="578.0" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="527.5" y="580.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="527.5" y="569.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">xferSem=K</text>
+<path d="M527.5,578.0 L562.0,332.0" stroke="#f85149" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#d1)" stroke-opacity="0.7" />
+<text x="549.75" y="450.0" font-size="7" fill="#f85149" font-family="Inter, system-ui, sans-serif" fill-opacity="0.75">timeline: xfer→gfx</text>
+<circle cx="700.0" cy="332.0" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="700.0" y="334.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="700.0" y="323.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">gfxSem=J</text>
+<circle cx="734.5" cy="433.0" r="6" fill="none" stroke="#f85149" stroke-width="1.8" />
+<text x="734.5" y="435.5" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">W</text>
+<text x="734.5" y="424.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">Wait gfxSem ≥ J</text>
+<path d="M700.0,332.0 L734.5,433.0" stroke="#f85149" stroke-width="1.3" marker-end="url(#d2)" stroke-opacity="0.7" />
+<text x="722.25" y="377.5" font-size="7" fill="#f85149" font-family="Inter, system-ui, sans-serif" fill-opacity="0.75">timeline: gfx→compute</text>
+<circle cx="1079.5" cy="477.0" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1079.5" y="479.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1079.5" y="468.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">compSem=M</text>
+<circle cx="1022.0" cy="332.0" r="6" fill="none" stroke="#f85149" stroke-width="1.8" />
+<text x="1022.0" y="334.5" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">W</text>
+<text x="1022.0" y="323.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">Wait compSem ≥ M</text>
+<path d="M1079.5,477.0 L1022.0,332.0" stroke="#f85149" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#d3)" stroke-opacity="0.7" />
+<text x="1055.75" y="399.5" font-size="7" fill="#f85149" font-family="Inter, system-ui, sans-serif" fill-opacity="0.75">timeline: compute→gfx</text>
+<circle cx="1137.0" cy="332.0" r="6" fill="#58a6ff" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1137.0" y="334.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1137.0" y="323.0" font-size="7" fill="#58a6ff" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">renderDone[imgIdx]</text>
+<circle cx="1137.0" cy="288.0" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1137.0" y="290.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1137.0" y="279.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">framePacing=N+1</text>
+<circle cx="585.0" cy="187.0" r="6" fill="none" stroke="#f85149" stroke-width="1.8" />
+<text x="585.0" y="189.5" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">W</text>
+<text x="585.0" y="178.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">Wait framePacing ≥ N</text>
+<path d="M1137.0,288.0 L585.0,187.0" stroke="#f85149" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#d4)" stroke-opacity="0.7" />
+<text x="866.0" y="232.5" font-size="7" fill="#f85149" font-family="Inter, system-ui, sans-serif" fill-opacity="0.75">framePacing: GPU N done → CPU N+1 start</text>
+<circle cx="1275.0" cy="288.0" r="6" fill="#58a6ff" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1275.0" y="290.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1275.0" y="279.0" font-size="7" fill="#58a6ff" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">imgAvail[(N+1)%2]</text>
+<path d="M1275.0,288.0 L1275.0,310.0" stroke="#58a6ff" stroke-width="1.3" marker-end="url(#d5)" stroke-opacity="0.7" />
+<circle cx="1217.5" cy="578.0" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1217.5" y="580.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1217.5" y="569.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">xferSem=K+2</text>
+<path d="M1217.5,578.0 L1275.0,332.0" stroke="#f85149" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#d6)" stroke-opacity="0.7" />
+<text x="1251.25" y="450.0" font-size="7" fill="#f85149" font-family="Inter, system-ui, sans-serif" fill-opacity="0.75">timeline: xfer→gfx</text>
+<circle cx="1447.5" cy="332.0" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1447.5" y="334.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1447.5" y="323.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">gfxSem=J+1</text>
+<circle cx="1505.0" cy="433.0" r="6" fill="none" stroke="#f85149" stroke-width="1.8" />
+<text x="1505.0" y="435.5" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">W</text>
+<text x="1505.0" y="424.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">Wait gfxSem ≥ J+1</text>
+<path d="M1447.5,332.0 L1505.0,433.0" stroke="#f85149" stroke-width="1.3" marker-end="url(#d7)" stroke-opacity="0.7" />
+<text x="1481.25" y="377.5" font-size="7" fill="#f85149" font-family="Inter, system-ui, sans-serif" fill-opacity="0.75">timeline: gfx→compute</text>
+<circle cx="1850.0" cy="477.0" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1850.0" y="479.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1850.0" y="468.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">compSem=M+1</text>
+<circle cx="1792.5" cy="332.0" r="6" fill="none" stroke="#f85149" stroke-width="1.8" />
+<text x="1792.5" y="334.5" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">W</text>
+<text x="1792.5" y="323.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">Wait compSem ≥ M+1</text>
+<path d="M1850.0,477.0 L1792.5,332.0" stroke="#f85149" stroke-width="1.3" stroke-dasharray="4,3" marker-end="url(#d8)" stroke-opacity="0.7" />
+<text x="1826.25" y="399.5" font-size="7" fill="#f85149" font-family="Inter, system-ui, sans-serif" fill-opacity="0.75">timeline: compute→gfx</text>
+<circle cx="1965.0" cy="288.0" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1965.0" y="290.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1965.0" y="279.0" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">framePacing=N+2</text>
+<circle cx="1965.0" cy="332.0" r="6" fill="#58a6ff" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="1965.0" y="334.5" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="1965.0" y="323.0" font-size="7" fill="#58a6ff" text-anchor="middle" font-family="Inter, system-ui, sans-serif" fill-opacity="0.8">renderDone[imgIdx]</text>
+<text x="40" y="710" font-size="14" fill="#e6edf3" font-family="Inter, system-ui, sans-serif" font-weight="bold">Synchronization Primitives</text>
+<circle cx="55" cy="730" r="6" fill="#f85149" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="55" y="733" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="69" y="733" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Timeline Semaphore Signal — vkQueueSubmit2 with VkSemaphoreSubmitInfo (TIMELINE)</text>
+<circle cx="55" cy="750" r="6" fill="none" stroke="#f85149" stroke-width="1.8" />
+<text x="55" y="753" font-size="7" fill="#f85149" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">W</text>
+<text x="69" y="753" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Timeline Semaphore Wait — vkWaitSemaphores (CPU) or vkQueueSubmit2 wait (GPU)</text>
+<circle cx="55" cy="770" r="6" fill="#58a6ff" fill-opacity="0.9" stroke="#e6edf3" stroke-width="1" />
+<text x="55" y="773" font-size="7" fill="#e6edf3" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">S</text>
+<text x="69" y="773" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Binary Semaphore Signal — swapchain acquire (Vulkan spec VUID-03265 mandated)</text>
+<circle cx="55" cy="790" r="6" fill="none" stroke="#58a6ff" stroke-width="1.8" />
+<text x="55" y="793" font-size="7" fill="#58a6ff" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="bold">W</text>
+<text x="69" y="793" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Binary Semaphore Wait — vkQueuePresentKHR pWaitSemaphores (spec mandated)</text>
+<text x="1250.0" y="710" font-size="14" fill="#e6edf3" font-family="Inter, system-ui, sans-serif" font-weight="bold">Design Principles (Zero-Bubble Frame Pipelining)</text>
+<text x="1250.0" y="732" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">1.</text>
+<text x="1268.0" y="732" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Single framePacingSemaphore (timeline, monotonic frameNumber) replaces N VkFences</text>
+<text x="1250.0" y="750" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">2.</text>
+<text x="1268.0" y="750" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Binary semaphores ONLY for swapchain acquire/present (Vulkan spec hard constraint)</text>
+<text x="1250.0" y="768" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">3.</text>
+<text x="1268.0" y="768" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">CPU records Frame N+1 while GPU executes Frame N — zero CPU idle bubble</text>
+<text x="1250.0" y="786" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">4.</text>
+<text x="1268.0" y="786" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Async Compute (GTAO, MatSort) overlaps with Graphics VisBuffer — zero GPU bubble</text>
+<text x="1250.0" y="804" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">5.</text>
+<text x="1268.0" y="804" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Transfer Queue streams clusters continuously — timeline sem sync at batch commit</text>
+<text x="1250.0" y="822" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">6.</text>
+<text x="1268.0" y="822" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">vkWaitSemaphores userspace fast-path replaces vkWaitForFences kernel crossing</text>
+<text x="1250.0" y="840" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">7.</text>
+<text x="1268.0" y="840" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Graphics signals gfxSem after HiZ → Compute starts immediately (no full-frame wait)</text>
+<text x="1250.0" y="858" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">8.</text>
+<text x="1268.0" y="858" font-size="10" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Compute signals compSem → Graphics waits only at Deferred Resolve (late binding)</text>
+<rect x="30" y="895" width="2340" height="130" fill="#161b22" rx="8" ry="8" stroke="#30363d" stroke-width="1" />
+<text x="50" y="915" font-size="13" fill="#e6edf3" font-family="Inter, system-ui, sans-serif" font-weight="bold">Semaphore Inventory (per RenderSurface, Tier1 Vulkan 1.4)</text>
+<text x="50" y="933" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">Name</text>
+<text x="330" y="933" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">Type</text>
+<text x="430" y="933" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">Count</text>
+<text x="490" y="933" font-size="10" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="bold">Purpose &amp; Lifecycle</text>
+<text x="50" y="950" font-size="9" fill="#c9d1d9" font-family="JetBrains Mono, Consolas, monospace">framePacingSemaphore_</text>
+<text x="330" y="950" font-size="9" fill="#f85149" font-family="Inter, system-ui, sans-serif" font-weight="600">Timeline</text>
+<text x="430" y="950" font-size="9" fill="#c9d1d9" font-family="Inter, system-ui, sans-serif">1</text>
+<text x="490" y="950" font-size="9" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Frame pacing. Value = frameNumber. Replaces N VkFences. vkWaitSemaphores before acquire.</text>
+<text x="50" y="965" font-size="9" fill="#c9d1d9" font-family="JetBrains Mono, Consolas, monospace">imageAvailableSemaphores_[2]</text>
+<text x="330" y="965" font-size="9" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="600">Binary</text>
+<text x="430" y="965" font-size="9" fill="#c9d1d9" font-family="Inter, system-ui, sans-serif">2</text>
+<text x="490" y="965" font-size="9" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Swapchain acquire signal. Per frame-in-flight slot. Vulkan spec VUID-03265 mandated.</text>
+<text x="50" y="980" font-size="9" fill="#c9d1d9" font-family="JetBrains Mono, Consolas, monospace">renderFinishedSemaphores_[N]</text>
+<text x="330" y="980" font-size="9" fill="#58a6ff" font-family="Inter, system-ui, sans-serif" font-weight="600">Binary</text>
+<text x="430" y="980" font-size="9" fill="#c9d1d9" font-family="Inter, system-ui, sans-serif">N</text>
+<text x="490" y="980" font-size="9" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Present wait. Per swapchain image. VkPresentInfoKHR only accepts binary.</text>
+<text x="50" y="995" font-size="9" fill="#c9d1d9" font-family="JetBrains Mono, Consolas, monospace">transferSemaphore_</text>
+<text x="330" y="995" font-size="9" fill="#f85149" font-family="Inter, system-ui, sans-serif" font-weight="600">Timeline</text>
+<text x="430" y="995" font-size="9" fill="#c9d1d9" font-family="Inter, system-ui, sans-serif">1</text>
+<text x="490" y="995" font-size="9" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Transfer→Graphics DMA sync. Monotonic batch counter. Zero-stall streaming.</text>
+<text x="50" y="1010" font-size="9" fill="#c9d1d9" font-family="JetBrains Mono, Consolas, monospace">computeSemaphore_</text>
+<text x="330" y="1010" font-size="9" fill="#f85149" font-family="Inter, system-ui, sans-serif" font-weight="600">Timeline</text>
+<text x="430" y="1010" font-size="9" fill="#c9d1d9" font-family="Inter, system-ui, sans-serif">1</text>
+<text x="490" y="1010" font-size="9" fill="#8b949e" font-family="Inter, system-ui, sans-serif">Graphics↔Async Compute overlap. Bidirectional: gfxSem + compSem values.</text>
+</svg>

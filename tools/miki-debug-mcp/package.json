@@ -1,0 +1,48 @@
+{
+  "name": "miki-debug-mcp",
+  "displayName": "miki Debug MCP",
+  "description": "MCP server for AI-driven debugging of the miki renderer project. Exposes VS Code debug session control (start/stop/step/breakpoint/inspect) as MCP tools.",
+  "version": "0.1.0",
+  "publisher": "miki",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": ["Debuggers", "AI"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mikiDebugMcp.restart",
+        "title": "Restart MCP Server",
+        "category": "miki Debug MCP"
+      }
+    ],
+    "configuration": {
+      "title": "miki Debug MCP",
+      "properties": {
+        "mikiDebugMcp.serverPort": {
+          "type": "number",
+          "default": 3001,
+          "description": "Port for the MCP HTTP server"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "express": "^5.2.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.100.0",
+    "typescript": "^5.9.3"
+  }
+}

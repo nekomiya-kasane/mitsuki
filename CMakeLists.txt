@@ -42,22 +42,15 @@ include_directories(
 )
 
 # ---------------------------------------------------------------------------
-# Core library sources
+# Core library sources (platform only)
 # ---------------------------------------------------------------------------
 set(CORE_SOURCES
     src/miki/platform/WindowManager.cpp
-    src/miki/rhi/MultiWindowManager.cpp
 )
 
 set(CORE_HEADERS
     include/miki/platform/WindowManager.h
     include/miki/platform/Event.h
-    include/miki/rhi/MultiWindowManager.h
-    include/miki/rhi/RenderSurface.h
-    include/miki/rhi/RhiTypes.h
-    include/miki/rhi/Format.h
-    include/miki/rhi/RhiDescriptors.h
-    include/miki/rhi/FrameManager.h
     include/miki/core/Result.h
     include/miki/core/ErrorCode.h
     include/miki/core/Types.h
@@ -72,6 +65,8 @@ set(GLFW_BACKEND_SOURCES
 
 set(GLFW_BACKEND_HEADERS
     demos/framework/glfw/GlfwWindowBackend.h
+    include/miki/rhi/RhiTypes.h
+    include/miki/rhi/RenderSurface.h
 )
 
 # ---------------------------------------------------------------------------
@@ -113,23 +108,26 @@ endif()
 # Tests
 # ---------------------------------------------------------------------------
 if(MIKI_BUILD_TESTS)
-    enable_testing()
-    
-    # Find Google Test
-    find_package(GTest REQUIRED)
-    
-    add_executable(test_window_manager)
-    target_sources(test_window_manager PRIVATE
-        tests/test_window_manager.cpp
-    )
-    target_link_libraries(test_window_manager
-        PRIVATE miki_core
-        PRIVATE GTest::gtest
-        PRIVATE GTest::gtest_main
-    )
-    target_compile_features(test_window_manager PRIVATE cxx_std_23)
-    
-    add_test(NAME WindowManagerTest COMMAND test_window_manager)
+    # Only enable tests if GTest is found
+    find_package(GTest QUIET)
+    if(GTest_FOUND)
+        enable_testing()
+        
+        add_executable(test_window_manager)
+        target_sources(test_window_manager PRIVATE
+            tests/test_window_manager.cpp
+        )
+        target_link_libraries(test_window_manager
+            PRIVATE miki_core
+            PRIVATE GTest::gtest
+            PRIVATE GTest::gtest_main
+        )
+        target_compile_features(test_window_manager PRIVATE cxx_std_23)
+        
+        add_test(NAME WindowManagerTest COMMAND test_window_manager)
+    else()
+        message(WARNING "GTest not found. Tests will not be built.")
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
