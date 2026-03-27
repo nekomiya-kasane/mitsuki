@@ -10,26 +10,26 @@
 
 ### 1.1 Reference Codebase (D:\repos\miki) Inventory
 
-| Component                               | Reference Status                                                                   | Action                                                    |
-| --------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `core/ErrorCode.h`                      | Complete (112 LOC). Module error ranges, `ToString()`.                             | **Reuse** — copy as-is, add `Debug` range `0xD000-0xDFFF` |
-| `core/Result.h`                         | Complete (27 LOC). `std::expected<T, ErrorCode>`.                                  | **Reuse** — copy as-is                                    |
-| `core/Types.h`                          | Complete (218 LOC). GPU-aligned vec/mat/AABB/Ray/Plane.                            | **Reuse** — copy as-is                                    |
-| `core/MathUtils.h`                      | Complete (244 LOC). Column-major math, C++23 `m[row,col]`.                         | **Reuse** — copy as-is                                    |
-| `core/GeometryUtils.h`                  | Complete (179 LOC). AABB/frustum/ray utilities.                                    | **Reuse** — copy as-is                                    |
-| `rhi/IDevice.h` timestamp query         | Basic `CreateTimestampQueryPool` / `GetTimestampResults` / `GetTimestampPeriodNs`. | **Refactor** — wrap into `GpuProfiler`                    |
-| `rhi/ICommandBuffer.h` `WriteTimestamp` | Single `WriteTimestamp(pool, index)`.                                              | **Refactor** — add debug marker APIs                      |
-| `test/VisualRegression.h`               | Complete (61 LOC). PSNR/RMSE golden image comparison.                              | **Reuse** — copy as-is                                    |
-| Structured Logger                       | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| GPU Profiler (per-pass)                 | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| CPU Profiler                            | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| Memory Profiler                         | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| GPU Breadcrumbs                         | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| GPU Capture integration                 | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| Shader Printf                           | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| Debug Markers (cmd buffer)              | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| Telemetry                               | **Missing**                                                                        | **Rewrite** from scratch                                  |
-| ImGui Debug Panel                       | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| Component                              | Reference Status                                                                   | Action                                                    |
+| -------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `core/ErrorCode.h`                     | Complete (112 LOC). Module error ranges, `ToString()`.                             | **Reuse** — copy as-is, add `Debug` range `0xD000-0xDFFF` |
+| `core/Result.h`                        | Complete (27 LOC). `std::expected<T, ErrorCode>`.                                  | **Reuse** — copy as-is                                    |
+| `core/Types.h`                         | Complete (218 LOC). GPU-aligned vec/mat/AABB/Ray/Plane.                            | **Reuse** — copy as-is                                    |
+| `core/MathUtils.h`                     | Complete (244 LOC). Column-major math, C++23 `m[row,col]`.                         | **Reuse** — copy as-is                                    |
+| `core/GeometryUtils.h`                 | Complete (179 LOC). AABB/frustum/ray utilities.                                    | **Reuse** — copy as-is                                    |
+| `rhi/Device.h` timestamp query         | Basic `CreateTimestampQueryPool` / `GetTimestampResults` / `GetTimestampPeriodNs`. | **Refactor** — wrap into `GpuProfiler`                    |
+| `rhi/CommandBuffer.h` `WriteTimestamp` | Single `WriteTimestamp(pool, index)`.                                              | **Refactor** — add debug marker APIs                      |
+| `test/VisualRegression.h`              | Complete (61 LOC). PSNR/RMSE golden image comparison.                              | **Reuse** — copy as-is                                    |
+| Structured Logger                      | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| GPU Profiler (per-pass)                | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| CPU Profiler                           | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| Memory Profiler                        | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| GPU Breadcrumbs                        | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| GPU Capture integration                | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| Shader Printf                          | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| Debug Markers (cmd buffer)             | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| Telemetry                              | **Missing**                                                                        | **Rewrite** from scratch                                  |
+| ImGui Debug Panel                      | **Missing**                                                                        | **Rewrite** from scratch                                  |
 
 ### 1.2 Industry Comparison
 
@@ -42,7 +42,7 @@
 | GPU breadcrumbs   | D3D12 DRED                  | N/A                              | `GpuBreadcrumbs` (Vulkan + D3D12, AMD FFX-inspired)        |
 | GPU capture       | RenderDoc / PIX integration | Frame Debugger                   | `GpuCapture` (RenderDoc + PIX programmatic trigger)        |
 | Shader printf     | UE shader print             | Unity shader debug               | `ShaderPrintf` (Slang `printf` → SSBO readback)            |
-| Debug markers     | PIX/RenderDoc markers       | N/A                              | `DebugMarker` on `ICommandBuffer` (all 5 backends)         |
+| Debug markers     | PIX/RenderDoc markers       | N/A                              | `DebugMarker` on `CommandListHandle` (all 5 backends)      |
 | Telemetry         | Unreal Insights             | Unity Analytics                  | `Telemetry` (frame stats ring, perf regression CI)         |
 
 ---
@@ -71,7 +71,7 @@ include/miki/
 │   ├── GpuBreadcrumbs.h           #   GPU crash breadcrumbs (Vk + D3D12)
 │   ├── GpuCapture.h               #   RenderDoc / PIX programmatic capture
 │   ├── ShaderPrintf.h             #   Shader printf SSBO readback
-│   ├── DebugMarker.h              #   ICommandBuffer debug region/label
+│   ├── DebugMarker.h              #   CommandListHandle debug region/label
 │   ├── Telemetry.h                #   Frame stats ring buffer
 │   └── ImGuiDebugPanel.h          #   ImGui overlay for all debug subsystems
 │
@@ -569,9 +569,9 @@ struct CpuProfileEvent {
 
 **Performance target**: <20ns overhead per scope enter/exit (rdtsc + ring write). Zero overhead when disabled.
 
-### 3.3 GpuProfiler
+### 3.4 GpuProfiler
 
-**Motivation**: Per-pass GPU timing is essential for frame budget management. The reference codebase has raw timestamp query APIs in `IDevice`/`ICommandBuffer` but no profiler layer.
+**Motivation**: Per-pass GPU timing is essential for frame budget management. The reference codebase has raw timestamp query APIs in `DeviceHandle`/`CommandBuffer` but no profiler layer.
 
 **Design**: RenderGraph-integrated. Each pass automatically gets begin/end timestamps. Results read back with 2-frame latency (double-buffered query pools).
 
@@ -634,7 +634,7 @@ private:
 
 **RenderGraph integration**: `RenderGraphExecutor` calls `GpuProfiler::BeginPass`/`EndPass` around each pass's execute callback. Zero manual instrumentation required for render graph passes.
 
-### 3.4 MemProfiler
+### 3.5 MemProfiler
 
 **Motivation**: Track VRAM and CPU memory per module. Detect leaks, budget overruns.
 
@@ -713,7 +713,7 @@ private:
 
 **Performance target**: `TrackGpuAlloc`/`Free` = single `atomic_fetch_add` (~5ns). `Snapshot()` = VMA query (~1us).
 
-### 3.5 GpuBreadcrumbs
+### 3.6 GpuBreadcrumbs
 
 **Motivation**: When `VK_ERROR_DEVICE_LOST` or `DXGI_ERROR_DEVICE_REMOVED` occurs, identify the failing command. No breadcrumb system exists in the reference codebase.
 
@@ -791,7 +791,7 @@ private:
 | WebGPU  | No-op                                                        |       N/A        |
 | Mock    | CPU-side tracking (always survives)                          |       Yes        |
 
-### 3.6 DebugMarker (RAII wrapper for RHI debug labels)
+### 3.7 DebugMarker (RAII wrapper for RHI debug labels)
 
 **Motivation**: RenderDoc/PIX/NSight need named regions in command buffers for readability.
 
@@ -839,7 +839,7 @@ private:
     ::miki::debug::ScopedDebugRegion MIKI_CONCAT(_miki_gpu_region_, __LINE__){cmd, name}
 ```
 
-### 3.7 GpuCapture
+### 3.8 GpuCapture
 
 **Motivation**: Programmatic frame capture trigger for RenderDoc / PIX. Essential for automated debugging and CI capture.
 
@@ -880,7 +880,7 @@ private:
 } // namespace miki::debug
 ```
 
-### 3.8 ShaderPrintf
+### 3.9 ShaderPrintf
 
 **Motivation**: Debug shaders without stepping through GPU debuggers. Slang `printf()` statements write to an SSBO, read back on CPU.
 
@@ -935,7 +935,7 @@ private:
 
 **Backend support**: Vulkan + D3D12 + OpenGL (SSBO). WebGPU: limited (storage buffer read-write, no atomic on some implementations — graceful fallback to no-op).
 
-### 3.9 Telemetry
+### 3.10 Telemetry
 
 **Motivation**: Continuous frame stats collection for performance regression CI and runtime monitoring.
 
@@ -988,7 +988,7 @@ private:
 } // namespace miki::debug
 ```
 
-### 3.10 ImGuiDebugPanel
+### 3.11 ImGuiDebugPanel
 
 **Motivation**: Runtime visualization of all debug subsystems in a single ImGui overlay.
 
@@ -1178,8 +1178,8 @@ graph TD
     end
 
     subgraph "Dependencies"
-        IDEVICE["IDevice (rhi)"]
-        ICMDBUF["ICommandBuffer (rhi)"]
+        IDEVICE["DeviceHandle (rhi)"]
+        ICMDBUF["CommandListHandle (rhi)"]
         IMGUI["ImGui"]
     end
 
@@ -1205,7 +1205,7 @@ graph TD
 | Phase               | Components                                                                                                                                                   | Rationale                                                                                                                                                                |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **1a** (Week 1-2)   | `ErrorCode`, `Result`, `Types`, `MathUtils`, `GeometryUtils`, `Flags`, `Hash`, `TypeTraits`, `StructuredLogger`, `LogCategory`, `CpuProfiler`, `DebugMarker` | Foundation types needed by all code. Logger needed from day one. Debug markers needed for first Vulkan/D3D12 command buffers. CPU profiler for build system / init perf. |
-| **2** (Week 5-10)   | `GpuProfiler` (basic, per-pass timestamp), `VisualRegression`                                                                                                | Timestamp query available after IDevice. Golden image needed for visual regression from Phase 3.                                                                         |
+| **2** (Week 5-10)   | `GpuProfiler` (basic, per-pass timestamp), `VisualRegression`                                                                                                | Timestamp query available after DeviceHandle. Golden image needed for visual regression from Phase 3.                                                                    |
 | **11** (Week 71-76) | `GpuBreadcrumbs`, `MemProfiler`, `GpuCapture`, `ShaderPrintf`, `Telemetry`, `ImGuiDebugPanel`                                                                | Full debug suite after rendering pipeline is stable. Breadcrumbs need mature command buffer flow.                                                                        |
 
 ---
@@ -1249,16 +1249,16 @@ graph TD
 
 ## 10. Design Decisions
 
-| Decision                                                            | Rationale                                                                                                                                                                                                                                                | Alternative Considered                                                                                                             |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Custom logger over spdlog                                           | Zero external dependency policy. spdlog pulls fmtlib. `std::format` is sufficient in C++23. Our ring buffer design avoids spdlog's global mutex.                                                                                                         | spdlog — rejected: external dependency, fmtlib overhead, not structured by default                                                 |
-| Per-thread SPSC ring for logger                                     | Eliminates contention. Each thread writes to its own ring. Background drain merges. Proven pattern (Quill logger, Nanolog).                                                                                                                              | Global MPSC queue — rejected: CAS contention at high log volume                                                                    |
-| Double-buffered GPU query pools                                     | Frame N writes queries, frame N-2 reads results. No GPU stall. Industry standard (UE5, The Forge).                                                                                                                                                       | Single pool with fence wait — rejected: stalls GPU pipeline                                                                        |
-| Breadcrumbs via FillBuffer                                          | `vkCmdFillBuffer` is guaranteed available on all Vulkan versions. Simpler than buffer_reference stores.                                                                                                                                                  | Shader atomic writes — rejected: requires shader modification, not available for all command types                                 |
-| RenderDoc API for GPU capture                                       | Open-source, cross-platform, well-documented C API.                                                                                                                                                                                                      | NSight — vendor-specific. PIX — Windows-only. Both supported as secondary.                                                         |
-| Perfetto protobuf (primary) + Chrome JSON (legacy) for CPU profiler | Perfetto protobuf is the 2025+ industry standard: compact binary, native Perfetto UI support, streaming write (no in-memory string assembly). Chrome JSON retained as legacy fallback. Both written via streaming file I/O to avoid OOM on large traces. | Chrome JSON only — rejected: legacy format, O(N) memory for string assembly. Custom binary — rejected: needs custom viewer.        |
-| NDJSON for structured log files                                     | One JSON object per line. Trivially parseable by `jq`, Grafana Loki, ELK stack. No schema dependency.                                                                                                                                                    | Protobuf — rejected: overkill for logs, external dependency                                                                        |
-| DebugMarker delegates to RHI `CmdBeginDebugLabel`                   | Avoids defining a parallel virtual `ICommandBuffer` interface in infra. RHI §7.2 already provides the API; infra only adds an RAII wrapper (`ScopedDebugRegion<CmdBuf>`).                                                                                | Separate `ICommandBuffer::BeginDebugRegion` — rejected: duplicates RHI surface, introduces virtual calls contradicting CRTP design |
-| `DeviceHandle&` for debug component Init                            | Debug components (GpuProfiler, MemProfiler, GpuBreadcrumbs, ShaderPrintf) are not hot-path — O(1)/frame init or query. Type-erased `DeviceHandle` avoids templating entire debug classes on backend type.                                                | Template `GpuProfiler<BackendImpl>` — rejected: infects all callers with backend type, no perf benefit at O(1) frequency           |
-| Templated `CmdBuf&` for per-command methods                         | `BeginPass`, `EndPass`, `BeginMarker`, `EndMarker` are called O(passes)/frame from RenderGraph. Template deduction lets CRTP inline the underlying `CmdWriteTimestamp` / `CmdFillBuffer` calls at zero overhead.                                         | `CommandListHandle&` only — rejected: unnecessary switch dispatch per-pass for methods called from typed RenderGraph context       |
-| MemProfiler queries GPU stats via RHI `GetMemoryStats()`            | Maintains abstraction boundary. Without RHI-level memory query, MemProfiler would bypass RHI and call VMA/D3D12MA/DXGI directly. See `02-rhi-design.md` §13.4.                                                                                           | Direct VMA/D3D12MA calls — rejected: violates Thin Abstraction, couples infra to allocator implementation                          |
+| Decision                                                            | Rationale                                                                                                                                                                                                                                                | Alternative Considered                                                                                                                |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Custom logger over spdlog                                           | Zero external dependency policy. spdlog pulls fmtlib. `std::format` is sufficient in C++23. Our ring buffer design avoids spdlog's global mutex.                                                                                                         | spdlog — rejected: external dependency, fmtlib overhead, not structured by default                                                    |
+| Per-thread SPSC ring for logger                                     | Eliminates contention. Each thread writes to its own ring. Background drain merges. Proven pattern (Quill logger, Nanolog).                                                                                                                              | Global MPSC queue — rejected: CAS contention at high log volume                                                                       |
+| Double-buffered GPU query pools                                     | Frame N writes queries, frame N-2 reads results. No GPU stall. Industry standard (UE5, The Forge).                                                                                                                                                       | Single pool with fence wait — rejected: stalls GPU pipeline                                                                           |
+| Breadcrumbs via FillBuffer                                          | `vkCmdFillBuffer` is guaranteed available on all Vulkan versions. Simpler than buffer_reference stores.                                                                                                                                                  | Shader atomic writes — rejected: requires shader modification, not available for all command types                                    |
+| RenderDoc API for GPU capture                                       | Open-source, cross-platform, well-documented C API.                                                                                                                                                                                                      | NSight — vendor-specific. PIX — Windows-only. Both supported as secondary.                                                            |
+| Perfetto protobuf (primary) + Chrome JSON (legacy) for CPU profiler | Perfetto protobuf is the 2025+ industry standard: compact binary, native Perfetto UI support, streaming write (no in-memory string assembly). Chrome JSON retained as legacy fallback. Both written via streaming file I/O to avoid OOM on large traces. | Chrome JSON only — rejected: legacy format, O(N) memory for string assembly. Custom binary — rejected: needs custom viewer.           |
+| NDJSON for structured log files                                     | One JSON object per line. Trivially parseable by `jq`, Grafana Loki, ELK stack. No schema dependency.                                                                                                                                                    | Protobuf — rejected: overkill for logs, external dependency                                                                           |
+| DebugMarker delegates to RHI `CmdBeginDebugLabel`                   | Avoids defining a parallel virtual `CommandBuffer` interface in infra. RHI §7.2 already provides the API; infra only adds an RAII wrapper (`ScopedDebugRegion<CmdBuf>`).                                                                                 | Separate `CommandListHandle::BeginDebugRegion` — rejected: duplicates RHI surface, introduces virtual calls contradicting CRTP design |
+| `DeviceHandle&` for debug component Init                            | Debug components (GpuProfiler, MemProfiler, GpuBreadcrumbs, ShaderPrintf) are not hot-path — O(1)/frame init or query. Type-erased `DeviceHandle` avoids templating entire debug classes on backend type.                                                | Template `GpuProfiler<BackendImpl>` — rejected: infects all callers with backend type, no perf benefit at O(1) frequency              |
+| Templated `CmdBuf&` for per-command methods                         | `BeginPass`, `EndPass`, `BeginMarker`, `EndMarker` are called O(passes)/frame from RenderGraph. Template deduction lets CRTP inline the underlying `CmdWriteTimestamp` / `CmdFillBuffer` calls at zero overhead.                                         | `CommandListHandle&` only — rejected: unnecessary switch dispatch per-pass for methods called from typed RenderGraph context          |
+| MemProfiler queries GPU stats via RHI `GetMemoryStats()`            | Maintains abstraction boundary. Without RHI-level memory query, MemProfiler would bypass RHI and call VMA/D3D12MA/DXGI directly. See `02-rhi-design.md` §13.4.                                                                                           | Direct VMA/D3D12MA calls — rejected: violates Thin Abstraction, couples infra to allocator implementation                             |

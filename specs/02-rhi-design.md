@@ -33,7 +33,7 @@
 
 ### 1.3 Non-Goals
 
-- **Runtime vtable polymorphism in hot paths**: Command recording uses CRTP (compile-time dispatch). No `IDevice` virtual calls per draw.
+- **Runtime vtable polymorphism in hot paths**: Command recording uses CRTP (compile-time dispatch). No virtual dispatch in command recording. `DeviceHandle` switch-dispatch is O(passes/frame), not per-draw.
 - **Automatic barrier insertion**: That is RenderGraph's job. RHI exposes `CmdPipelineBarrier()` / `CmdTransition()`.
 - **Implicit resource state tracking**: Caller (RenderGraph) tracks states. RHI trusts the caller.
 - **Shader compilation**: Slang → target IR is a separate pipeline. RHI accepts blobs.
@@ -229,18 +229,18 @@ graph.AddPass("GBuffer", [](CommandListHandle& cmd, const PassResources& res) {
 
 ### 2.3 Module Decomposition
 
-| Module              | Responsibility                                          | Header                                                 |
-| ------------------- | ------------------------------------------------------- | ------------------------------------------------------ |
-| **Core Types**      | Enums, formats, handles, descriptors                    | `rhi/RhiTypes.h`, `rhi/RhiEnums.h`, `rhi/RhiFormats.h` |
-| **Device**          | GPU device creation, capability query, resource factory | `rhi/Device.h`                                         |
-| **CommandBuffer**   | Command recording (graphics, compute, transfer)         | `rhi/CommandBuffer.h`                                  |
-| **Pipeline**        | PSO creation (graphics, compute, ray tracing, mesh)     | `rhi/Pipeline.h`                                       |
-| **Resources**       | Buffer, Texture, Sampler, AccelerationStructure         | `rhi/Resources.h`                                      |
-| **Descriptors**     | Descriptor layout, binding, bindless table              | `rhi/Descriptors.h`                                    |
-| **Synchronization** | Fence, Semaphore (timeline + binary), Barrier           | `rhi/Sync.h`                                           |
-| **Swapchain**       | Surface attachment, present                             | `rhi/Swapchain.h`                                      |
-| **Query**           | Timestamp, occlusion, pipeline statistics               | `rhi/Query.h`                                          |
-| **Shader**          | Shader module creation from pre-compiled blobs          | `rhi/Shader.h`                                         |
+| Module              | Responsibility                                                                                            | Header                                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| **Core Types**      | Enums, formats, handles, descriptors                                                                      | `rhi/RhiTypes.h`, `rhi/RhiEnums.h`, `rhi/RhiFormats.h` |
+| **Device**          | GPU device creation, capability query, resource factory, memory stats (`MemoryStats`, `MemoryHeapBudget`) | `rhi/Device.h`                                         |
+| **CommandBuffer**   | Command recording (graphics, compute, transfer)                                                           | `rhi/CommandBuffer.h`                                  |
+| **Pipeline**        | PSO creation (graphics, compute, ray tracing, mesh)                                                       | `rhi/Pipeline.h`                                       |
+| **Resources**       | Buffer, Texture, Sampler, AccelerationStructure                                                           | `rhi/Resources.h`                                      |
+| **Descriptors**     | Descriptor layout, binding, bindless table                                                                | `rhi/Descriptors.h`                                    |
+| **Synchronization** | Fence, Semaphore (timeline + binary), Barrier                                                             | `rhi/Sync.h`                                           |
+| **Swapchain**       | Surface attachment, present                                                                               | `rhi/Swapchain.h`                                      |
+| **Query**           | Timestamp, occlusion, pipeline statistics                                                                 | `rhi/Query.h`                                          |
+| **Shader**          | Shader module creation from pre-compiled blobs                                                            | `rhi/Shader.h`                                         |
 
 ---
 
@@ -382,7 +382,7 @@ struct GpuCapabilityProfile {
 ### 4.3 Tier Detection Logic
 
 ```
-Vulkan 1.4 + mesh_shader + ray_query + descriptor_buffer + timeline_semaphore → T1_Vulkan
+Vulkan 1.4 + mesh_shader + ray_query + (descriptor_heap || descriptor_buffer) + timeline_semaphore → T1_Vulkan
 D3D12 + SM 6.5+ + mesh_shader + DXR 1.1                                           → T1_D3D12
 Vulkan 1.1 + ¬mesh_shader                                                          → T2
 WebGPU (Dawn/wgpu)                                                                  → T3
@@ -556,12 +556,12 @@ void SubmitSparseBinds(QueueType                              queue,
 
 **Backend mapping**:
 
-| RHI                    | Vulkan 1.4                                                                      | D3D12                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `SubmitSparseBinds`    | `vkQueueBindSparse` (on sparse-capable queue, wait/signal → `VkBindSparseInfo`) | `UpdateTileMappings` on reserved resource (wait/signal **ignored** — queue-internal serialization) |
-| `SparseBufferBind`     | `VkSparseBufferMemoryBindInfo` + `VkSparseMemoryBind`                           | `D3D12_TILED_RESOURCE_COORDINATE` + `D3D12_TILE_RANGE_FLAGS`                                       |
-| `SparseTextureBind`    | `VkSparseImageMemoryBindInfo` + `VkSparseImageMemoryBind`                       | `UpdateTileMappings` with subresource tiling                                                       |
-| wait/signal semaphores | Passed to `VkBindSparseInfo::pWait/pSignalSemaphoreInfos`                       | D3D12: `Signal(fence, value)` emulation only if `signal` is non-empty; otherwise no-op             |
+| RHI                    | Vulkan 1.4                                                                      | D3D12                                                                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `SubmitSparseBinds`    | `vkQueueBindSparse` (on sparse-capable queue, wait/signal → `VkBindSparseInfo`) | `UpdateTileMappings` on reserved resource (queue-serialized; see wait/signal row below)                                              |
+| `SparseBufferBind`     | `VkSparseBufferMemoryBindInfo` + `VkSparseMemoryBind`                           | `D3D12_TILED_RESOURCE_COORDINATE` + `D3D12_TILE_RANGE_FLAGS`                                                                         |
+| `SparseTextureBind`    | `VkSparseImageMemoryBindInfo` + `VkSparseImageMemoryBind`                       | `UpdateTileMappings` with subresource tiling                                                                                         |
+| wait/signal semaphores | Passed to `VkBindSparseInfo::pWait/pSignalSemaphoreInfos`                       | D3D12: `wait` is no-op (queue-serialized); `signal` emits `ID3D12CommandQueue::Signal(fence, value)` when non-empty, no-op otherwise |
 
 T2/T3/T4: sparse binding unavailable. Streaming on these tiers uses full-resource reallocation or CPU-side paging.
 
@@ -760,7 +760,7 @@ public:
 
 | Backend       | Implementation                                                                          |
 | ------------- | --------------------------------------------------------------------------------------- |
-| Vulkan 1.4    | `VK_EXT_descriptor_buffer` (current); future: `VK_EXT_descriptor_heap` (proposed 2026+) |
+| Vulkan 1.4    | `VK_EXT_descriptor_heap` (primary when supported); fallback: `VK_EXT_descriptor_buffer` |
 | D3D12         | CBV/SRV/UAV descriptor heap (shader-visible)                                            |
 | Vulkan Compat | Large descriptor set with `VK_EXT_descriptor_indexing` (update-after-bind)              |
 | WebGPU        | Per-draw bind group with sampled textures (no true bindless)                            |
@@ -1248,7 +1248,7 @@ void CmdUpdateBLAS(AccelStructHandle, BufferHandle scratch);  // Refit
 
 ## 11. Swapchain & Multi-Window Surface Management
 
-> **Companion document**: `specs/phases/phase-01-1a/01-window-manager.md` — tree-structured multi-window lifecycle, `SurfaceManager`, cascade destruction protocol, GPU resource sharing model.
+> **Companion document**: `specs/01-window-manager.md` — tree-structured multi-window lifecycle, `SurfaceManager`, cascade destruction protocol, GPU resource sharing model.
 
 ### 11.1 Low-Level Swapchain API (Device-Level)
 
@@ -1276,16 +1276,16 @@ void Present(SwapchainHandle, std::span<const SemaphoreHandle> waitSemaphores);
 
 Multi-window rendering uses three decoupled subsystems (see companion document for full API):
 
-| Subsystem          | Namespace        | Responsibility                                                                       |
-| ------------------ | ---------------- | ------------------------------------------------------------------------------------ |
-| `WindowManager`    | `miki::platform` | OS window tree (create/destroy/events), parent–child hierarchy, cascade destruction  |
-| `SurfaceManager`   | `miki::rhi`      | Per-window `RenderSurface` + `FrameManager` lifecycle, GPU surface attach/detach     |
-| `IDevice` (shared) | `miki::rhi`      | Single GPU device shared by all windows; all GPU resources available to all surfaces |
+| Subsystem               | Namespace        | Responsibility                                                                       |
+| ----------------------- | ---------------- | ------------------------------------------------------------------------------------ |
+| `WindowManager`         | `miki::platform` | OS window tree (create/destroy/events), parent–child hierarchy, cascade destruction  |
+| `SurfaceManager`        | `miki::rhi`      | Per-window `RenderSurface` + `FrameManager` lifecycle, GPU surface attach/detach     |
+| `DeviceHandle` (shared) | `miki::rhi`      | Single GPU device shared by all windows; all GPU resources available to all surfaces |
 
 **Key design properties**:
 
 - **Tree-structured windows**: parent–child hierarchy with post-order cascade destruction (GPU surfaces drained before OS windows destroyed)
-- **GPU resource sharing**: single `IDevice`, textures/buffers/pipelines created once and used in any window's render passes
+- **GPU resource sharing**: single `DeviceHandle`, textures/buffers/pipelines created once and used in any window's render passes
 - **Three-concern separation**: `WindowManager` never touches GPU; `SurfaceManager` never creates OS windows; events flow through `WindowManager` and are dispatched by application code
 - **Runtime backend switching**: `SurfaceManager` detach/reattach cycle preserves OS windows while swapping GPU backend (§1.4)
 
@@ -1348,10 +1348,14 @@ auto CreateShaderModule(const ShaderModuleDesc&) -> Result<ShaderModuleHandle>;
 Per-frame ring buffer for CPU→GPU uploads:
 
 ```cpp
+// Thread safety: StagingRing uses atomic bump allocation (lock-free CAS on writeOffset_).
+// Multiple threads can call Allocate() concurrently without external synchronization.
+// Alternative: per-thread sub-rings with thread-local writeOffset_ (eliminates CAS contention
+// at the cost of more reserved memory). Default: atomic bump (simpler, sufficient for <8 threads).
 class StagingRing {
-    BufferHandle ring_;          // CpuToGpu, persistent-mapped
-    uint64_t     capacity_;     // 64MB default (configurable)
-    uint64_t     writeOffset_;  // Monotonically increasing, wraps
+    BufferHandle          ring_;          // CpuToGpu, persistent-mapped
+    uint64_t              capacity_;     // 64MB default (configurable)
+    std::atomic<uint64_t> writeOffset_;  // Monotonically increasing, wraps (atomic for thread safety)
 
     struct Allocation {
         void*    cpuPtr;
@@ -1514,20 +1518,20 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 
 ### 16.1 Tier1 Vulkan 1.4 — Maximum Performance Path
 
-| Feature            | Implementation                                                                                                                                                                                                                                         |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Descriptor binding | `VK_EXT_descriptor_buffer` (current primary); migration to `VK_EXT_descriptor_heap` planned when driver support matures (published Jan 2026, SDK Q1 2026, driver adoption expected H2 2026). Internal to T1 Vulkan backend — public RHI API unchanged. |
-| Push constants     | Native 256B `vkCmdPushConstants` (future: `VK_EXT_descriptor_heap` push data interface)                                                                                                                                                                |
-| Mesh shaders       | `VK_EXT_mesh_shader` (task + mesh)                                                                                                                                                                                                                     |
-| Dynamic rendering  | `VK_KHR_dynamic_rendering` (core 1.3)                                                                                                                                                                                                                  |
-| Barriers           | `vkCmdPipelineBarrier2` (core 1.3) with `VK_KHR_synchronization2`                                                                                                                                                                                      |
-| Async compute      | Dedicated compute queue + timeline semaphore                                                                                                                                                                                                           |
-| Transfer           | Dedicated transfer queue (Vulkan 1.4 streaming)                                                                                                                                                                                                        |
-| BDA                | `VK_KHR_buffer_device_address` (core 1.2)                                                                                                                                                                                                              |
-| Ray tracing        | `VK_KHR_ray_query` + `VK_KHR_acceleration_structure`                                                                                                                                                                                                   |
-| VRS                | `VK_KHR_fragment_shading_rate`                                                                                                                                                                                                                         |
-| Sparse binding     | `VkSparseBufferMemoryBindInfo` for streaming pages                                                                                                                                                                                                     |
-| Subgroup ops       | `VK_KHR_shader_subgroup_extended_types` (core 1.2)                                                                                                                                                                                                     |
+| Feature            | Implementation                                                                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Descriptor binding | `VK_EXT_descriptor_heap` (primary when supported; published Jan 2026, SDK Q1 2026); fallback: `VK_EXT_descriptor_buffer`. Internal to T1 Vulkan backend — public RHI API unchanged. |
+| Push constants     | `VK_EXT_descriptor_heap` push data interface (primary); fallback: native 256B `vkCmdPushConstants`                                                                                  |
+| Mesh shaders       | `VK_EXT_mesh_shader` (task + mesh)                                                                                                                                                  |
+| Dynamic rendering  | `VK_KHR_dynamic_rendering` (core 1.3)                                                                                                                                               |
+| Barriers           | `vkCmdPipelineBarrier2` (core 1.3) with `VK_KHR_synchronization2`                                                                                                                   |
+| Async compute      | Dedicated compute queue + timeline semaphore                                                                                                                                        |
+| Transfer           | Dedicated transfer queue (Vulkan 1.4 streaming)                                                                                                                                     |
+| BDA                | `VK_KHR_buffer_device_address` (core 1.2)                                                                                                                                           |
+| Ray tracing        | `VK_KHR_ray_query` + `VK_KHR_acceleration_structure`                                                                                                                                |
+| VRS                | `VK_KHR_fragment_shading_rate`                                                                                                                                                      |
+| Sparse binding     | `VkSparseBufferMemoryBindInfo` for streaming pages                                                                                                                                  |
+| Subgroup ops       | `VK_KHR_shader_subgroup_extended_types` (core 1.2)                                                                                                                                  |
 
 ### 16.2 Tier1 D3D12 — Maximum Performance Path
 
@@ -1696,8 +1700,8 @@ void CommandBuffer::CmdDraw(uint32_t vertexCount, uint32_t instanceCount) {
 
 ```cpp
 struct VulkanDeviceExtensions {
-    bool descriptorBuffer;      // VK_EXT_descriptor_buffer (current primary path)
-    bool descriptorHeap;        // VK_EXT_descriptor_heap (proposed 2026+, future upgrade)
+    bool descriptorHeap;        // VK_EXT_descriptor_heap (primary path when supported)
+    bool descriptorBuffer;      // VK_EXT_descriptor_buffer (fallback if descriptor_heap unavailable)
     bool meshShader;            // VK_EXT_mesh_shader
     bool rayQuery;              // VK_KHR_ray_query
     bool accelStruct;           // VK_KHR_acceleration_structure
@@ -1712,13 +1716,13 @@ struct VulkanDeviceExtensions {
 
 ### 18.2 Future Extensions
 
-| Feature            | Vulkan                                    | D3D12                         | RHI Impact                                           |
-| ------------------ | ----------------------------------------- | ----------------------------- | ---------------------------------------------------- |
-| Descriptor heap    | `VK_EXT_descriptor_heap` (proposed 2026+) | Already native                | New descriptor path, coexists with descriptor buffer |
-| Work graphs        | N/A (Vulkan equivalent TBD)               | `DispatchGraph` (SM 6.8)      | New `CmdDispatchGraph` command                       |
-| Cooperative matrix | `VK_KHR_cooperative_matrix`               | SM 6.9 wave matrix            | New shader intrinsics, no RHI API change             |
-| GDeflate HW decode | `VK_NV_memory_decompression`              | DirectStorage                 | New `CmdDecompressBuffer` command (see below)        |
-| Fence barriers     | N/A                                       | D3D12 Fence Barriers (Tier-1) | Enhanced barrier model (see §9.4 mapping note)       |
+| Feature            | Vulkan                                                      | D3D12                         | RHI Impact                                               |
+| ------------------ | ----------------------------------------------------------- | ----------------------------- | -------------------------------------------------------- |
+| Descriptor heap    | `VK_EXT_descriptor_heap` (published Jan 2026, primary path) | Already native                | Primary descriptor path; `descriptor_buffer` as fallback |
+| Work graphs        | N/A (Vulkan equivalent TBD)                                 | `DispatchGraph` (SM 6.8)      | New `CmdDispatchGraph` command                           |
+| Cooperative matrix | `VK_KHR_cooperative_matrix`                                 | SM 6.9 wave matrix            | New shader intrinsics, no RHI API change                 |
+| GDeflate HW decode | `VK_NV_memory_decompression`                                | DirectStorage                 | New `CmdDecompressBuffer` command (see below)            |
+| Fence barriers     | N/A                                                         | D3D12 Fence Barriers (Tier-1) | Enhanced barrier model (see §9.4 mapping note)           |
 
 **`CmdDecompressBuffer` signature preview** (Phase 6b+, not yet active):
 
@@ -1768,25 +1772,25 @@ Files:            PascalCase.h / PascalCase.cpp
 
 ## 20. Summary: Design Decisions & Rationale
 
-| Decision                                                                   | Alternatives Considered                                                         | Rationale                                                                                                                                                                                                                                                                        |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CRTP over virtual dispatch                                                 | vtable (NVRHI), type-erasure (wgpu)                                             | Zero overhead in command recording hot path; backend known at compile time                                                                                                                                                                                                       |
-| Explicit barriers over auto-tracking                                       | NVRHI auto-tracking, wgpu implicit                                              | RenderGraph already tracks states; double-tracking wastes CPU; explicit is debuggable                                                                                                                                                                                            |
-| 64-bit typed handles over raw pointers                                     | COM pointers (D3D), shared_ptr                                                  | Cache-friendly (8B), generation-safe, no ref-count overhead, trivially copyable                                                                                                                                                                                                  |
-| Dynamic rendering over render pass objects                                 | VkRenderPass (Vulkan 1.0)                                                       | Simpler API, matches D3D12/WebGPU/GL model, core in Vulkan 1.3                                                                                                                                                                                                                   |
-| Deferred destruction over ref-counting                                     | COM AddRef/Release, shared_ptr                                                  | Deterministic, no atomic ref-count in hot path, 2-frame latency matches frames-in-flight                                                                                                                                                                                         |
-| `VK_EXT_descriptor_buffer` as primary, `descriptor_heap` as future upgrade | Descriptor sets only, descriptor heap only                                      | `descriptor_buffer` is shipping in drivers today; `descriptor_heap` is Vulkan Roadmap 2026+ proposed. Both paths will coexist; D3D12 maps 1:1 to descriptor heap natively                                                                                                        |
-| Slang as shader language                                                   | HLSL, GLSL, hand-written per-backend                                            | Single source → all targets; Slang v2026.5 has mature WGSL/GLSL/SPIR-V/DXIL output                                                                                                                                                                                               |
-| Secondary command buffers (`CmdExecuteSecondary`)                          | Primary-only multi-CmdBuf submit                                                | Enables multi-threaded recording within a render pass. Vulkan secondary cmd bufs, D3D12 bundles, WebGPU render bundles. Without this, parallel recording requires splitting render passes                                                                                        |
-| `ReadbackRing` symmetric to `StagingRing`                                  | Per-subsystem ad-hoc readback buffers                                           | GpuProfiler, ShaderPrintf, GpuBreadcrumbs all need GPU→CPU readback. Shared ring avoids code duplication and memory fragmentation                                                                                                                                                |
-| Pipeline Library (split compilation)                                       | Monolithic PSO creation only                                                    | `VK_EXT_graphics_pipeline_library` / D3D12 Pipeline State Streams reduce PSO creation stalls 10-100x. Critical for material-heavy CAD scenes with thousands of unique PSOs                                                                                                       |
-| `DescriptorWrite` uses `std::variant<BufferBinding, TextureBinding, ...>`  | Flat struct with all fields (wastes 40+ bytes, ambiguous which field is active) | Type-safe, self-documenting, compiler can optimize variant dispatch. No runtime ambiguity about which resource is bound                                                                                                                                                          |
-| `HandlePool` uses `std::mutex` (not lock-free)                             | Lock-free CAS free-list with `atomic<uint32_t>` head                            | Resource creation is not hot path (O(100)/frame). Bare `atomic<uint32_t>` CAS free-list has ABA problem. Mutex is correct, simple, and unmeasurable in profiling (<1μs/frame)                                                                                                    |
-| No built-in render graph                                                   | Integrated RG (UE5 RDG)                                                         | Separation of concerns; RHI is reusable without RG; RG can be replaced independently                                                                                                                                                                                             |
-| `CommandListHandle` dispatch-once facade                                   | Command Packet serialization (bgfx, Filament/GL), full virtual `ICommandBuffer` | Type-erasure cost paid O(passes) ~50-100/frame (<1μs), not O(draws) ~10000+. Command Packets add ~100μs replay overhead, destroy debuggability (RenderDoc/PIX see `Translator::Execute()`), and double maintenance cost. Virtual dispatch adds ~2-5ns/draw ×10K = ~25-50μs/frame |
-| `GetMemoryStats()` / `GetMemoryHeapBudgets()` in RHI                       | Debug layer calls VMA/D3D12MA directly                                          | Maintains Thin Abstraction boundary; profilers should not bypass RHI to query allocator internals                                                                                                                                                                                |
-| Reserved binding `@group(0) @binding(0)` for push constant UBO (WebGPU/GL) | No reservation (implicit conflict)                                              | Prevents slot collision when Slang cross-compiles `[vk::push_constant]` to WGSL `var<uniform>`. Debug validation catches violations. Vulkan/D3D12 unaffected (native push constants)                                                                                             |
-| `SparseBindDesc` separates data from sync                                  | Vulkan-style embedded semaphores in `SparseBindDesc`                            | D3D12 `UpdateTileMappings` is queue-serialized — embedding semaphores forces D3D12 backend to fake `ID3D12Fence` management, violating Thin Abstraction. Sync passed at `SubmitSparseBinds()` call site instead                                                                  |
+| Decision                                                                   | Alternatives Considered                                                         | Rationale                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CRTP over virtual dispatch                                                 | vtable (NVRHI), type-erasure (wgpu)                                             | Zero overhead in command recording hot path; backend known at compile time                                                                                                                                                                                                                         |
+| Explicit barriers over auto-tracking                                       | NVRHI auto-tracking, wgpu implicit                                              | RenderGraph already tracks states; double-tracking wastes CPU; explicit is debuggable                                                                                                                                                                                                              |
+| 64-bit typed handles over raw pointers                                     | COM pointers (D3D), shared_ptr                                                  | Cache-friendly (8B), generation-safe, no ref-count overhead, trivially copyable                                                                                                                                                                                                                    |
+| Dynamic rendering over render pass objects                                 | VkRenderPass (Vulkan 1.0)                                                       | Simpler API, matches D3D12/WebGPU/GL model, core in Vulkan 1.3                                                                                                                                                                                                                                     |
+| Deferred destruction over ref-counting                                     | COM AddRef/Release, shared_ptr                                                  | Deterministic, no atomic ref-count in hot path, 2-frame latency matches frames-in-flight                                                                                                                                                                                                           |
+| `VK_EXT_descriptor_heap` as primary, `descriptor_buffer` as fallback       | Descriptor sets only, descriptor buffer only                                    | `descriptor_heap` (Vulkan Roadmap 2026, published Jan 2026) is the definitive descriptor model — two distinct heaps (sampler + resource), push data interface, 1:1 parity with D3D12. Use when driver supports it; fall back to `descriptor_buffer` on older drivers. RHI API unchanged either way |
+| Slang as shader language                                                   | HLSL, GLSL, hand-written per-backend                                            | Single source → all targets; Slang v2026.5 has mature WGSL/GLSL/SPIR-V/DXIL output                                                                                                                                                                                                                 |
+| Secondary command buffers (`CmdExecuteSecondary`)                          | Primary-only multi-CmdBuf submit                                                | Enables multi-threaded recording within a render pass. Vulkan secondary cmd bufs, D3D12 bundles, WebGPU render bundles. Without this, parallel recording requires splitting render passes                                                                                                          |
+| `ReadbackRing` symmetric to `StagingRing`                                  | Per-subsystem ad-hoc readback buffers                                           | GpuProfiler, ShaderPrintf, GpuBreadcrumbs all need GPU→CPU readback. Shared ring avoids code duplication and memory fragmentation                                                                                                                                                                  |
+| Pipeline Library (split compilation)                                       | Monolithic PSO creation only                                                    | `VK_EXT_graphics_pipeline_library` / D3D12 Pipeline State Streams reduce PSO creation stalls 10-100x. Critical for material-heavy CAD scenes with thousands of unique PSOs                                                                                                                         |
+| `DescriptorWrite` uses `std::variant<BufferBinding, TextureBinding, ...>`  | Flat struct with all fields (wastes 40+ bytes, ambiguous which field is active) | Type-safe, self-documenting, compiler can optimize variant dispatch. No runtime ambiguity about which resource is bound                                                                                                                                                                            |
+| `HandlePool` uses `std::mutex` (not lock-free)                             | Lock-free CAS free-list with `atomic<uint32_t>` head                            | Resource creation is not hot path (O(100)/frame). Bare `atomic<uint32_t>` CAS free-list has ABA problem. Mutex is correct, simple, and unmeasurable in profiling (<1μs/frame)                                                                                                                      |
+| No built-in render graph                                                   | Integrated RG (UE5 RDG)                                                         | Separation of concerns; RHI is reusable without RG; RG can be replaced independently                                                                                                                                                                                                               |
+| `CommandListHandle` dispatch-once facade                                   | Command Packet serialization (bgfx, Filament/GL), full virtual `ICommandBuffer` | Type-erasure cost paid O(passes) ~50-100/frame (<1μs), not O(draws) ~10000+. Command Packets add ~100μs replay overhead, destroy debuggability (RenderDoc/PIX see `Translator::Execute()`), and double maintenance cost. Virtual dispatch adds ~2-5ns/draw ×10K = ~25-50μs/frame                   |
+| `GetMemoryStats()` / `GetMemoryHeapBudgets()` in RHI                       | Debug layer calls VMA/D3D12MA directly                                          | Maintains Thin Abstraction boundary; profilers should not bypass RHI to query allocator internals                                                                                                                                                                                                  |
+| Reserved binding `@group(0) @binding(0)` for push constant UBO (WebGPU/GL) | No reservation (implicit conflict)                                              | Prevents slot collision when Slang cross-compiles `[vk::push_constant]` to WGSL `var<uniform>`. Debug validation catches violations. Vulkan/D3D12 unaffected (native push constants)                                                                                                               |
+| `SparseBindDesc` separates data from sync                                  | Vulkan-style embedded semaphores in `SparseBindDesc`                            | D3D12 `UpdateTileMappings` is queue-serialized — embedding semaphores forces D3D12 backend to fake `ID3D12Fence` management, violating Thin Abstraction. Sync passed at `SubmitSparseBinds()` call site instead                                                                                    |
 
 ---
 
@@ -1885,365 +1889,3 @@ enum class TextureLayout : uint8_t {
     ShadingRate,
 };
 ```
-
----
-
-## 21. Architecture Review (逐条审核)
-
-> **Audit baseline**: `specs/rendering-pipeline-architecture.md` (target architecture) + industry SOTA as of 2026-Q1.
-> **Audit date**: 2026-03-27.
-> **Verdict legend**: ✅ PASS — no action needed. ⚠️ WARN — minor gap, document or plan fix. ❌ FAIL — blocking issue, must fix before implementation.
-
-### 21.1 §1 Design Goals & Constraints
-
-| Goal                       | Verdict | Notes                                                                                                                                                                                                            |
-| -------------------------- | :-----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1 Zero-overhead T1        |   ✅    | CRTP + `CommandListHandle` dispatch-once facade correctly eliminates virtual dispatch from hot path. Performance analysis (§2.2) is quantitatively sound: 100 passes × 5ns switch = 500ns/frame ≪ 16.7ms budget. |
-| G2 Max capability per tier |   ✅    | 5-tier system (T1-Vk, T1-D3D12, T2, T3, T4) matches `rendering-pipeline-architecture.md` §1.3 Tier Feature Matrix exactly.                                                                                       |
-| G3 Compile-time backend    |   ✅    | CRTP + explicit template instantiation. Consistent with `rendering-pipeline-architecture.md` §1.5 `DeviceBase<Impl>`.                                                                                            |
-| G4 Thin abstraction        |   ✅    | No hidden state tracking, no implicit barriers. Consistent with RenderGraph-driven barrier model in `rendering-pipeline-architecture.md` §2.1.                                                                   |
-| G5 RenderGraph-friendly    |   ✅    | Transient aliasing primitives (§5.6), explicit barriers (§9.3), `CommandListHandle` dispatch-once pattern all align.                                                                                             |
-| G6 Shader IR agnostic      |   ✅    | `ShaderModuleDesc` accepts SPIR-V/DXIL/GLSL/WGSL blobs. Matches `rendering-pipeline-architecture.md` §1.3 Shader IR column.                                                                                      |
-| G7 Deterministic lifetime  |   ✅    | Deferred destruction queue (§5.4), 2-frame latency, no ref-counting.                                                                                                                                             |
-
-**§1.4 Runtime Backend Switching**: ✅ Well-designed. Protocol (8-step teardown/recreate) is correct. Pipeline cache blob-key approach for cross-backend cache is sound. Filament precedent correctly cited.
-
-**Overall §1 verdict**: ✅ **PASS**. No issues.
-
----
-
-### 21.2 §2 Architecture Overview
-
-| Item                        | Verdict | Notes                                                                                                            |
-| --------------------------- | :-----: | ---------------------------------------------------------------------------------------------------------------- |
-| Layer diagram               |   ✅    | 5-backend + RHI + RenderGraph + Application. Matches `rendering-pipeline-architecture.md` §2.1.                  |
-| CRTP (§2.2)                 |   ✅    | `DeviceBase<Impl>` / `CommandBufferBase<Impl>` design correct.                                                   |
-| `DeviceHandle`              |   ✅    | Type-erased facade with 5-way switch. O(passes) frequency.                                                       |
-| `CommandListHandle`         |   ✅    | Dispatch-once pattern resolves CRTP vs type-erasure contradiction. Command Packet rejection well-justified.      |
-| Module decomposition (§2.3) |   ⚠️    | Missing `rhi/MemoryStats.h` for §13.4 `GetMemoryStats`/`GetMemoryHeapBudgets`. Minor — can be in `rhi/Device.h`. |
-
-**Action**: Add `MemoryStats` / `MemoryHeapBudget` structs to module table or note they live in `rhi/Device.h`.
-
----
-
-### 21.3 §3 Handle System
-
-| Item                                                             | Verdict | Notes                                                                                                                                    |
-| ---------------------------------------------------------------- | :-----: | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| 64-bit typed handle layout `[gen:16\|idx:32\|type:8\|backend:8]` |   ✅    | Industry standard (The Forge, Diligent Engine). 16-bit generation gives 65536 reuse cycles before wrap — sufficient.                     |
-| Handle types coverage                                            |   ⚠️    | Missing `DescriptorLayoutHandle` in the handle list but it appears in §6.2 `CreateDescriptorLayout`. Also missing `DescriptorSetHandle`. |
-| HandlePool (§3.3)                                                |   ✅    | O(1) create/destroy/lookup. Fixed-size pool. No heap alloc after init.                                                                   |
-
-**Action**: Add `DescriptorLayoutHandle` and `DescriptorSetHandle` to the §3.1 handle type list.
-
----
-
-### 21.4 §4 Device & Capability System
-
-| Item                   | Verdict | Notes                                                                                                                                                                                                                                                                                                                                   |
-| ---------------------- | :-----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DeviceDesc`           |   ✅    | Backend selection, adapter index, validation, capture flags. Complete.                                                                                                                                                                                                                                                                  |
-| `GpuCapabilityProfile` |   ⚠️    | Missing `hasWorkGraphs` (D3D12 SM 6.8, §18.2 references it). Missing `hasCooperativeMatrix` (§18.1 lists it). Missing `hasHardwareDecompression` — wait, it IS present (L361). OK.                                                                                                                                                      |
-| Tier detection logic   |   ✅    | Matches `rendering-pipeline-architecture.md` §1.3. T1 requires mesh shader + ray query + descriptor buffer/heap + timeline semaphore.                                                                                                                                                                                                   |
-| `DescriptorModel` enum |   ⚠️    | References `DescriptorHeap` as a variant but `VK_EXT_descriptor_heap` was just published (2026-01-23 Khronos blog). The RHI correctly lists `descriptor_buffer` as current primary and `descriptor_heap` as future upgrade — good forward-planning. However, the `DescriptorModel` enum should explicitly list both as separate values. |
-
-**Action**: (1) Add `hasWorkGraphs` bool to `GpuCapabilityProfile`. (2) Ensure `DescriptorModel` enum has both `DescriptorBuffer` and `DescriptorHeap` values.
-
----
-
-### 21.5 §5 Resource System
-
-| Item                           | Verdict | Notes                                                                                                                                                                            |
-| ------------------------------ | :-----: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BufferDesc` / `BufferUsage`   |   ✅    | Covers vertex, index, uniform, storage, indirect, transfer, accel struct, BDA, sparse. Complete for all 88 passes.                                                               |
-| `TextureDesc` / `TextureUsage` |   ✅    | Covers sampled, storage, color/depth attachment, transfer, input attachment, shading rate, sparse.                                                                               |
-| `SamplerDesc`                  |   ✅    | Standard filter/address/LOD/anisotropy/compare.                                                                                                                                  |
-| Deferred destruction (§5.4)    |   ✅    | 2-frame latency queue. No ref-counting. Industry standard.                                                                                                                       |
-| Sparse binding (§5.5)          |   ✅    | `SparseBindDesc` separated from sync semantics (fixed in prior review). Backend mapping correct. Used by ClusterDAG streaming (§5.6 of pipeline arch) and VSM page management.   |
-| Transient aliasing (§5.6)      |   ✅    | `CreateMemoryHeap` + `AliasBufferMemory` / `AliasTextureMemory`. Primitives-only, policy in RenderGraph. Matches `rendering-pipeline-architecture.md` §2.1 "transient aliasing". |
-| `MemoryLocation` enum          |   ⚠️    | Missing `GpuOnly_LazilyAllocated` for tiled architectures. Not critical for desktop CAD target, but WebGPU (mobile future) may benefit. Low priority.                            |
-
-**Action**: Consider adding `LazilyAllocated` to `MemoryLocation` for future mobile/WebGPU tile-based GPU support.
-
----
-
-### 21.6 §6 Descriptor & Binding System
-
-| Item                                          | Verdict | Notes                                                                                                                                                                                                                                  |
-| --------------------------------------------- | :-----: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4-level binding hierarchy                     |   ✅    | Push Constants (L0), Per-Frame (L1), Per-Material (L2), Bindless (L3). Matches `rendering-pipeline-architecture.md` §1.6 descriptor strategy.                                                                                          |
-| `DescriptorLayoutDesc` / `PipelineLayoutDesc` |   ✅    | Max 4 sets, 256B push constants. Sufficient for all 88 passes.                                                                                                                                                                         |
-| `DescriptorWrite` using `std::variant`        |   ✅    | Type-safe, self-documenting. Better than flat struct with ambiguous fields.                                                                                                                                                            |
-| Backend mapping (§6.5)                        |   ✅    | Vulkan descriptor buffer/heap, D3D12 root signature + descriptor heap, VkCompat descriptor sets, WebGPU bind groups, OpenGL direct bind. Comprehensive.                                                                                |
-| Reserved binding convention (§6.5.1)          |   ✅    | Push constant UBO emulation at `@group(0)@binding(0)` for WebGPU/GL. Slang integration contract documented. Debug validation.                                                                                                          |
-| `BindlessTable` (§6.6)                        |   ✅    | `RegisterTexture`/`RegisterBuffer`/`Unregister` + `Bind`. Backend mapping covers all 5 backends.                                                                                                                                       |
-| **VK_EXT_descriptor_heap transition plan**    |   ⚠️    | §16.1 lists `descriptor_buffer` as current and `descriptor_heap` as future. Good. But the `BindlessTable` backend mapping (§6.6) lists `VK_EXT_descriptor_buffer` for T1 — needs a note about future `descriptor_heap` migration path. |
-
-**`VK_EXT_descriptor_heap` update** (January 2026 Khronos release): The newly published `VK_EXT_descriptor_heap` introduces two distinct heaps (sampler heap + resource heap), replaces `VK_EXT_descriptor_buffer`, and introduces a new "push data" interface replacing both push constants and push descriptors. The RHI currently uses `descriptor_buffer` as primary — this is correct for current drivers. Migration to `descriptor_heap` should be planned as a Phase 6a+ task when driver support matures (expected H2 2026). The abstraction is forward-compatible: `BindlessTable` already encapsulates the descriptor backend, so the transition is internal to T1 Vulkan implementation.
-
-**Action**: Add a migration note to §6.6 or §18.2 about `VK_EXT_descriptor_heap` timeline and internal migration plan.
-
----
-
-### 21.7 §7 Command Buffer System
-
-| Item                                                | Verdict | Notes                                                                                                                                                                                                                       |
-| --------------------------------------------------- | :-----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `QueueType` (Graphics/Compute/Transfer)             |   ✅    | Matches `rendering-pipeline-architecture.md` §4.1 (3-queue architecture for T1).                                                                                                                                            |
-| Command recording API coverage                      |   ✅    | State binding, draw (indexed, indirect, indirect count, mesh tasks), compute, transfer, barriers, dynamic rendering, dynamic state, VRS, secondary cmd bufs, query, debug labels. **Complete for all 88 passes.**           |
-| `CmdDrawMeshTasksIndirectCount`                     |   ✅    | Required for `rendering-pipeline-architecture.md` §4.2 Step 7 (Task→Mesh→VisBuffer). Present.                                                                                                                               |
-| `CmdBeginRendering` / `CmdEndRendering`             |   ✅    | Dynamic rendering, no render pass objects. Matches `rendering-pipeline-architecture.md` §2.2 backend table.                                                                                                                 |
-| `RenderingDesc::viewMask`                           |   ✅    | Multiview for XR stereo (Pass #69).                                                                                                                                                                                         |
-| VRS (`CmdSetShadingRate`, `CmdSetShadingRateImage`) |   ✅    | Pass #59 VRS Image generation. T1 only.                                                                                                                                                                                     |
-| `CmdExecuteSecondary`                               |   ✅    | Multi-threaded recording. Vulkan secondary cmd bufs, D3D12 bundles, WebGPU render bundles.                                                                                                                                  |
-| Queue management (§7.4)                             |   ✅    | Internal queue family selection. No explicit `GetQueue()`. Timeline semaphores for cross-queue sync.                                                                                                                        |
-| **Missing: `CmdDispatchIndirect` for ray tracing**  |   ⚠️    | `rendering-pipeline-architecture.md` Passes #17, #20-#24, #71, #83-#85 use ray query in compute dispatches. The `CmdDispatch` / `CmdDispatchIndirect` cover this. OK — ray query is shader-side, no special command needed. |
-| **Missing: `CmdBuildBLAS`/`CmdBuildTLAS` in §7.2**  |   ⚠️    | These are listed in §10 but not in the §7.2 command recording API. They ARE command buffer commands. Should be cross-referenced or included in §7.2 for completeness.                                                       |
-
-**Action**: Add cross-reference note in §7.2 pointing to §10 for BLAS/TLAS build commands.
-
----
-
-### 21.8 §8 Pipeline System
-
-| Item                                           | Verdict | Notes                                                                                                                                                                                                                                                                                    |
-| ---------------------------------------------- | :-----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GraphicsPipelineDesc`                         |   ✅    | Vertex shader, fragment shader, task shader, mesh shader, vertex input, topology, rasterizer, depth/stencil, blend, render target formats, pipeline layout, specialization constants, multiview. **Complete.** Matches `rendering-pipeline-architecture.md` §1.5 `GraphicsPipelineDesc`. |
-| `IsMeshShaderPipeline()`                       |   ✅    | Used to skip vertex input when mesh shader path active. Matches T1 geometry path.                                                                                                                                                                                                        |
-| `ComputePipelineDesc`                          |   ✅    | Used by 30+ compute passes in the 88-pass pipeline.                                                                                                                                                                                                                                      |
-| `RayTracingPipelineDesc`                       |   ✅    | T1 only. Pass #23 Path Tracer.                                                                                                                                                                                                                                                           |
-| Pipeline cache (§8.4)                          |   ✅    | Disk-persistent. Matches `rendering-pipeline-architecture.md` §1.5 "All PSOs pre-built at init".                                                                                                                                                                                         |
-| Pipeline library / split compilation (§8.5)    |   ✅    | `VK_EXT_graphics_pipeline_library` / D3D12 Pipeline State Streams. 10-100x PSO creation speedup. Critical for CAD with 1000s of materials.                                                                                                                                               |
-| **Missing: `PolygonMode::Line` for wireframe** |   ⚠️    | `rendering-pipeline-architecture.md` §5.9.2 has Wireframe/HLR/Pen display styles requiring `PolygonMode::Line`. The enum is referenced in `GraphicsPipelineDesc::polygonMode` but not defined. Ensure `PolygonMode::Fill`, `Line`, `Point` are in `RhiEnums.h`.                          |
-
-**Action**: Verify `PolygonMode` enum includes `Fill`, `Line`, `Point` values.
-
----
-
-### 21.9 §9 Synchronization Primitives
-
-| Item                                                  | Verdict | Notes                                                                                                                                                                                                                                                                                                                                                                     |
-| ----------------------------------------------------- | :-----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fence (CPU-GPU)                                       |   ✅    | Standard create/wait/reset/status.                                                                                                                                                                                                                                                                                                                                        |
-| Timeline semaphore (GPU-GPU)                          |   ✅    | Required for T1 async compute. `rendering-pipeline-architecture.md` §4.1 shows async compute queue with timeline semaphore.                                                                                                                                                                                                                                               |
-| Binary semaphore                                      |   ✅    | Swapchain acquire/present.                                                                                                                                                                                                                                                                                                                                                |
-| Barrier model (§9.3)                                  |   ✅    | `BufferBarrierDesc`, `TextureBarrierDesc`, `PipelineBarrierDesc`. Stage + access + layout + queue transfer.                                                                                                                                                                                                                                                               |
-| D3D12 Enhanced Barriers mapping (§9.4)                |   ✅    | Vulkan-centric RHI barrier model mapped to `D3D12_BARRIER_*` types. Fallback to legacy `ResourceBarrier` documented.                                                                                                                                                                                                                                                      |
-| **Barrier model is Vulkan-centric**                   |   ⚠️    | The stage+access model maps naturally to `vkCmdPipelineBarrier2`. D3D12 Enhanced Barriers use a layout-based model — the mapping table (§9.4) handles this, but the D3D12 backend has extra translation work. This is acceptable (Thin Abstraction from RenderGraph's perspective), but document the D3D12 translation cost (~1-2ns per barrier, negligible vs GPU cost). |
-| **Missing: `Event` (fine-grained GPU split barrier)** |   ⚠️    | §2.3 Module Decomposition mentions `Event` in Synchronization module but no API is defined. Vulkan `VkEvent` and D3D12 split barriers can improve barrier granularity. Low priority — `PipelineBarrier` is sufficient for RenderGraph.                                                                                                                                    |
-
-**Action**: Either define `Event` API or remove from §2.3 module list.
-
----
-
-### 21.10 §10 Acceleration Structure
-
-| Item                                              | Verdict | Notes                                                                                                                                                                                                                                                                                                                             |
-| ------------------------------------------------- | :-----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AccelStructGeometryDesc`                         |   ✅    | Triangles, AABBs. Vertex buffer + index buffer + transform.                                                                                                                                                                                                                                                                       |
-| `BLASDesc` / `TLASDesc`                           |   ✅    | Build flags (fast trace, fast build, allow update).                                                                                                                                                                                                                                                                               |
-| `CmdBuildBLAS` / `CmdBuildTLAS` / `CmdUpdateBLAS` |   ✅    | Matches `rendering-pipeline-architecture.md` §4.2 Step 2 (BLAS refit/rebuild + TLAS rebuild).                                                                                                                                                                                                                                     |
-| **Missing: scratch buffer size query**            |   ❌    | No `GetAccelStructBuildSizes(BLASDesc) -> AccelStructBuildSizes` API. Both Vulkan (`vkGetAccelerationStructureBuildSizesKHR`) and D3D12 (`GetRaytracingAccelerationStructurePrebuildInfo`) require pre-querying scratch/result buffer sizes before building. Without this, the caller cannot allocate the correct scratch buffer. |
-| **Missing: `AccelStructInstance` definition**     |   ⚠️    | `TLASDesc::instanceBuffer` references "Array of AccelStructInstance (64B each)" but the struct is not defined. Should define `AccelStructInstance` (transform 3x4 + instanceId + mask + SBT offset + flags).                                                                                                                      |
-
-**Action**: (1) **Add `GetAccelStructBuildSizes()` API** — this is a blocking omission. (2) Define `AccelStructInstance` struct.
-
----
-
-### 21.11 §11 Swapchain & Multi-Window
-
-| Item                              | Verdict | Notes                                                                                                    |
-| --------------------------------- | :-----: | -------------------------------------------------------------------------------------------------------- |
-| `SwapchainDesc`                   |   ✅    | Surface, size, format, present mode, image count, HDR.                                                   |
-| `AcquireNextImage` / `Present`    |   ✅    | Semaphore-based.                                                                                         |
-| `ResizeSwapchain`                 |   ✅    | Needed for window resize.                                                                                |
-| Multi-window architecture (§11.2) |   ✅    | 3-subsystem design (WindowManager, SurfaceManager, shared Device). Matches `specs/01-window-manager.md`. |
-
-**Overall §11 verdict**: ✅ **PASS**.
-
----
-
-### 21.12 §12 Shader Module
-
-| Item                                                      | Verdict | Notes                                                                                                                                                                                                                   |
-| --------------------------------------------------------- | :-----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ShaderStage` flags                                       |   ✅    | Vertex, Fragment, Compute, Task, Mesh, Ray Gen/AnyHit/ClosestHit/Miss/Intersection/Callable. Complete.                                                                                                                  |
-| `ShaderModuleDesc`                                        |   ✅    | Stage + code blob + entry point + debug name. IR-agnostic (SPIR-V/DXIL/GLSL/WGSL).                                                                                                                                      |
-| **Missing: specialization constants in ShaderModuleDesc** |   ⚠️    | Specialization constants are in `GraphicsPipelineDesc` (§8.1) and `ComputePipelineDesc` (§8.2) — this is the correct location (Vulkan spec applies specialization at pipeline creation, not module creation). No issue. |
-
-**Overall §12 verdict**: ✅ **PASS**.
-
----
-
-### 21.13 §13 Memory Management Strategy
-
-| Item                                              | Verdict | Notes                                                                                                 |
-| ------------------------------------------------- | :-----: | ----------------------------------------------------------------------------------------------------- |
-| Allocator architecture                            |   ✅    | VMA (Vulkan), D3D12MA (D3D12), API-managed (WebGPU/GL). Industry standard.                            |
-| `StagingRing` (§13.2)                             |   ✅    | CPU→GPU ring buffer. 64MB default. Persistent-mapped. Used for SceneBuffer upload, texture streaming. |
-| `ReadbackRing` (§13.3)                            |   ✅    | GPU→CPU symmetric ring. 4MB default. Used by GpuProfiler, ShaderPrintf, GpuBreadcrumbs, Telemetry.    |
-| Transient resource pool (§13.4)                   |   ✅    | RenderGraph-driven aliasing via shared heaps. 30-50% VRAM savings.                                    |
-| `GetMemoryStats` / `GetMemoryHeapBudgets` (§13.4) |   ✅    | Added in prior review. Backend mapping complete.                                                      |
-| **Duplicate §13.4 numbering**                     |   ⚠️    | Two subsections numbered §13.4 (Transient Resource Pool and Memory Statistics API). Renumber.         |
-
-**Action**: Renumber Memory Statistics API to §13.5.
-
----
-
-### 21.14 §14 Error Handling
-
-| Item                         | Verdict | Notes                                                                                                                                                                                          |
-| ---------------------------- | :-----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `std::expected<T, RhiError>` |   ✅    | C++23 error handling. No exceptions in hot paths.                                                                                                                                              |
-| `RhiError` enum coverage     |   ✅    | OutOfMemory (device/host), DeviceLost, SurfaceLost, FormatNotSupported, FeatureNotSupported, InvalidHandle, InvalidParameter, ShaderCompilationFailed, PipelineCreationFailed, TooManyObjects. |
-| DeviceLost recovery          |   ✅    | Triggers graceful re-creation (§1.4 protocol).                                                                                                                                                 |
-
-**Overall §14 verdict**: ✅ **PASS**.
-
----
-
-### 21.15 §15 Debug & Profiling Integration
-
-| Item                   | Verdict | Notes                                                                                |
-| ---------------------- | :-----: | ------------------------------------------------------------------------------------ |
-| Object naming (§15.1)  |   ✅    | `debugName` on all Desc structs. Backend mapping complete.                           |
-| Debug labels (§15.2)   |   ✅    | `CmdBeginDebugLabel`/`CmdEndDebugLabel`/`CmdInsertDebugLabel`. All 5 backends.       |
-| GPU timestamps (§15.3) |   ✅    | `CreateQueryPool` + `GetQueryResults` + `GetTimestampPeriod`. Used by `GpuProfiler`. |
-
-**Overall §15 verdict**: ✅ **PASS**.
-
----
-
-### 21.16 §16 Per-Tier Optimization Paths
-
-| Item                                                                  | Verdict | Notes                                                                                                                                                                                                                                |
-| --------------------------------------------------------------------- | :-----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| T1 Vulkan (§16.1)                                                     |   ✅    | Descriptor buffer, mesh shader, ray query, timeline semaphore, dedicated transfer, BDA, VRS, sparse binding, subgroup ops. Complete.                                                                                                 |
-| T1 D3D12 (§16.2)                                                      |   ✅    | Root signature, mesh shader, DXR 1.1, enhanced barriers, work graphs (future).                                                                                                                                                       |
-| T2 Vulkan Compat (§16.3)                                              |   ✅    | Traditional descriptor sets, vertex+MDI, legacy render pass, single queue.                                                                                                                                                           |
-| T3 WebGPU (§16.4)                                                     |   ✅    | Bind groups, 128MB SSBO limit, no MDI, single queue, WGSL.                                                                                                                                                                           |
-| T4 OpenGL (§16.5)                                                     |   ✅    | DSA, MDI, UBO/SSBO, FBO, coarse barriers.                                                                                                                                                                                            |
-| **T1 Vulkan: `VK_EXT_descriptor_buffer` vs `VK_EXT_descriptor_heap`** |   ⚠️    | As noted in §21.6, `descriptor_heap` was published Jan 2026. Current plan (`descriptor_buffer` primary, `descriptor_heap` future) is correct. Update §16.1 to note `descriptor_heap` as planned upgrade when driver support matures. |
-
-**Action**: Update §16.1 descriptor binding row to mention `VK_EXT_descriptor_heap` migration timeline.
-
----
-
-### 21.17 §17 Thread Safety Model
-
-| Item                                | Verdict | Notes                                                                                                                                                                                                                   |
-| ----------------------------------- | :-----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Per-cmd-buf single-thread recording |   ✅    | Lock-free. Industry standard (Vulkan spec requirement).                                                                                                                                                                 |
-| Thread-safe resource creation       |   ✅    | Internal mutex on handle pool.                                                                                                                                                                                          |
-| Thread-safe submission              |   ✅    | Queue lock.                                                                                                                                                                                                             |
-| Thread-safe pipeline creation       |   ✅    | Pipeline cache has internal lock.                                                                                                                                                                                       |
-| `StagingRing` threading             |   ⚠️    | §17 says "Per-thread ring or lock-free ring" but §13.2 `StagingRing` shows a single ring with no thread safety discussion. Clarify: if per-thread, document the per-thread pool; if shared, add atomic bump allocation. |
-
-**Action**: Clarify `StagingRing` thread safety model in §13.2.
-
----
-
-### 21.18 §17.1 Implementation Suggestions
-
-| Item                                     | Verdict | Notes                                                                                           |
-| ---------------------------------------- | :-----: | ----------------------------------------------------------------------------------------------- |
-| CRTP compile-time optimization (§17.1.1) |   ✅    | `.h` declarations + `.inl` implementation + explicit instantiation in `.cpp`. Standard pattern. |
-| Handle pool mutex (§17.1.2)              |   ✅    | `std::mutex` for non-hot-path. ABA problem correctly identified and avoided.                    |
-| Command buffer validation (§17.1.3)      |   ✅    | Debug-only O(1) asserts. Compiles out in release.                                               |
-
-**Overall §17.1 verdict**: ✅ **PASS**.
-
----
-
-### 21.19 §18 Extension & Future-Proofing
-
-| Item                                            | Verdict | Notes                                                                                                                                                                                                                                                       |
-| ----------------------------------------------- | :-----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Vulkan extension negotiation                    |   ✅    | Comprehensive list including descriptor buffer/heap, mesh shader, ray query, VRS, cooperative matrix, GDeflate, pipeline library.                                                                                                                           |
-| `CmdDecompressBuffer` preview                   |   ✅    | GDeflate HW decode for cluster streaming. Matches `rendering-pipeline-architecture.md` §5.8.1 GPU decompression acceleration.                                                                                                                               |
-| Future extensions table                         |   ✅    | Descriptor heap, work graphs, cooperative matrix, GDeflate, fence barriers.                                                                                                                                                                                 |
-| **Missing: `VK_EXT_device_generated_commands`** |   ⚠️    | `rendering-pipeline-architecture.md` §3 mentions "DGC / Work Graphs (roadmap Phase 20)". The RHI §18.2 mentions D3D12 work graphs but not Vulkan DGC (`VK_EXT_device_generated_commands`). This is the Vulkan equivalent for GPU-driven command generation. |
-
-**Action**: Add `VK_EXT_device_generated_commands` to §18.1 extension list and §18.2 future table.
-
----
-
-### 21.20 §19 Naming Conventions
-
-✅ **PASS**. Consistent PascalCase. Namespace `miki::rhi`. Backend sub-namespaces. Standard.
-
----
-
-### 21.21 §20 Design Decisions Summary
-
-✅ **PASS**. All 16 decisions are well-justified with alternatives and rationale. Updated in prior review with CommandListHandle, GetMemoryStats, Reserved Binding, SparseBindDesc decisions.
-
----
-
-### 21.22 Appendix A & B
-
-| Item                  | Verdict | Notes                                                                                                                                                                             |
-| --------------------- | :-----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Format table          |   ⚠️    | Missing `R32G32_UINT` — this is the VisBuffer format (`rendering-pipeline-architecture.md` §5.4). Also missing `R16_SFLOAT` (used for AO output), `RG16_SFLOAT` (motion vectors). |
-| `PipelineStage` flags |   ✅    | Covers all stages including Task/Mesh shader, AccelStruct build, RT shader, shading rate image.                                                                                   |
-| `AccessFlags`         |   ✅    | Complete for all usage patterns.                                                                                                                                                  |
-| `TextureLayout`       |   ✅    | Covers Undefined, General, ColorAttachment, DepthStencil, ShaderReadOnly, Transfer, Present, ShadingRate.                                                                         |
-
-**Action**: Add `R32G32_UINT`, `R16_SFLOAT`, `RG16_SFLOAT` to Format table.
-
----
-
-## 21.23 Cross-Document Consistency Check
-
-| Pipeline Arch Requirement                     | RHI Coverage                                                           | Verdict |
-| --------------------------------------------- | ---------------------------------------------------------------------- | :-----: |
-| VisBuffer R32G32_UINT                         | §5.2 TextureUsage::Storage + imageStore                                |   ✅    |
-| BDA (Buffer Device Address)                   | §5.1 `GetBufferDeviceAddress`, §5.1 `ShaderDeviceAddress` usage flag   |   ✅    |
-| 3-bucket macro-binning (indirect args)        | §7.2 `CmdDrawMeshTasksIndirectCount`, `CmdDrawIndexedIndirectCount`    |   ✅    |
-| VSM sparse page management                    | §5.5 Sparse Binding                                                    |   ✅    |
-| ClusterDAG streaming                          | §5.5 Sparse Binding + §18 GDeflate decompression                       |   ✅    |
-| HiZ mip pyramid compute                       | §7.2 `CmdDispatch` + §5.2 texture mip chain                            |   ✅    |
-| LL-OIT linked list (per-pixel atomic)         | §5.1 Storage buffer + §7.2 compute dispatch                            |   ✅    |
-| RT ray query (Passes #17,#20-#24,#71,#83-#85) | §10 Acceleration Structure + §8.3 RayTracingPipelineDesc               |   ✅    |
-| Timeline semaphore async compute              | §9.2 Timeline semaphore + §7.4 Submit with semaphores                  |   ✅    |
-| Multi-window GPU sharing                      | §11.2 Single shared Device                                             |   ✅    |
-| DisplayStyle wireframe/HLR                    | §8.1 `PolygonMode` + §7.2 `CmdSetLineWidth`                            |   ✅    |
-| Section plane stencil                         | §8.1 `StencilOpState` + §7.2 `CmdSetStencilReference`                  |   ✅    |
-| XR stereo multiview                           | §7.2 `RenderingDesc::viewMask` + §8.1 `GraphicsPipelineDesc::viewMask` |   ✅    |
-| HDR swapchain                                 | §11.1 `SwapchainDesc::hdr`                                             |   ✅    |
-| MSDF text rendering (PMI)                     | §5.2 SampledTexture + §8.1 graphics pipeline                           |   ✅    |
-| Offscreen hi-res render (Pass #66)            | §5.2 large TextureDesc + §11.1 without swapchain                       |   ✅    |
-
----
-
-## 21.24 Audit Summary
-
-| Severity               |  Count  | Items                                          |
-| ---------------------- | :-----: | ---------------------------------------------- |
-| ❌ FAIL (blocking)     |  **1**  | Missing `GetAccelStructBuildSizes()` API (§10) |
-| ⚠️ WARN (non-blocking) | **12**  | See action items below                         |
-| ✅ PASS                | **~50** | All other items                                |
-
-### Required Actions (ordered by priority)
-
-| #   | Severity | Section | Action                                                                                                                            |
-| --- | :------: | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 1   |    ❌    | §10     | Add `GetAccelStructBuildSizes(BLASDesc/TLASDesc) -> AccelStructBuildSizes` API (scratch size + result size + update scratch size) |
-| 2   |    ⚠️    | §10     | Define `AccelStructInstance` struct (transform 3x4 + instanceCustomIndex + mask + SBTRecordOffset + flags)                        |
-| 3   |    ⚠️    | §3.1    | Add `DescriptorLayoutHandle` and `DescriptorSetHandle` to handle type list                                                        |
-| 4   |    ⚠️    | §4.2    | Add `hasWorkGraphs` to `GpuCapabilityProfile`                                                                                     |
-| 5   |    ⚠️    | §7.2    | Add cross-reference to §10 for BLAS/TLAS build commands                                                                           |
-| 6   |    ⚠️    | §9      | Define `Event` API or remove from §2.3 module list                                                                                |
-| 7   |    ⚠️    | §13     | Fix duplicate §13.4 numbering (renumber Memory Statistics to §13.5)                                                               |
-| 8   |    ⚠️    | §13.2   | Clarify `StagingRing` thread safety model                                                                                         |
-| 9   |    ⚠️    | §16.1   | Update descriptor binding row to note `VK_EXT_descriptor_heap` migration                                                          |
-| 10  |    ⚠️    | §18     | Add `VK_EXT_device_generated_commands` to extension list                                                                          |
-| 11  |    ⚠️    | App A   | Add missing formats: `R32G32_UINT`, `R16_SFLOAT`, `RG16_SFLOAT`                                                                   |
-| 12  |    ⚠️    | §2.3    | Note `MemoryStats`/`MemoryHeapBudget` location in module table                                                                    |
-| 13  |    ⚠️    | §5.1    | Consider `LazilyAllocated` memory location for future mobile support                                                              |
-
-### Overall Assessment
-
-**Rating: ★★★★☆ (4/5)**
-
-The RHI design is architecturally sound and well-aligned with the target rendering pipeline. The CRTP + dispatch-once facade pattern is the correct choice for 2026. All 88 pipeline passes are supportable with the current API surface. The single blocking issue (`GetAccelStructBuildSizes`) is a straightforward API omission, not a design flaw. The 12 warnings are minor documentation gaps and forward-planning items, none requiring architectural changes.

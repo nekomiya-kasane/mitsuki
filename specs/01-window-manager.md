@@ -242,16 +242,16 @@ private:
 
 ### 4.1 Key Changes from Current Design
 
-| Aspect          | Old (`MultiWindowManager`)            | New (`WindowManager`)                     |
-| --------------- | ------------------------------------- | ----------------------------------------- |
-| Namespace       | `miki::rhi`                           | `miki::platform`                          |
-| Tree structure  | Flat list                             | N-ary forest                              |
-| GPU coupling    | Owns `RenderSurface` + `FrameManager` | Pure OS windows, no GPU                   |
-| Cascade destroy | None                                  | Post-order recursive                      |
-| Handle          | `uint32_t id` only                    | `id` + `generation`                       |
-| Close policy    | `ProcessWindowEvents()` auto-destroys | `CloseRequested` event, user decides      |
-| Max windows     | 8                                     | 16                                        |
-| `WindowFlags`   | None                                  | Borderless, AlwaysOnTop, NoResize, Hidden |
+| Aspect          | Old (`MultiWindowManager`)            | New (`WindowManager`)                                           |
+| --------------- | ------------------------------------- | --------------------------------------------------------------- |
+| Namespace       | `miki::rhi`                           | `miki::platform`                                                |
+| Tree structure  | Flat list                             | N-ary forest                                                    |
+| GPU coupling    | Owns `RenderSurface` + `FrameManager` | Pure OS windows, no GPU                                         |
+| Cascade destroy | None                                  | Post-order recursive                                            |
+| Handle          | `uint32_t id` only                    | `id` + `generation`                                             |
+| Close policy    | `ProcessWindowEvents()` auto-destroys | `CloseRequested` event, user decides                            |
+| Max windows     | 8 (hard limit)                        | No hard limit (ChunkedSlotMap, 16 per chunk, dynamic expansion) |
+| `WindowFlags`   | None                                  | Borderless, AlwaysOnTop, NoResize, Hidden                       |
 
 ### 4.2 IWindowBackend Changes
 
@@ -288,13 +288,21 @@ public:
 
 **Key change**: `CreateNativeWindow` takes `iParentToken` for OS-level parent-child relationship.
 
+**`iParentToken` semantics are backend-defined** — the backend interprets the opaque `void*` according to its platform model. The public RHI/WindowManager API is unaware of the distinction; all parent-child logic above the backend is purely handle-based.
+
+| Backend              | `iParentToken` interpretation                                           | GPU-level effect                                                     |
+| -------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| GLFW (OpenGL)        | `GLFWwindow*` of parent — passed as share context to `glfwCreateWindow` | Shared GL context (textures, buffers, shaders shared across windows) |
+| GLFW (Vulkan/WebGPU) | `GLFWwindow*` of parent — stored for logical tree tracking              | None (Vulkan surfaces are independent; no shared context concept)    |
+| Win32                | `HWND` of parent — passed as owner to `CreateWindowEx`                  | None (owner window controls lifetime/z-order, not GPU resources)     |
+
 GLFW backend mapping:
 
-| IWindowBackend                               | GLFW                                                                                                                                 |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `CreateNativeWindow(desc, parentToken, ...)` | `glfwCreateWindow(w, h, title, nullptr, parentGlfw)` — `parentGlfw` is the share context for GL; for Vulkan parent is purely logical |
-| `ShowWindow`                                 | `glfwShowWindow`                                                                                                                     |
-| `HideWindow`                                 | `glfwHideWindow`                                                                                                                     |
+| IWindowBackend                               | GLFW                                                                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CreateNativeWindow(desc, parentToken, ...)` | `glfwCreateWindow(w, h, title, nullptr, parentGlfw)` — GL: share context; Vulkan: logical parent only (no GPU-level sharing, stored for tree ops) |
+| `ShowWindow`                                 | `glfwShowWindow`                                                                                                                                  |
+| `HideWindow`                                 | `glfwHideWindow`                                                                                                                                  |
 
 Win32 backend mapping:
 
@@ -309,7 +317,71 @@ Win32 backend mapping:
 
 `SurfaceManager` owns the per-window `RenderSurface` and `FrameManager` instances. It is **separate from `WindowManager`** — the user explicitly binds a GPU surface to an OS window.
 
-### 5.1 API
+### 5.1 RenderSurfaceConfig
+
+```cpp
+namespace miki::rhi {
+
+/// Presentation mode — maps to VkPresentModeKHR / DXGI swap effect.
+enum class PresentMode : uint8_t {
+    Fifo,            // VSync ON — guaranteed by all backends (default)
+    FifoRelaxed,     // VSync ON, but late frames present immediately (Vulkan only)
+    Mailbox,         // Triple-buffer, lowest-latency VSync — T1 Vulkan / D3D12
+    Immediate,       // No VSync — tearing allowed (DXGI_PRESENT_ALLOW_TEARING / VK_PRESENT_MODE_IMMEDIATE_KHR)
+};
+
+/// Color space for swapchain output.
+enum class SurfaceColorSpace : uint8_t {
+    SRGB,            // sRGB transfer, Rec.709 gamut (default, universally supported)
+    HDR10_ST2084,    // PQ transfer, Rec.2020 gamut (VK_COLOR_SPACE_HDR10_ST2084_EXT / DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+    scRGBLinear,     // Linear FP16 (VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT / DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709) — D3D12/Vulkan T1
+};
+
+/// Variable Refresh Rate mode.
+/// All VRR modes use the same underlying API (DXGI_PRESENT_ALLOW_TEARING / VK_PRESENT_MODE_*).
+/// G-Sync Compatible monitors work via AdaptiveSync; proprietary G-Sync modules also use this path.
+enum class VRRMode : uint8_t {
+    Off,            // VSync on, no tearing, fixed refresh
+    AdaptiveSync,   // VESA AdaptiveSync / AMD FreeSync / NVIDIA G-Sync Compatible
+    GSync,          // NVIDIA G-Sync (same API path as AdaptiveSync, explicit opt-in for G-Sync-specific features)
+};
+
+/// Swapchain image count hint.
+/// Backend may adjust based on PresentMode constraints (e.g. Mailbox requires >= 3).
+enum class ImageCountHint : uint8_t {
+    Auto,           // Backend chooses optimal (typically 3 for Mailbox, 2 for Fifo)
+    Minimal,        // Minimize VRAM (2 images, may increase latency)
+    Triple,         // Force triple buffering (3 images)
+};
+
+/// Per-window surface configuration. Passed to AttachSurface; can be changed via detach-reattach.
+struct RenderSurfaceConfig {
+    PresentMode         presentMode     = PresentMode::Fifo;
+    SurfaceColorSpace   colorSpace      = SurfaceColorSpace::SRGB;
+    Format              preferredFormat = Format::BGRA8_SRGB;
+    VRRMode             vrrMode         = VRRMode::Off;
+    ImageCountHint      imageCount      = ImageCountHint::Auto;
+
+    // Note: Backend may override preferredFormat based on colorSpace.
+    // e.g. scRGBLinear → R16G16B16A16_SFLOAT on T1 (Vulkan/D3D12).
+};
+
+}  // namespace miki::rhi
+```
+
+**Backend mapping**:
+
+| Field         | Vulkan T1                                                                  | D3D12 T1                                                            | WebGPU T3                                                  | OpenGL T4                |
+| ------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------ |
+| `presentMode` | `VkPresentModeKHR` — query via `vkGetPhysicalDeviceSurfacePresentModesKHR` | `DXGI_SWAP_EFFECT_FLIP_DISCARD` + sync interval                     | `GPUCanvasAlphaMode` (limited: Fifo only on most browsers) | `glfwSwapInterval(0\|1)` |
+| `colorSpace`  | `VkColorSpaceKHR` via `VK_EXT_swapchain_colorspace`                        | `IDXGISwapChain3::SetColorSpace1`                                   | sRGB only (no HDR support as of 2026)                      | sRGB only                |
+| `vrrMode`     | `VK_PRESENT_MODE_FIFO_RELAXED_KHR` or `MAILBOX` + display VRR              | `DXGI_PRESENT_ALLOW_TEARING` + `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` | N/A                                                        | `glfwSwapInterval(0)`    |
+| `imageCount`  | `VkSwapchainCreateInfoKHR::minImageCount`                                  | `DXGI_SWAP_CHAIN_DESC1::BufferCount`                                | Fixed (browser-controlled)                                 | Double-buffer only       |
+| HDR10 format  | `VK_FORMAT_A2B10G10R10_UNORM_PACK32` or `R16G16B16A16_SFLOAT`              | `DXGI_FORMAT_R10G10B10A2_UNORM` or `R16G16B16A16_FLOAT`             | N/A                                                        | N/A                      |
+
+**VRR (Variable Refresh Rate)**: Enabled when `vrrMode != Off` and the display supports the requested mode. Backend queries OS/driver capabilities at `AttachSurface` time via `DXGI_OUTPUT_DESC1::SupportsVRR` (D3D12) or display property queries (Vulkan). If VRR is unavailable, the mode is silently downgraded to fixed-rate with a warning logged. G-Sync and AdaptiveSync use the same API path; the enum distinction allows future G-Sync-specific optimizations (e.g., pulsar mode, reflex integration).
+
+### 5.2 API
 
 ```cpp
 namespace miki::rhi {
@@ -365,7 +437,7 @@ public:
         -> miki::core::Result<FrameContext>;
 
     /// @brief End frame for a specific window's surface.
-    [[nodiscard]] auto EndFrame(platform::WindowHandle iWindow, ICommandBuffer& iCmd)
+    [[nodiscard]] auto EndFrame(platform::WindowHandle iWindow, CommandListHandle& iCmd)
         -> miki::core::Result<void>;
 
     /// @brief Resize a window's surface (typically after WindowEvent::Resize).
@@ -374,7 +446,27 @@ public:
         uint32_t iWidth, uint32_t iHeight
     ) -> miki::core::Result<void>;
 
-    // ── Bulk operations ─────────────────────────────────────────
+    // ── Dynamic present configuration ───────────────────────────
+
+    /// @brief Change present mode at runtime (triggers swapchain recreation).
+    ///        Waits for this surface's in-flight frames before recreating.
+    [[nodiscard]] auto SetPresentMode(platform::WindowHandle iWindow, PresentMode iMode)
+        -> miki::core::Result<void>;
+
+    /// @brief Change color space at runtime (triggers swapchain recreation).
+    ///        Returns error if the display/backend does not support the requested color space.
+    [[nodiscard]] auto SetColorSpace(platform::WindowHandle iWindow, SurfaceColorSpace iSpace)
+        -> miki::core::Result<void>;
+
+    /// @brief Query supported present modes for a window's display.
+    [[nodiscard]] auto GetSupportedPresentModes(platform::WindowHandle iWindow) const
+        -> std::vector<PresentMode>;
+
+    /// @brief Query supported color spaces for a window's display.
+    [[nodiscard]] auto GetSupportedColorSpaces(platform::WindowHandle iWindow) const
+        -> std::vector<SurfaceColorSpace>;
+
+    // ── Bulk operations ─────────────────────────────────────
 
     /// @brief Wait for all surfaces' GPU work to complete.
     auto WaitAll() -> void;
@@ -388,7 +480,7 @@ private:
 }  // namespace miki::rhi
 ```
 
-### 5.2 GPU Resource Sharing Model
+### 5.3 GPU Resource Sharing Model
 
 All windows share a single `DeviceHandle`. This is the standard approach used by Filament, Diligent, and Vulkan best practices:
 
@@ -414,7 +506,7 @@ All windows share a single `DeviceHandle`. This is the standard approach used by
 
 **What is shared**: Everything else. A texture created for Window A can be sampled in Window B's render pass without copies.
 
-#### 5.2.1 Cross-Window Content Sharing Rule (Invariant)
+#### 5.3.1 Cross-Window Content Sharing Rule (Invariant)
 
 > **No render pass may directly read another window's swapchain image.**
 
@@ -497,7 +589,7 @@ User calls: DestroyWindowCascade(parentHandle)
 
 **Key difference from previous design**: `DetachSurfaces` uses **per-surface `FrameManager::WaitAll()`** (which waits only on that surface's in-flight timeline values), NOT `device->WaitIdle()`. Other windows continue rendering uninterrupted during cascade destruction.
 
-**Why per-surface wait is safe**: The cross-window content sharing rule (§5.2.1) guarantees no render pass reads another window's swapchain image. Shared resources (textures, buffers, pipelines) are not destroyed during surface detach — only swapchain images and per-surface sync primitives are released. Therefore, waiting for only the target surface's in-flight frames is sufficient.
+**Why per-surface wait is safe**: The cross-window content sharing rule (§5.3.1) guarantees no render pass reads another window's swapchain image. Shared resources (textures, buffers, pipelines) are not destroyed during surface detach — only swapchain images and per-surface sync primitives are released. Therefore, waiting for only the target surface's in-flight frames is sufficient.
 
 ### 6.2 Helper: DestroyWindowCascade
 
@@ -662,9 +754,9 @@ int main() {
 
         for (auto win : wm.GetActiveWindows()) {
             auto ctx = sm.BeginFrame(win).value();
-            auto cmd = device->CreateCommandBuffer().value();
+            auto cmd = rhi::CreateCommandBuffer({.type = rhi::QueueType::Graphics}).value();
             // ... record using sharedTexture, sharedPipeline ...
-            sm.EndFrame(win, *cmd).value();
+            sm.EndFrame(win, cmd).value();
         }
     }
 
@@ -819,7 +911,7 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 ### WindowHandle Identity & Generation
 
 - A freshly created window returns a `WindowHandle` with `id != 0` (valid) and `generation >= 1`
-- Creating N windows (N <= `kMaxWindows`) returns N handles with pairwise-distinct `id` values
+- Creating N windows returns N handles with pairwise-distinct `id` values
 - After `DestroyWindow(h)`, the slot occupied by `h.id` has its generation incremented by exactly 1
 - A stale handle (correct `id`, old `generation`) is rejected by every query and mutation (`GetParent`, `GetChildren`, `ShowWindow`, `DestroyWindow`, etc.) with `ErrorCode::InvalidArgument`
 - After destroying a window and creating a new one, if the allocator reuses the same slot index, the new handle's `generation` differs from the old one — old handle remains invalid
@@ -919,11 +1011,11 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 - `AttachSurface` with an invalid (stale/null) `WindowHandle` returns an error
 - `DetachSurface(window)` destroys the surface and frame manager; `HasSurface(window)` returns `false`; `GetRenderSurface(window)` returns `nullptr`
 - `DetachSurface` on a window without a surface returns an error
-- `DetachSurfaces(batch)` detaches all listed windows in one call; a single device-wide `WaitIdle` is issued before teardown (not per-surface wait) — this is mandatory because cross-window command buffers may reference each other's swapchain images
+- `DetachSurfaces(batch)` detaches all listed windows in one call; each surface is waited on individually via `FrameManager::WaitAll()` (per-surface timeline wait, no device-wide `WaitIdle`). This is safe because §5.3.1 guarantees swapchain images are never referenced by other windows' command buffers
 - `DetachSurfaces` with an empty span is a no-op (not an error)
 - `DetachSurfaces` with a mix of valid and invalid handles: the behavior is either all-or-nothing error, or partial detach with error reported (define which in impl)
 - After `DetachSurface`, immediately calling `AttachSurface` on the same window succeeds (re-attach)
-- `DetachSurface(child)` while parent's surface is mid-frame (`BeginFrame` called but `EndFrame` not yet): the device-wide `WaitIdle` in `DetachSurface` drains parent's in-flight work; after detach, parent can resume with a new `BeginFrame`/`EndFrame` cycle
+- `DetachSurface(child)` while parent's surface is mid-frame (`BeginFrame` called but `EndFrame` not yet): only the child's in-flight frames are waited on (per-surface timeline wait); parent's rendering is unaffected and continues without stall
 - After `DetachSurface(child)`, shared GPU resources (textures, buffers, pipelines) that were used by child's render passes remain valid and usable by other windows' surfaces
 
 ### SurfaceManager — Frame Operations
@@ -936,6 +1028,19 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 - `ResizeSurface(window, newW, newH)` recreates the swapchain with the new dimensions; subsequent `BeginFrame` uses the new size
 - `ResizeSurface` with `(0, 0)` (minimized) is handled gracefully — either no-op or marks surface as dormant
 - `WaitAll()` blocks until all in-flight GPU work across all surfaces completes
+
+### SurfaceManager — Dynamic Present Configuration
+
+- `GetSupportedPresentModes(window)` returns a non-empty vector containing at least `PresentMode::Fifo` (universally required)
+- `GetSupportedColorSpaces(window)` returns a non-empty vector containing at least `SurfaceColorSpace::SRGB`
+- `SetPresentMode(window, Mailbox)` on a T1 Vulkan surface succeeds; subsequent `BeginFrame`/`EndFrame` cycle renders correctly with the new mode
+- `SetPresentMode(window, Immediate)` with `allowTearing == true` on a VRR-capable display succeeds
+- `SetPresentMode` on a window without an attached surface returns an error
+- `SetPresentMode` with an unsupported mode (not in `GetSupportedPresentModes`) returns an error; existing surface is unaffected
+- `SetColorSpace(window, HDR10_ST2084)` on a T1 backend with HDR display succeeds; swapchain format may change to `R10G10B10A2_UNORM` or `R16G16B16A16_SFLOAT`
+- `SetColorSpace(window, HDR10_ST2084)` on a WebGPU/OpenGL backend returns an error (HDR unsupported); existing surface is unaffected
+- `SetColorSpace` / `SetPresentMode` during mid-frame (`BeginFrame` called but `EndFrame` not yet) returns an error (no swapchain recreation while in-flight)
+- Calling `SetPresentMode` 10 times in a row (without rendering) succeeds each time — no accumulated resource leaks (swapchain count stable)
 
 ### Multi-Window GPU Resource Sharing
 
@@ -957,7 +1062,7 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 
 - Every public API that returns `Result<T>` never throws exceptions; all errors are communicated via `ErrorCode`
 - Passing a stale `WindowHandle` to any `WindowManager` or `SurfaceManager` method returns `ErrorCode::InvalidArgument` (not UB, not crash)
-- Exceeding `kMaxWindows` returns `ErrorCode::ResourceExhausted`
+- ChunkedSlotMap allocation failure (system OOM) returns `ErrorCode::ResourceExhausted`
 - Creating a child whose parent exceeds `kMaxDepth` returns `ErrorCode::InvalidArgument`
 - `DestroyWindow` called twice on the same handle: first call succeeds, second returns `ErrorCode::InvalidArgument`
 - After an error from `CreateWindow`, the system state is unchanged (strong exception safety analog)
@@ -978,7 +1083,7 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 
 ### Full-Lifecycle Cascade Stress
 
-Create a forest of 3 root windows, each with 4 children (total 15 windows, near `kMaxWindows`). Attach surfaces to all 15 via `SurfaceManager`. Call `BeginFrame`/`EndFrame` on each window for 100 iterations to exercise frame pacing. Then cascade-destroy the first root via `DestroyWindowCascade` — verify post-order destruction of 5 windows, surfaces detached before OS destroy, and the remaining 10 windows continue rendering without interruption. Destroy remaining roots. Verify `GetWindowCount() == 0`, no leaked handles, and all surfaces detached.
+Create a forest of 3 root windows, each with 4 children (total 15 windows, fitting in a single 16-slot chunk). Attach surfaces to all 15 via `SurfaceManager`. Call `BeginFrame`/`EndFrame` on each window for 100 iterations to exercise frame pacing. Then cascade-destroy the first root via `DestroyWindowCascade` — verify post-order destruction of 5 windows, surfaces detached before OS destroy, and the remaining 10 windows continue rendering without interruption. Destroy remaining roots. Verify `GetWindowCount() == 0`, no leaked handles, and all surfaces detached.
 
 ### Handle Generation Wraparound
 
@@ -1010,7 +1115,7 @@ Create root R with children A, B, C (each with an attached surface). Run 10 fram
 
 ### Cross-Window Cascade with Shared Resources
 
-Create root R → child A → grandchild A1. Attach surfaces to all three. Create a shared texture T via `DeviceHandle` and sample T in render passes of all three windows for 5 frames. Then `DestroyWindowCascade(A)` — this destroys A1 first, then A (post-order). Verify: (1) device-wide `WaitIdle` is called exactly once (not per-surface), (2) A1's surface is detached before A's surface, (3) R's surface is untouched and continues rendering using shared texture T, (4) T is not invalidated — `BeginFrame`/`EndFrame` on R using T succeeds for another 10 frames, (5) no Vulkan validation errors or D3D12 debug layer warnings throughout the sequence.
+Create root R → child A → grandchild A1. Attach surfaces to all three. Create a shared texture T via `DeviceHandle` and sample T in render passes of all three windows for 5 frames. Then `DestroyWindowCascade(A)` — this destroys A1 first, then A (post-order). Verify: (1) per-surface `FrameManager::WaitAll()` is called for each destroyed surface (no device-wide `WaitIdle`), (2) A1's surface is detached before A's surface, (3) R's surface is untouched and continues rendering using shared texture T, (4) T is not invalidated — `BeginFrame`/`EndFrame` on R using T succeeds for another 10 frames, (5) no Vulkan validation errors or D3D12 debug layer warnings throughout the sequence.
 
 ### Dangling Surface Debug Assert
 
@@ -1018,21 +1123,23 @@ Create window W, attach surface. In debug builds, call `wm.DestroyWindow(W)` **w
 
 ### Error Recovery Chain
 
-(1) Create window, attach surface, deliberately pass an invalid `NativeWindowHandle` to a second `AttachSurface` — verify error, verify first surface unaffected. (2) `DetachSurface` on a window that has no surface — verify error, verify other surfaces unaffected. (3) `DestroyWindow` with a null handle — verify error, verify all other windows alive. (4) Create 16 windows, attempt 17th — verify `ResourceExhausted`, verify all 16 are operational. After all error injections, perform a clean shutdown: cascade-destroy all roots, verify zero windows, zero surfaces.
+(1) Create window, attach surface, deliberately pass an invalid `NativeWindowHandle` to a second `AttachSurface` — verify error, verify first surface unaffected. (2) `DetachSurface` on a window that has no surface — verify error, verify other surfaces unaffected. (3) `DestroyWindow` with a null handle — verify error, verify all other windows alive. (4) Create 16 windows, attempt 17th — verify `ChunkedSlotMap` dynamically expands and all 17 windows are operational. After all error injections, perform a clean shutdown: cascade-destroy all roots, verify zero windows, zero surfaces.
 
 ---
 
 ## 14. Design Decisions Log
 
-| Decision                                               | Rationale                                                                                                                               | Alternatives Considered                                                                                       |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Forest of N-ary trees                                  | Matches Win32 owner-window and Qt QObject tree models; natural for CAD multi-panel apps                                                 | Flat list (too simple), DAG (overcomplicated, no use case)                                                    |
-| Manual cascade orchestration                           | Preserves three-concern separation; easy to test each manager independently                                                             | Auto cascade in WindowManager (violates separation), callback-based (hidden control flow)                     |
-| Generation-counted handles                             | Prevents ABA/use-after-free; consistent with RHI handle design                                                                          | Raw pointers (unsafe), `std::shared_ptr` (overhead, ref-counting in hot path)                                 |
-| `SurfaceManager` as separate class                     | Decouples GPU lifecycle from OS window lifecycle; enables backend switching without touching windows                                    | Embed in `WindowManager` (coupling), embed in `RenderGraph` (wrong level)                                     |
-| Post-order destruction                                 | GPU surfaces must be destroyed before OS windows; leaves-first ensures children's GPU work is drained before parent                     | Pre-order (would destroy parent surface while children still rendering), arbitrary order (unsafe)             |
-| `CloseRequested` as event, not auto-destroy            | Application may want to prompt "save changes?" or hide instead of destroy                                                               | Auto-destroy on close (inflexible, old design)                                                                |
-| Single `DeviceHandle` for all windows                  | Industry standard (Filament, Diligent, Vulkan best practice); maximizes resource sharing                                                | Device-per-window (wasteful, no resource sharing, higher VRAM)                                                |
-| `kMaxWindows = 16`                                     | CAD apps rarely exceed 10 windows; 16 gives headroom without over-allocating                                                            | Dynamic (heap alloc per window — unnecessary for small N)                                                     |
-| `DestroyWindow` rejects windows with attached surfaces | Prevents GPU resource leaks and use-after-free of swapchain images referencing destroyed OS windows. Debug assert + release error code. | Auto-detach in DestroyWindow (violates separation, hides GPU lifecycle from caller), silent UB (unacceptable) |
-| `DetachSurfaces` uses device-wide `WaitIdle`           | Cross-window command buffers may sample each other's swapchain images; per-surface wait cannot guarantee all references are drained     | Per-surface `FrameManager::WaitAll()` only (unsafe for cross-window sampling), no wait (undefined behavior)   |
+| Decision                                                       | Rationale                                                                                                                                                | Alternatives Considered                                                                                                                          |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Forest of N-ary trees                                          | Matches Win32 owner-window and Qt QObject tree models; natural for CAD multi-panel apps                                                                  | Flat list (too simple), DAG (overcomplicated, no use case)                                                                                       |
+| Manual cascade orchestration                                   | Preserves three-concern separation; easy to test each manager independently                                                                              | Auto cascade in WindowManager (violates separation), callback-based (hidden control flow)                                                        |
+| Generation-counted handles                                     | Prevents ABA/use-after-free; consistent with RHI handle design                                                                                           | Raw pointers (unsafe), `std::shared_ptr` (overhead, ref-counting in hot path)                                                                    |
+| `SurfaceManager` as separate class                             | Decouples GPU lifecycle from OS window lifecycle; enables backend switching without touching windows                                                     | Embed in `WindowManager` (coupling), embed in `RenderGraph` (wrong level)                                                                        |
+| Post-order destruction                                         | GPU surfaces must be destroyed before OS windows; leaves-first ensures children's GPU work is drained before parent                                      | Pre-order (would destroy parent surface while children still rendering), arbitrary order (unsafe)                                                |
+| `CloseRequested` as event, not auto-destroy                    | Application may want to prompt "save changes?" or hide instead of destroy                                                                                | Auto-destroy on close (inflexible, old design)                                                                                                   |
+| Single `DeviceHandle` for all windows                          | Industry standard (Filament, Diligent, Vulkan best practice); maximizes resource sharing                                                                 | Device-per-window (wasteful, no resource sharing, higher VRAM)                                                                                   |
+| `kChunkSize = 16` (no hard capacity limit)                     | ChunkedSlotMap allocates 16-slot chunks; typical CAD apps fit in 1 chunk (no heap churn). Grows dynamically for atypical workloads (256+ windows tested) | Per-window heap alloc (fragmentation, cache-unfriendly), fixed-size array (hard limit, wasteful if unused)                                       |
+| `DestroyWindow` rejects windows with attached surfaces         | Prevents GPU resource leaks and use-after-free of swapchain images referencing destroyed OS windows. Debug assert + release error code.                  | Auto-detach in DestroyWindow (violates separation, hides GPU lifecycle from caller), silent UB (unacceptable)                                    |
+| `DetachSurfaces` uses per-surface `FrameManager::WaitAll()`    | §5.3.1 guarantees swapchain images are never cross-referenced; per-surface timeline wait is sufficient and avoids stalling unrelated windows             | Device-wide `WaitIdle` (stalls all windows unnecessarily), no wait (undefined behavior)                                                          |
+| `RenderSurfaceConfig` with `PresentMode` + `SurfaceColorSpace` | Explicit per-window control over VSync/VRR/HDR at attach time; maps directly to `VkPresentModeKHR` / `DXGI_SWAP_EFFECT` / `VkColorSpaceKHR`              | Global present mode (inflexible — CAD main viewport wants Mailbox while tool windows want Fifo), no HDR support (unacceptable for 2026 displays) |
+| `SetPresentMode` / `SetColorSpace` as runtime APIs             | Enables in-app settings toggle (VSync on/off, HDR on/off) without full detach-reattach cycle. Internally waits per-surface then recreates swapchain      | Detach + reattach only (heavier, loses surface state), immutable config (no runtime toggle)                                                      |

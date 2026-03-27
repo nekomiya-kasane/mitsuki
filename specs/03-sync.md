@@ -176,14 +176,14 @@ public:
 
     /// @brief Create a windowed FrameManager bound to a RenderSurface.
     [[nodiscard]] static auto Create(
-        rhi::IDevice& device,
+        rhi::DeviceHandle device,
         rhi::RenderSurface& surface,
         uint32_t framesInFlight = kDefaultFramesInFlight
     ) -> core::Result<FrameManager>;
 
     /// @brief Create an offscreen FrameManager (timeline-only, no swapchain).
     [[nodiscard]] static auto CreateOffscreen(
-        rhi::IDevice& device,
+        rhi::DeviceHandle device,
         uint32_t width, uint32_t height,
         uint32_t framesInFlight = kDefaultFramesInFlight
     ) -> core::Result<FrameManager>;
@@ -200,11 +200,11 @@ public:
     /// @brief Submit recorded command buffers and present.
     /// Multi-submit variant: accepts multiple command buffers for
     /// multi-threaded recording (one per recording thread).
-    [[nodiscard]] auto EndFrame(std::span<rhi::ICommandBuffer*> cmdBuffers)
+    [[nodiscard]] auto EndFrame(std::span<rhi::CommandListHandle> cmdBuffers)
         -> core::Result<void>;
 
     /// @brief Single command buffer convenience overload.
-    [[nodiscard]] auto EndFrame(rhi::ICommandBuffer& cmd)
+    [[nodiscard]] auto EndFrame(rhi::CommandListHandle cmd)
         -> core::Result<void>;
 
     // ── Async compute integration ───────────────────────────────
@@ -282,15 +282,15 @@ struct FrameContext {
 
 ### 4.3 Changes vs miki FrameManager
 
-| Aspect                 | miki FrameManager                                     | This Design                                          |
-| ---------------------- | ----------------------------------------------------- | ---------------------------------------------------- |
-| Sync model             | Mixed: timeline for Tier1/offscreen, fence for compat | Timeline-first; fence emulated on T2 via wrapper     |
-| Multi-submit           | Single `ICommandBuffer&`                              | `span<ICommandBuffer*>` for multi-threaded recording |
-| Async compute          | Not integrated (caller manages)                       | First-class `Get/SetComputeSyncPoint`                |
-| Transfer queue         | Injected via `SetTransferQueue`                       | Injected via `SetTransferSyncPoint` (decoupled)      |
-| Deferred destruction   | Not integrated                                        | `SetDeferredDestructor` hook                         |
-| Frame completion query | None                                                  | `IsFrameComplete()` for non-blocking poll            |
-| WaitAll                | `device->WaitIdle()` (global stall)                   | Per-surface timeline wait (surgical)                 |
+| Aspect                 | miki FrameManager                                     | This Design                                            |
+| ---------------------- | ----------------------------------------------------- | ------------------------------------------------------ |
+| Sync model             | Mixed: timeline for Tier1/offscreen, fence for compat | Timeline-first; fence emulated on T2 via wrapper       |
+| Multi-submit           | Single `CommandListHandle`                            | `span<CommandListHandle>` for multi-threaded recording |
+| Async compute          | Not integrated (caller manages)                       | First-class `Get/SetComputeSyncPoint`                  |
+| Transfer queue         | Injected via `SetTransferQueue`                       | Injected via `SetTransferSyncPoint` (decoupled)        |
+| Deferred destruction   | Not integrated                                        | `SetDeferredDestructor` hook                           |
+| Frame completion query | None                                                  | `IsFrameComplete()` for non-blocking poll              |
+| WaitAll                | `device->WaitIdle()` (global stall)                   | Per-surface timeline wait (surgical)                   |
 
 ---
 
@@ -447,7 +447,7 @@ public:
     /// with optional waits on other queues.
     /// @return Handle for polling completion.
     [[nodiscard]] auto Submit(
-        rhi::ICommandBuffer& cmd,
+        rhi::CommandListHandle cmd,
         std::span<const rhi::TimelineSyncPoint> waits = {}
     ) -> core::Result<AsyncTaskHandle>;
 
@@ -746,7 +746,7 @@ private:
 
     // Per-frame-slot ring buffer (lock-free single-producer for main thread)
     std::vector<PendingDestruction> pending_;
-    IDevice* device_;
+    DeviceHandle device_;
 };
 ```
 
