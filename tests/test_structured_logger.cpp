@@ -152,6 +152,7 @@ namespace miki::debug::test {
         constexpr int kThreads = 12;
 
         auto& logger = StructuredLogger::Instance();
+        logger.SetBackpressurePolicy(BackpressurePolicy::Block);  // Ensure no messages are dropped
         logger.AddSink(CallbackSink([&](const LogEntry&) { count.fetch_add(1, std::memory_order_relaxed); }));
         logger.StartDrainThread();
 

@@ -69,6 +69,11 @@ namespace miki::core {
         LogFileOpenFailed = 0xD001,
         CrashHandlerInstallFailed = 0xD002,
         EmergencyPathInvalid = 0xD003,
+        BreadcrumbBufferFull = 0xD004,
+        ShaderPrintfOverflow = 0xD005,
+        CaptureToolNotAvailable = 0xD006,
+        ProfilerNotInitialized = 0xD007,
+        TraceExportFailed = 0xD008,
 
         // --- GPU Device (0xF000 - 0xFFFF) ---
         DeviceLost = 0xF000,
@@ -110,6 +115,11 @@ namespace miki::core {
             case ErrorCode::LogFileOpenFailed: return "LogFileOpenFailed";
             case ErrorCode::CrashHandlerInstallFailed: return "CrashHandlerInstallFailed";
             case ErrorCode::EmergencyPathInvalid: return "EmergencyPathInvalid";
+            case ErrorCode::BreadcrumbBufferFull: return "BreadcrumbBufferFull";
+            case ErrorCode::ShaderPrintfOverflow: return "ShaderPrintfOverflow";
+            case ErrorCode::CaptureToolNotAvailable: return "CaptureToolNotAvailable";
+            case ErrorCode::ProfilerNotInitialized: return "ProfilerNotInitialized";
+            case ErrorCode::TraceExportFailed: return "TraceExportFailed";
             case ErrorCode::DeviceLost: return "DeviceLost";
             case ErrorCode::DeviceNotReady: return "DeviceNotReady";
             case ErrorCode::SwapchainOutOfDate: return "SwapchainOutOfDate";

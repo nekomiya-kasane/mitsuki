@@ -1,165 +1,190 @@
 {
-    "version": 6,
-    "cmakeMinimumRequired": {
-        "major": 4,
-        "minor": 0,
-        "patch": 0
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 0,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/toolchain/miki-coca.cmake",
+      "cacheVariables": {
+        "CMAKE_COLOR_DIAGNOSTICS": "ON"
+      }
     },
-    "configurePresets": [
-        {
-            "name": "base",
-            "hidden": true,
-            "generator": "Ninja",
-            "toolchainFile": "${sourceDir}/cmake/toolchain/miki-coca.cmake",
-            "cacheVariables": {
-                "CMAKE_COLOR_DIAGNOSTICS": "ON"
-            }
-        },
-        {
-            "name": "debug",
-            "inherits": "base",
-            "displayName": "Debug (win-x64-clang, libc++)",
-            "binaryDir": "${sourceDir}/build/debug",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "COCA_TARGET_PROFILE": "win-x64-clang",
-                "MIKI_BUILD_TESTS": "ON"
-            }
-        },
-        {
-            "name": "release",
-            "inherits": "base",
-            "displayName": "Release (win-x64-clang, libc++)",
-            "binaryDir": "${sourceDir}/build/release",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "COCA_TARGET_PROFILE": "win-x64-clang",
-                "MIKI_BUILD_TESTS": "OFF"
-            }
-        },
-        {
-            "name": "relwithdebinfo",
-            "inherits": "base",
-            "displayName": "RelWithDebInfo (win-x64-clang, libc++)",
-            "binaryDir": "${sourceDir}/build/relwithdebinfo",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-                "COCA_TARGET_PROFILE": "win-x64-clang",
-                "MIKI_BUILD_TESTS": "OFF"
-            }
-        },
-        {
-            "name": "debug-msvc",
-            "inherits": "base",
-            "displayName": "Debug (win-x64, clang-cl)",
-            "binaryDir": "${sourceDir}/build/debug-msvc",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "COCA_TARGET_PROFILE": "win-x64",
-                "MIKI_BUILD_TESTS": "ON"
-            }
-        },
-        {
-            "name": "debug-vulkan",
-            "inherits": "debug",
-            "displayName": "Debug + Vulkan (win-x64-clang)",
-            "binaryDir": "${sourceDir}/build/debug-vulkan",
-            "cacheVariables": {
-                "MIKI_BUILD_VULKAN": "ON",
-                "MIKI_BUILD_D3D12": "OFF",
-                "Vulkan_INCLUDE_DIR": "$env{VULKAN_SDK}/Include",
-                "Vulkan_LIBRARY": "$env{VULKAN_SDK}/Lib/vulkan-1.lib"
-            }
-        },
-        {
-            "name": "debug-d3d12",
-            "inherits": "debug",
-            "displayName": "Debug + D3D12 (win-x64-clang)",
-            "binaryDir": "${sourceDir}/build/debug-d3d12",
-            "cacheVariables": {
-                "MIKI_BUILD_VULKAN": "OFF",
-                "MIKI_BUILD_D3D12": "ON"
-            }
-        },
-        {
-            "name": "asan",
-            "inherits": "debug",
-            "displayName": "Debug + ASAN (win-x64-clang)",
-            "binaryDir": "${sourceDir}/build/asan",
-            "cacheVariables": {
-                "MIKI_ENABLE_ASAN": "ON"
-            }
-        },
-        {
-            "name": "ubsan",
-            "inherits": "debug",
-            "displayName": "Debug + UBSAN (win-x64-clang)",
-            "binaryDir": "${sourceDir}/build/ubsan",
-            "cacheVariables": {
-                "MIKI_ENABLE_UBSAN": "ON"
-            }
-        },
-        {
-            "name": "ci",
-            "inherits": "debug",
-            "displayName": "CI (warnings as errors)",
-            "binaryDir": "${sourceDir}/build/ci",
-            "cacheVariables": {
-                "MIKI_CI": "ON"
-            }
-        },
-        {
-            "name": "wasm-emscripten",
-            "inherits": "base",
-            "displayName": "WebAssembly (Emscripten + WebGPU)",
-            "binaryDir": "${sourceDir}/build/wasm",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "COCA_TARGET_PROFILE": "wasm-emscripten",
-                "MIKI_BUILD_TESTS": "OFF"
-            }
-        }
-    ],
-    "buildPresets": [
-        {
-            "name": "debug",
-            "configurePreset": "debug"
-        },
-        {
-            "name": "release",
-            "configurePreset": "release"
-        },
-        {
-            "name": "ci",
-            "configurePreset": "ci"
-        },
-        {
-            "name": "debug-vulkan",
-            "configurePreset": "debug-vulkan"
-        },
-        {
-            "name": "Debug (Vulkan)",
-            "description": "",
-            "displayName": "",
-            "configurePreset": "debug-vulkan"
-        }
-    ],
-    "testPresets": [
-        {
-            "name": "debug",
-            "configurePreset": "debug",
-            "output": {
-                "outputOnFailure": true,
-                "verbosity": "default"
-            }
-        },
-        {
-            "name": "ci",
-            "configurePreset": "ci",
-            "output": {
-                "outputOnFailure": true,
-                "verbosity": "verbose"
-            }
-        }
-    ]
+    {
+      "name": "debug",
+      "inherits": "base",
+      "displayName": "Debug (win-x64-clang, libc++)",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "COCA_TARGET_PROFILE": "win-x64-clang",
+        "MIKI_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release (win-x64-clang, libc++)",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "COCA_TARGET_PROFILE": "win-x64-clang",
+        "MIKI_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "inherits": "base",
+      "displayName": "RelWithDebInfo (win-x64-clang, libc++)",
+      "binaryDir": "${sourceDir}/build/relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "COCA_TARGET_PROFILE": "win-x64-clang",
+        "MIKI_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "debug-msvc",
+      "inherits": "base",
+      "displayName": "Debug (win-x64, clang-cl)",
+      "binaryDir": "${sourceDir}/build/debug-msvc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "COCA_TARGET_PROFILE": "win-x64",
+        "MIKI_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "debug-vulkan",
+      "inherits": "debug",
+      "displayName": "Debug + Vulkan (win-x64-clang)",
+      "binaryDir": "${sourceDir}/build/debug-vulkan",
+      "cacheVariables": {
+        "MIKI_BUILD_VULKAN": "ON",
+        "MIKI_BUILD_D3D12": "OFF",
+        "Vulkan_INCLUDE_DIR": "$env{VULKAN_SDK}/Include",
+        "Vulkan_LIBRARY": "$env{VULKAN_SDK}/Lib/vulkan-1.lib"
+      }
+    },
+    {
+      "name": "debug-d3d12",
+      "inherits": "debug",
+      "displayName": "Debug + D3D12 (win-x64-clang)",
+      "binaryDir": "${sourceDir}/build/debug-d3d12",
+      "cacheVariables": {
+        "MIKI_BUILD_VULKAN": "OFF",
+        "MIKI_BUILD_D3D12": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "inherits": "debug",
+      "displayName": "Debug + ASAN (win-x64-clang)",
+      "binaryDir": "${sourceDir}/build/asan",
+      "cacheVariables": {
+        "MIKI_ENABLE_ASAN": "ON"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "debug",
+      "displayName": "Debug + TSan (win-x64-clang)",
+      "binaryDir": "${sourceDir}/build/tsan",
+      "cacheVariables": {
+        "MIKI_ENABLE_TSAN": "ON"
+      }
+    },
+    {
+      "name": "ubsan",
+      "inherits": "debug",
+      "displayName": "Debug + UBSAN (win-x64-clang)",
+      "binaryDir": "${sourceDir}/build/ubsan",
+      "cacheVariables": {
+        "MIKI_ENABLE_UBSAN": "ON"
+      }
+    },
+    {
+      "name": "ci",
+      "inherits": "debug",
+      "displayName": "CI (warnings as errors)",
+      "binaryDir": "${sourceDir}/build/ci",
+      "cacheVariables": {
+        "MIKI_CI": "ON"
+      }
+    },
+    {
+      "name": "wasm-emscripten",
+      "inherits": "base",
+      "displayName": "WebAssembly (Emscripten + WebGPU)",
+      "binaryDir": "${sourceDir}/build/wasm",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "COCA_TARGET_PROFILE": "wasm-emscripten",
+        "MIKI_BUILD_TESTS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci"
+    },
+    {
+      "name": "debug-vulkan",
+      "configurePreset": "debug-vulkan"
+    },
+    {
+      "name": "Debug (Vulkan)",
+      "description": "",
+      "displayName": "",
+      "configurePreset": "debug-vulkan"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "verbose"
+      }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "verbose"
+      }
+    }
+  ]
 }

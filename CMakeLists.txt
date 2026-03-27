@@ -27,6 +27,11 @@ option(MIKI_BUILD_D3D12 "Build D3D12 backend" OFF)
 option(MIKI_BUILD_WEBGPU "Build WebGPU backend" OFF)
 
 # ---------------------------------------------------------------------------
+# Project options (sanitizers, backends, etc.)
+# ---------------------------------------------------------------------------
+include(cmake/miki_options.cmake)
+
+# ---------------------------------------------------------------------------
 # Runtime DLL copy helper (Win32 only, uses CMake 3.21+ TARGET_RUNTIME_DLLS)
 # ---------------------------------------------------------------------------
 include(cmake/miki_copy_runtime_dlls.cmake)
@@ -117,7 +122,8 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/miki/debug/StructuredLogger.cpp")
     add_library(miki_debug STATIC
         src/miki/debug/StructuredLogger.cpp
-        src/miki/debug/CrashHandler.cpp)
+        src/miki/debug/CrashHandler.cpp
+        src/miki/debug/CpuProfiler.cpp)
     target_include_directories(miki_debug
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_compile_features(miki_debug PUBLIC cxx_std_23)

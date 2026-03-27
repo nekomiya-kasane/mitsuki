@@ -437,8 +437,18 @@ namespace miki::debug {
     }
 
     auto StructuredLogger::AddSink(LogSink sink) -> void {
+#ifndef __EMSCRIPTEN__
         std::lock_guard lock(sinksMutex_);
         sinks_.push_back(std::move(sink));
+#else
+        // In WASM, only allow certain sink types (e.g., ConsoleSink, CallbackSink)
+        if (std::holds_alternative<ConsoleSink>(sink) || std::holds_alternative<CallbackSink>(sink)) {
+            std::lock_guard lock(sinksMutex_);
+            sinks_.push_back(std::move(sink));
+        } else {
+            std::println("Sink type not supported in WASM");
+        }
+#endif
     }
 
     auto StructuredLogger::ClearSinks() -> void {
@@ -534,11 +544,15 @@ namespace miki::debug {
     }
 
     auto StructuredLogger::StartDrainThread() -> void {
+#ifndef __EMSCRIPTEN__
         if (running_.load(std::memory_order_acquire)) {
             return;
         }
         running_.store(true, std::memory_order_release);
         drainThread_ = std::thread([this] { DrainLoop(); });
+#else
+        std::println("StartDrainThread is not applicable to WASM - logging will be synchronous\n");
+#endif
     }
 
     auto StructuredLogger::DrainLoop() -> void {

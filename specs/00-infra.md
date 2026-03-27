@@ -83,7 +83,7 @@ include/miki/
 
 ## 3. Component Specifications
 
-### 3.1 StructuredLogger
+### 3.1 StructuredLogger [Already Implemented]
 
 **Motivation**: Every subsystem needs logging. No logger exists in the reference codebase — all output is ad-hoc `printf` or absent. A structured logger is the first prerequisite for any debugging.
 
@@ -276,19 +276,9 @@ public:
     /// @brief Shutdown: flush + join drain thread.
     auto Shutdown() -> void;
 
-    /// @brief Install crash handlers (POSIX signals / Windows SEH).
-    /// Registers handlers for SIGSEGV, SIGABRT, SIGFPE (POSIX) or SetUnhandledExceptionFilter (Windows).
-    /// On crash: freezes all other threads, bypasses drain queue,
-    /// and synchronously writes remaining ring buffer contents to
-    /// the emergency file descriptor using only async-signal-safe I/O
-    /// (POSIX write() / Windows WriteFile()).
-    /// Must be called once at startup after AddSink().
-    auto InstallCrashHandlers() -> void;
-
-    /// @brief Set emergency output path for crash dump.
-    /// The file descriptor is opened eagerly at call time (not at crash time)
-    /// to avoid heap allocation in the signal handler.
-    auto SetEmergencyOutputPath(std::filesystem::path path) -> void;
+    /// @brief Discard all pending data in registered ring buffers.
+    /// Used by test fixtures to isolate tests from residual data.
+    auto ResetRings() -> void;
 
 private:
     // Per-thread SPSC ring buffer (64KB, power-of-2, cache-line aligned)
@@ -305,11 +295,9 @@ private:
     //   kBlock  — producer spins until drain frees space (use for Fatal-level diagnostics).
     // The policy is set via SetBackpressurePolicy(). Default is kDrop for zero-latency hot path.
     //
-    // Crash handler internals:
-    //   emergencyFd_  — pre-opened file descriptor (int / HANDLE), set by SetEmergencyOutputPath()
-    //   On signal/SEH: iterate all thread-local rings, raw-write contents via
-    //   POSIX write(emergencyFd_, ...) / Windows WriteFile(emergencyFd_, ...).
-    //   NO std::visit, NO fwrite, NO heap allocation in this path.
+    // Thread-local ring lifecycle:
+    //   RAII RingGuard unregisters the ring from rings_ when the thread exits,
+    //   preventing use-after-free by the drain thread.
 };
 
 } // namespace miki::debug
@@ -485,14 +473,23 @@ auto SafeWriteUint64(intptr_t fd, uint64_t value) -> void;
 
 #### 3.2.3 Integration with StructuredLogger
 
-`StructuredLogger::InstallCrashHandlers()` calls `miki::debug::InstallCrashHandlers()` with a callback that:
+`CrashHandler` and `StructuredLogger` are **independent modules** (single responsibility principle). The application layer wires them together at startup:
 
-1. Writes crash header with timestamp and signal info
-2. Iterates all registered thread-local ring buffers
-3. For each ring: writes raw hex dump + attempts to decode entries
-4. Writes footer with "=== END CRASH DUMP ==="
+```cpp
+// Application startup — crash handler is independent of logger
+miki::debug::InstallCrashHandlers(emergencyPath, [](const CrashContext& ctx, intptr_t fd) {
+    // 1. Write crash header with timestamp and signal info
+    SafeWriteLiteral(fd, "=== CRASH DUMP ===\n");
+    SafeWriteLiteral(fd, "Signal: ");
+    SafeWrite(fd, ctx.signalName, strlen(ctx.signalName));
+    // 2. Iterate all registered thread-local ring buffers
+    // 3. For each ring: write raw hex dump + attempt to decode entries
+    // 4. Write footer
+    SafeWriteLiteral(fd, "\n=== END CRASH DUMP ===\n");
+});
+```
 
-The callback uses only `SafeWrite*` functions — no `std::format`, no `std::visit`.
+The callback uses only `SafeWrite*` functions — no `std::format`, no `std::visit`, no heap allocation.
 
 ### 3.3 CpuProfiler
 
@@ -1215,22 +1212,22 @@ graph TD
 
 ## 8. Test Plan
 
-| Component          | Test Count | Key Tests                                                                                                                                                                                                                                                                                                                    |
-| ------------------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `StructuredLogger` | 19         | Multi-sink output, per-category filtering, thread safety (4 threads × 10K messages), JSON format validation, compile-time level gating, ring buffer wrap-around, flush guarantee, **crash handler registration (POSIX + Windows)**, **emergency fd pre-open**, **backpressure kDrop sentinel**, **backpressure kBlock spin** |
-| `CpuProfiler`      | 13         | Nested scopes, enable/disable toggle, overflow wrap, thread-local correctness, **ExportTrace Perfetto protobuf validity**, **ExportTrace ChromeJson streaming**, **ExportTrace large trace (100K events, no OOM)**                                                                                                           |
-| `GpuProfiler`      | 12         | Query pool creation (5 backends), begin/end pass pairing, double-buffer rotation, timing monotonicity, zero-pass edge case, RenderGraph integration                                                                                                                                                                          |
-| `MemProfiler`      | 12         | VMA stats query, per-module tracking, alloc/free balance, budget query, **EnableLeakTracking toggle**, **DumpLeaks detects unfreed alloc**, **DumpLeaks callstack symbolication**, **DumpLeaks empty when tracking disabled**                                                                                                |
-| `GpuBreadcrumbs`   | 10         | Buffer creation (Vk + D3D12), marker write/readback, nested markers, max capacity overflow, no-op on GL/WebGPU, simulated device lost readback                                                                                                                                                                               |
-| `DebugMarker`      | 8          | Region nesting, label insertion, RAII scope, all 5 backends, Mock log verification                                                                                                                                                                                                                                           |
-| `GpuCapture`       | 4          | Detect no-tool, detect RenderDoc (GTEST_SKIP if not attached), begin/end lifecycle                                                                                                                                                                                                                                           |
-| `ShaderPrintf`     | 8          | Buffer creation, reset, readback format parsing, overflow handling, no-op on WebGPU                                                                                                                                                                                                                                          |
-| `Telemetry`        | 6          | Ring buffer wrap, average computation, CSV export, budget check pass/fail                                                                                                                                                                                                                                                    |
-| `ImGuiDebugPanel`  | 4          | Init with null subsystems, render without crash, tab switching                                                                                                                                                                                                                                                               |
-| `Flags`            | 8          | Set/clear/toggle, bitwise ops, iteration, empty, all-set                                                                                                                                                                                                                                                                     |
-| `Hash`             | 6          | FNV-1a known values, compile-time evaluation, HashCombine distribution, HashTrivial for GPU types                                                                                                                                                                                                                            |
-| `TypeTraits`       | 5          | GpuUploadable positive/negative, MikiVector concept, MikiMatrix concept                                                                                                                                                                                                                                                      |
-| **Total**          | **~115**   |                                                                                                                                                                                                                                                                                                                              |
+| Component          | Test Count | Key Tests                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `StructuredLogger` | 17         | Multi-sink output, per-category filtering, thread safety (12 threads × 10K messages), JSON format validation, JSON escaping, compile-time level gating, ring buffer wrap-around, flush guarantee, console sink smoke, file sink write, log level ordering, category level default, set/get category level, backpressure drop counting, backpressure block drains, ToString functions |
+| `CpuProfiler`      | 13         | Nested scopes, enable/disable toggle, overflow wrap, thread-local correctness, **ExportTrace Perfetto protobuf validity**, **ExportTrace ChromeJson streaming**, **ExportTrace large trace (100K events, no OOM)**                                                                                                                                                                   |
+| `GpuProfiler`      | 12         | Query pool creation (5 backends), begin/end pass pairing, double-buffer rotation, timing monotonicity, zero-pass edge case, RenderGraph integration                                                                                                                                                                                                                                  |
+| `MemProfiler`      | 12         | VMA stats query, per-module tracking, alloc/free balance, budget query, **EnableLeakTracking toggle**, **DumpLeaks detects unfreed alloc**, **DumpLeaks callstack symbolication**, **DumpLeaks empty when tracking disabled**                                                                                                                                                        |
+| `GpuBreadcrumbs`   | 10         | Buffer creation (Vk + D3D12), marker write/readback, nested markers, max capacity overflow, no-op on GL/WebGPU, simulated device lost readback                                                                                                                                                                                                                                       |
+| `DebugMarker`      | 8          | Region nesting, label insertion, RAII scope, all 5 backends, Mock log verification                                                                                                                                                                                                                                                                                                   |
+| `GpuCapture`       | 4          | Detect no-tool, detect RenderDoc (GTEST_SKIP if not attached), begin/end lifecycle                                                                                                                                                                                                                                                                                                   |
+| `ShaderPrintf`     | 8          | Buffer creation, reset, readback format parsing, overflow handling, no-op on WebGPU                                                                                                                                                                                                                                                                                                  |
+| `Telemetry`        | 6          | Ring buffer wrap, average computation, CSV export, budget check pass/fail                                                                                                                                                                                                                                                                                                            |
+| `ImGuiDebugPanel`  | 4          | Init with null subsystems, render without crash, tab switching                                                                                                                                                                                                                                                                                                                       |
+| `Flags`            | 8          | Set/clear/toggle, bitwise ops, iteration, empty, all-set                                                                                                                                                                                                                                                                                                                             |
+| `Hash`             | 6          | FNV-1a known values, compile-time evaluation, HashCombine distribution, HashTrivial for GPU types                                                                                                                                                                                                                                                                                    |
+| `TypeTraits`       | 5          | GpuUploadable positive/negative, MikiVector concept, MikiMatrix concept                                                                                                                                                                                                                                                                                                              |
+| **Total**          | **~115**   |                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ---
 
