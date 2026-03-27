@@ -64,6 +64,12 @@ namespace miki::core {
         TessellationFailed = 0x7001,
         ExportFailed = 0x7002,
 
+        // --- Debug Infrastructure (0xD000 - 0xDFFF) ---
+        LogSinkFull = 0xD000,
+        LogFileOpenFailed = 0xD001,
+        CrashHandlerInstallFailed = 0xD002,
+        EmergencyPathInvalid = 0xD003,
+
         // --- GPU Device (0xF000 - 0xFFFF) ---
         DeviceLost = 0xF000,
         DeviceNotReady = 0xF001,
@@ -100,6 +106,10 @@ namespace miki::core {
             case ErrorCode::ImportFailed: return "ImportFailed";
             case ErrorCode::TessellationFailed: return "TessellationFailed";
             case ErrorCode::ExportFailed: return "ExportFailed";
+            case ErrorCode::LogSinkFull: return "LogSinkFull";
+            case ErrorCode::LogFileOpenFailed: return "LogFileOpenFailed";
+            case ErrorCode::CrashHandlerInstallFailed: return "CrashHandlerInstallFailed";
+            case ErrorCode::EmergencyPathInvalid: return "EmergencyPathInvalid";
             case ErrorCode::DeviceLost: return "DeviceLost";
             case ErrorCode::DeviceNotReady: return "DeviceNotReady";
             case ErrorCode::SwapchainOutOfDate: return "SwapchainOutOfDate";

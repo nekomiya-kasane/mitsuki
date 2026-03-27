@@ -11,25 +11,25 @@
 
 ### 1.1 Primary Goals
 
-| # | Goal | Rationale |
-|---|------|-----------|
-| G1 | **Zero-overhead abstraction on Tier1** | Vulkan 1.4 / D3D12 must achieve native-level performance; no virtual dispatch in hot paths |
-| G2 | **Maximum capability extraction per tier** | Each backend must expose its highest-performance path, not LCD (lowest common denominator) |
-| G3 | **Compile-time backend selection** | Backend chosen at build time (template/`if constexpr`), not runtime vtable; eliminates branch misprediction in command recording |
-| G4 | **Thin abstraction** | RHI is a vocabulary layer, not a framework; no hidden resource tracking, no implicit barriers |
-| G5 | **RenderGraph-friendly** | All barrier/transition/aliasing decisions delegated to RenderGraph; RHI provides primitives, not policy |
-| G6 | **Shader IR agnostic** | RHI accepts pre-compiled blobs (SPIR-V, DXIL, GLSL, WGSL); Slang compilation is external |
-| G7 | **Deterministic resource lifetime** | Explicit create/destroy with deferred-destruction queue (2-frame latency); no ref-counting in hot path |
+| #   | Goal                                       | Rationale                                                                                                                        |
+| --- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | **Zero-overhead abstraction on Tier1**     | Vulkan 1.4 / D3D12 must achieve native-level performance; no virtual dispatch in hot paths                                       |
+| G2  | **Maximum capability extraction per tier** | Each backend must expose its highest-performance path, not LCD (lowest common denominator)                                       |
+| G3  | **Compile-time backend selection**         | Backend chosen at build time (template/`if constexpr`), not runtime vtable; eliminates branch misprediction in command recording |
+| G4  | **Thin abstraction**                       | RHI is a vocabulary layer, not a framework; no hidden resource tracking, no implicit barriers                                    |
+| G5  | **RenderGraph-friendly**                   | All barrier/transition/aliasing decisions delegated to RenderGraph; RHI provides primitives, not policy                          |
+| G6  | **Shader IR agnostic**                     | RHI accepts pre-compiled blobs (SPIR-V, DXIL, GLSL, WGSL); Slang compilation is external                                         |
+| G7  | **Deterministic resource lifetime**        | Explicit create/destroy with deferred-destruction queue (2-frame latency); no ref-counting in hot path                           |
 
 ### 1.2 Tier Mapping
 
-| Tier | Backend | API Version | Shader IR | Key Differentiator |
-|------|---------|-------------|-----------|-------------------|
-| **T1-Vulkan** | Vulkan | 1.4 (Roadmap 2026) | SPIR-V | Descriptor heap, mesh shader, ray query, timeline semaphore, async compute |
-| **T1-D3D12** | Direct3D 12 | Agility SDK 1.719+ | DXIL | Root signature, descriptor heap, mesh shader, DXR, work graphs, enhanced barriers |
-| **T2** | Vulkan Compat | 1.1 + select extensions | SPIR-V | Traditional descriptor sets, no mesh shader, MDI |
-| **T3** | WebGPU | Dawn/wgpu | WGSL | Bind groups, 128MB SSBO limit, no MDI, single queue |
-| **T4** | OpenGL | 4.3+ | GLSL 4.30 | Direct state access, MDI, UBO/SSBO binding points |
+| Tier          | Backend       | API Version             | Shader IR | Key Differentiator                                                                |
+| ------------- | ------------- | ----------------------- | --------- | --------------------------------------------------------------------------------- |
+| **T1-Vulkan** | Vulkan        | 1.4 (Roadmap 2026)      | SPIR-V    | Descriptor heap, mesh shader, ray query, timeline semaphore, async compute        |
+| **T1-D3D12**  | Direct3D 12   | Agility SDK 1.719+      | DXIL      | Root signature, descriptor heap, mesh shader, DXR, work graphs, enhanced barriers |
+| **T2**        | Vulkan Compat | 1.1 + select extensions | SPIR-V    | Traditional descriptor sets, no mesh shader, MDI                                  |
+| **T3**        | WebGPU        | Dawn/wgpu               | WGSL      | Bind groups, 128MB SSBO limit, no MDI, single queue                               |
+| **T4**        | OpenGL        | 4.3+                    | GLSL 4.30 | Direct state access, MDI, UBO/SSBO binding points                                 |
 
 ### 1.3 Non-Goals
 
@@ -58,13 +58,13 @@ miki supports **runtime backend switching** via full device teardown and recreat
 
 **Performance characteristics**:
 
-| Aspect | Impact |
-|--------|--------|
-| Hot path (command recording) | **Zero overhead** — still CRTP, no vtable |
-| `DeviceHandle` dispatch | O(passes/frame) ≈ 50-100 switch cases, same as before |
-| Switch latency | **1-5 seconds** (acceptable: GPU idle + resource rebuild + pipeline compile) |
-| Pipeline rebuild | Mitigated by pipeline cache — `PipelineCacheData` is backend-agnostic blob key; only the compiled PSO is backend-specific |
-| Memory | All backends linked into binary; unused backend code is cold (not paged in) |
+| Aspect                       | Impact                                                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Hot path (command recording) | **Zero overhead** — still CRTP, no vtable                                                                                 |
+| `DeviceHandle` dispatch      | O(passes/frame) ≈ 50-100 switch cases, same as before                                                                     |
+| Switch latency               | **1-5 seconds** (acceptable: GPU idle + resource rebuild + pipeline compile)                                              |
+| Pipeline rebuild             | Mitigated by pipeline cache — `PipelineCacheData` is backend-agnostic blob key; only the compiled PSO is backend-specific |
+| Memory                       | All backends linked into binary; unused backend code is cold (not paged in)                                               |
 
 **Industry precedent**: Filament (`Engine::destroy()` + `Engine::create(Backend)`), UE5 (process restart with RHI DLL swap), Godot 4 (restart with different driver). miki's approach is closest to Filament — in-process, no restart required.
 
@@ -124,30 +124,105 @@ class D3D12Device  : public DeviceBase<D3D12Device>  { /* ... */ };
 
 **Rationale**: Command recording is the hottest path (millions of calls/frame on Compat tiers). Virtual dispatch adds ~2-5ns per call due to indirect branch + cache miss. CRTP eliminates this entirely — the compiler inlines backend-specific code at each call site.
 
-**Type-erased facade** (for RenderGraph and higher layers that need backend-agnostic code):
+**Type-erased facades** (for RenderGraph and higher layers that need backend-agnostic code):
 
 ```cpp
-// Thin type-erased wrapper — used ONLY by RenderGraph and init code, never in per-draw paths
+// ── DeviceHandle ─────────────────────────────────────────────────────────
+// Thin type-erased wrapper — used ONLY by RenderGraph, init code, and debug
+// profilers (GpuProfiler, MemProfiler, etc.). Never in per-draw paths.
 class DeviceHandle {
-    // Stores a pointer + backend tag; dispatches via switch (5 cases)
-    // Acceptable overhead: called O(passes/frame) ≈ 50-100 times, not O(draws)
+    void*       ptr_;    // Points to concrete DeviceBase<Impl>
+    BackendType tag_;    // 5-way enum
+
+    // Dispatches via switch (5 cases). O(passes/frame) ≈ 50-100 calls.
+    template <typename F>
+    auto Dispatch(F&& fn) -> decltype(auto);
 };
+
+// ── CommandListHandle ────────────────────────────────────────────────────
+// Type-erased command buffer handle. RenderGraph holds these; the pass
+// callback uses Dispatch() ONCE to obtain the concrete CRTP type, then
+// records all commands with zero overhead (CRTP inline).
+//
+// Key insight: the type-erasure cost is paid O(passes/frame) ≈ 50-100,
+// NOT O(draws/frame) ≈ 10000+. This makes the overhead negligible (<1μs)
+// while preserving a single RenderGraph type that works across all backends.
+class CommandListHandle {
+    void*       ptr_;    // Points to concrete CommandBufferBase<Impl>
+    BackendType tag_;
+
+    // Single dispatch at pass entry — all subsequent CmdDraw/CmdDispatch
+    // calls inside the lambda are CRTP-inlined with zero overhead.
+    template <typename F>
+    auto Dispatch(F&& fn) -> decltype(auto) {
+        switch (tag_) {
+            case BackendType::Vulkan14:
+                return fn(*static_cast<VulkanCommandBuffer*>(ptr_));
+            case BackendType::D3D12:
+                return fn(*static_cast<D3D12CommandBuffer*>(ptr_));
+            case BackendType::VulkanCompat:
+                return fn(*static_cast<VulkanCompatCommandBuffer*>(ptr_));
+            case BackendType::WebGPU:
+                return fn(*static_cast<WebGPUCommandBuffer*>(ptr_));
+            case BackendType::OpenGL43:
+                return fn(*static_cast<OpenGLCommandBuffer*>(ptr_));
+        }
+    }
+};
+```
+
+**Performance analysis — why NOT Command Packets**:
+
+An alternative design serializes commands into POD packets in a linear allocator, then replays
+them through a backend-specific translator at submit time (used by bgfx, early Filament for
+OpenGL compat). This approach is **rejected** for miki:
+
+| Criterion          |                    Command Packet (rejected)                    |    CRTP + CommandListHandle (chosen)     |
+| ------------------ | :-------------------------------------------------------------: | :--------------------------------------: |
+| Record overhead    |                     ~5-8ns/cmd (memcpy POD)                     |      ~10-20ns/cmd (direct API call)      |
+| Replay overhead    |               ~8-15ns/cmd (decode + native call)                |         **0** (already recorded)         |
+| **Total per-cmd**  |                          **~13-23ns**                           |               **~10-20ns**               |
+| Debuggability      |       Callstack is `Translator::Execute()` — context lost       | Native callstack — RenderDoc/PIX perfect |
+| GPU validation     |  Deferred to replay; error location decoupled from record site  |       Immediate; precise location        |
+| Secondary cmd bufs |        Cannot leverage Vulkan secondary command buffers         |               Full support               |
+| Maintenance        | N commands × M backends + Packet struct + Serialize + Translate |    N commands × M backend impls only     |
+
+The CRTP + dispatch-once facade gives **lower total overhead**, **superior debuggability**, and
+**zero maintenance tax** compared to command packets. The ~500ns/frame dispatch cost
+(100 passes × 5ns switch) is negligible vs the ~100μs/frame replay cost of command packets.
+
+**RenderGraph pass registration example**:
+
+```cpp
+// RenderGraph stores CommandListHandle (type-erased, backend-agnostic)
+graph.AddPass("GBuffer", [](CommandListHandle& cmd, const PassResources& res) {
+    cmd.Dispatch([&](auto& cb) {            // ONE switch here — O(passes)
+        cb.CmdBeginRendering(gbufferDesc);  // CRTP inline — zero overhead
+        cb.CmdBindPipeline(gbufferPSO);     // CRTP inline
+        cb.CmdBindDescriptorSet(0, perFrameSet);
+        for (auto& draw : drawList) {
+            cb.CmdPushConstants(ShaderStage::Vertex, 0, sizeof(draw.pc), &draw.pc);
+            cb.CmdDrawIndexed(draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, 0);
+        }                                   // All CRTP inline — zero overhead
+        cb.CmdEndRendering();
+    });
+});
 ```
 
 ### 2.3 Module Decomposition
 
-| Module | Responsibility | Header |
-|--------|---------------|--------|
-| **Core Types** | Enums, formats, handles, descriptors | `rhi/RhiTypes.h`, `rhi/RhiEnums.h`, `rhi/RhiFormats.h` |
-| **Device** | GPU device creation, capability query, resource factory | `rhi/Device.h` |
-| **CommandBuffer** | Command recording (graphics, compute, transfer) | `rhi/CommandBuffer.h` |
-| **Pipeline** | PSO creation (graphics, compute, ray tracing, mesh) | `rhi/Pipeline.h` |
-| **Resources** | Buffer, Texture, Sampler, AccelerationStructure | `rhi/Resources.h` |
-| **Descriptors** | Descriptor layout, binding, bindless table | `rhi/Descriptors.h` |
-| **Synchronization** | Fence, Semaphore (timeline + binary), Event | `rhi/Sync.h` |
-| **Swapchain** | Surface attachment, present | `rhi/Swapchain.h` |
-| **Query** | Timestamp, occlusion, pipeline statistics | `rhi/Query.h` |
-| **Shader** | Shader module creation from pre-compiled blobs | `rhi/Shader.h` |
+| Module              | Responsibility                                          | Header                                                 |
+| ------------------- | ------------------------------------------------------- | ------------------------------------------------------ |
+| **Core Types**      | Enums, formats, handles, descriptors                    | `rhi/RhiTypes.h`, `rhi/RhiEnums.h`, `rhi/RhiFormats.h` |
+| **Device**          | GPU device creation, capability query, resource factory | `rhi/Device.h`                                         |
+| **CommandBuffer**   | Command recording (graphics, compute, transfer)         | `rhi/CommandBuffer.h`                                  |
+| **Pipeline**        | PSO creation (graphics, compute, ray tracing, mesh)     | `rhi/Pipeline.h`                                       |
+| **Resources**       | Buffer, Texture, Sampler, AccelerationStructure         | `rhi/Resources.h`                                      |
+| **Descriptors**     | Descriptor layout, binding, bindless table              | `rhi/Descriptors.h`                                    |
+| **Synchronization** | Fence, Semaphore (timeline + binary), Event             | `rhi/Sync.h`                                           |
+| **Swapchain**       | Surface attachment, present                             | `rhi/Swapchain.h`                                      |
+| **Query**           | Timestamp, occlusion, pipeline statistics               | `rhi/Query.h`                                          |
+| **Shader**          | Shader module creation from pre-compiled blobs          | `rhi/Shader.h`                                         |
 
 ---
 
@@ -440,24 +515,31 @@ struct SparseTextureBind {
     uint64_t         memoryOffset;
 };
 
-// SemaphoreSubmitInfo defined in §7.4
+// Bind data only — no synchronization semantics embedded.
+// Synchronization is handled at the Submit call site (see below).
 struct SparseBindDesc {
     std::span<const SparseBufferBind>  bufferBinds;
     std::span<const SparseTextureBind> textureBinds;
-    std::span<const SemaphoreSubmitInfo> waitSemaphores;   // Sync with prior GPU work
-    std::span<const SemaphoreSubmitInfo> signalSemaphores; // Signal after bind completes
 };
 
-void SubmitSparseBinds(const SparseBindDesc&);
+// Synchronization passed separately — Vulkan needs explicit semaphores for
+// vkQueueBindSparse; D3D12 ignores them (UpdateTileMappings is queue-serialized).
+// This avoids leaking Vulkan's queue-level semaphore semantics into the RHI API,
+// keeping D3D12 backend thin (no fake ID3D12Fence management).
+void SubmitSparseBinds(QueueType                              queue,
+                       const SparseBindDesc&                  binds,
+                       std::span<const SemaphoreSubmitInfo>   wait   = {},
+                       std::span<const SemaphoreSubmitInfo>   signal = {});
 ```
 
 **Backend mapping**:
 
-| RHI | Vulkan 1.4 | D3D12 |
-|-----|-----------|-------|
-| `SubmitSparseBinds` | `vkQueueBindSparse` (on sparse-capable queue) | `UpdateTileMappings` on reserved resource |
-| `SparseBufferBind` | `VkSparseBufferMemoryBindInfo` + `VkSparseMemoryBind` | `D3D12_TILED_RESOURCE_COORDINATE` + `D3D12_TILE_RANGE_FLAGS` |
-| `SparseTextureBind` | `VkSparseImageMemoryBindInfo` + `VkSparseImageMemoryBind` | `UpdateTileMappings` with subresource tiling |
+| RHI                    | Vulkan 1.4                                                                      | D3D12                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `SubmitSparseBinds`    | `vkQueueBindSparse` (on sparse-capable queue, wait/signal → `VkBindSparseInfo`) | `UpdateTileMappings` on reserved resource (wait/signal **ignored** — queue-internal serialization) |
+| `SparseBufferBind`     | `VkSparseBufferMemoryBindInfo` + `VkSparseMemoryBind`                           | `D3D12_TILED_RESOURCE_COORDINATE` + `D3D12_TILE_RANGE_FLAGS`                                       |
+| `SparseTextureBind`    | `VkSparseImageMemoryBindInfo` + `VkSparseImageMemoryBind`                       | `UpdateTileMappings` with subresource tiling                                                       |
+| wait/signal semaphores | Passed to `VkBindSparseInfo::pWait/pSignalSemaphoreInfos`                       | D3D12: `Signal(fence, value)` emulation only if `signal` is non-empty; otherwise no-op             |
 
 T2/T3/T4: sparse binding unavailable. Streaming on these tiers uses full-resource reallocation or CPU-side paging.
 
@@ -493,11 +575,11 @@ auto GetTextureMemoryRequirements(TextureHandle) -> MemoryRequirements;
 
 **Backend mapping**:
 
-| RHI | Vulkan 1.4 | D3D12 | WebGPU / OpenGL |
-|-----|-----------|-------|-----------------|
-| `CreateMemoryHeap` | `vkAllocateMemory` | `CreateHeap` | N/A (no aliasing) |
-| `AliasBufferMemory` | `vkBindBufferMemory2` to shared `VkDeviceMemory` | `CreatePlacedResource` in shared `ID3D12Heap` | Fallback: separate allocation |
-| `AliasTextureMemory` | `vkBindImageMemory2` to shared `VkDeviceMemory` | `CreatePlacedResource` in shared `ID3D12Heap` | Fallback: separate allocation |
+| RHI                  | Vulkan 1.4                                       | D3D12                                         | WebGPU / OpenGL               |
+| -------------------- | ------------------------------------------------ | --------------------------------------------- | ----------------------------- |
+| `CreateMemoryHeap`   | `vkAllocateMemory`                               | `CreateHeap`                                  | N/A (no aliasing)             |
+| `AliasBufferMemory`  | `vkBindBufferMemory2` to shared `VkDeviceMemory` | `CreatePlacedResource` in shared `ID3D12Heap` | Fallback: separate allocation |
+| `AliasTextureMemory` | `vkBindImageMemory2` to shared `VkDeviceMemory`  | `CreatePlacedResource` in shared `ID3D12Heap` | Fallback: separate allocation |
 
 ---
 
@@ -589,14 +671,39 @@ void UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>);
 
 ### 6.5 Backend Mapping
 
-| RHI Concept | Vulkan 1.4 (T1) | D3D12 (T1) | Vulkan Compat (T2) | WebGPU (T3) | OpenGL (T4) |
-|-------------|-----------------|------------|-------------------|-------------|-------------|
-| DescriptorLayout | `VkDescriptorSetLayout` (or descriptor heap layout) | Root signature | `VkDescriptorSetLayout` | `GPUBindGroupLayout` | N/A (implicit) |
-| DescriptorSet | Descriptor heap offset | Descriptor table in CBV/SRV/UAV heap | `VkDescriptorSet` | `GPUBindGroup` | Direct `glBindBufferRange` / `glBindTextureUnit` |
-| PipelineLayout | `VkPipelineLayout` (or descriptor heap pipeline layout) | Root signature | `VkPipelineLayout` | `GPUPipelineLayout` | N/A |
-| Push constants | `vkCmdPushConstants` (256B) | Root constants (64 DWORDs) | `vkCmdPushConstants` | Emulated via 256B UBO | Emulated via 128B UBO |
-| Bindless | Descriptor heap indexing | CBV/SRV/UAV heap indexing | Descriptor indexing (Vk 1.2) | N/A (per-draw bind group) | `GL_ARB_bindless_texture` or array |
-| Update frequency | Offset into heap (zero-cost) | Offset into heap (zero-cost) | `vkUpdateDescriptorSets` | New `GPUBindGroup` | `glBindBufferRange` |
+| RHI Concept      | Vulkan 1.4 (T1)                                         | D3D12 (T1)                           | Vulkan Compat (T2)           | WebGPU (T3)               | OpenGL (T4)                                      |
+| ---------------- | ------------------------------------------------------- | ------------------------------------ | ---------------------------- | ------------------------- | ------------------------------------------------ |
+| DescriptorLayout | `VkDescriptorSetLayout` (or descriptor heap layout)     | Root signature                       | `VkDescriptorSetLayout`      | `GPUBindGroupLayout`      | N/A (implicit)                                   |
+| DescriptorSet    | Descriptor heap offset                                  | Descriptor table in CBV/SRV/UAV heap | `VkDescriptorSet`            | `GPUBindGroup`            | Direct `glBindBufferRange` / `glBindTextureUnit` |
+| PipelineLayout   | `VkPipelineLayout` (or descriptor heap pipeline layout) | Root signature                       | `VkPipelineLayout`           | `GPUPipelineLayout`       | N/A                                              |
+| Push constants   | `vkCmdPushConstants` (256B)                             | Root constants (64 DWORDs)           | `vkCmdPushConstants`         | Emulated via 256B UBO     | Emulated via 128B UBO                            |
+| Bindless         | Descriptor heap indexing                                | CBV/SRV/UAV heap indexing            | Descriptor indexing (Vk 1.2) | N/A (per-draw bind group) | `GL_ARB_bindless_texture` or array               |
+| Update frequency | Offset into heap (zero-cost)                            | Offset into heap (zero-cost)         | `vkUpdateDescriptorSets`     | New `GPUBindGroup`        | `glBindBufferRange`                              |
+
+### 6.5.1 Reserved Binding Convention (Push Constant Emulation)
+
+On backends without native push constants (WebGPU T3, OpenGL T4), the RHI emulates push
+constants via a small uniform buffer. This introduces an **implicit binding slot reservation**
+that must be documented to prevent collision with user-declared descriptors:
+
+| Backend        | Reserved Slot           | Size | Mechanism                                                   |
+| -------------- | :---------------------- | :--- | :---------------------------------------------------------- |
+| WebGPU         | `@group(0) @binding(0)` | 256B | `var<uniform>` in generated WGSL                            |
+| OpenGL         | UBO binding point 0     | 128B | `layout(std140, binding = 0) uniform PushConstants { ... }` |
+| Vulkan / D3D12 | None                    | N/A  | Native push constants / root constants                      |
+
+**Slang integration contract**:
+
+- Slang's `[vk::push_constant]` attribute, when targeting WGSL output, MUST map to
+  `@group(0) @binding(0)`. The Slang compiler backend must be configured with this convention.
+- User-declared descriptors in `set=0` start from `binding=1` on WebGPU/OpenGL.
+  On Vulkan/D3D12, `binding=0` in `set=0` is available for user descriptors (no reservation).
+- The `PipelineLayoutDesc` creation path on WebGPU/OpenGL backends automatically injects the
+  push constant UBO into the generated bind group layout at `group(0), binding(0)`.
+  User-provided `DescriptorLayoutDesc` for set 0 is shifted by +1 binding offset internally.
+
+**Validation**: In debug builds, `CreatePipelineLayout` asserts that no user binding in set 0
+occupies binding 0 on WebGPU/OpenGL backends, emitting a clear error message.
 
 ### 6.6 Bindless Table
 
@@ -617,13 +724,13 @@ public:
 };
 ```
 
-| Backend | Implementation |
-|---------|---------------|
-| Vulkan 1.4 | Descriptor heap with `VK_EXT_descriptor_heap`; fallback to `VK_EXT_descriptor_buffer` |
-| D3D12 | CBV/SRV/UAV descriptor heap (shader-visible) |
-| Vulkan Compat | Large descriptor set with `VK_EXT_descriptor_indexing` (update-after-bind) |
-| WebGPU | Per-draw bind group with sampled textures (no true bindless) |
-| OpenGL | `GL_ARB_bindless_texture` if available; else texture array + index |
+| Backend       | Implementation                                                                        |
+| ------------- | ------------------------------------------------------------------------------------- |
+| Vulkan 1.4    | Descriptor heap with `VK_EXT_descriptor_heap`; fallback to `VK_EXT_descriptor_buffer` |
+| D3D12         | CBV/SRV/UAV descriptor heap (shader-visible)                                          |
+| Vulkan Compat | Large descriptor set with `VK_EXT_descriptor_indexing` (update-after-bind)            |
+| WebGPU        | Per-draw bind group with sampled textures (no true bindless)                          |
+| OpenGL        | `GL_ARB_bindless_texture` if available; else texture array + index                    |
 
 ---
 
@@ -753,10 +860,10 @@ void CmdInsertDebugLabel(const char* name, const float color[4]);
 
 ### 7.3 Backend Mapping for Dynamic Rendering
 
-| RHI | Vulkan 1.4 | D3D12 | Vulkan Compat | WebGPU | OpenGL |
-|-----|-----------|-------|--------------|--------|--------|
+| RHI                 | Vulkan 1.4                                          | D3D12                                                        | Vulkan Compat                                                      | WebGPU                         | OpenGL                          |
+| ------------------- | --------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------ | ------------------------------- |
 | `CmdBeginRendering` | `vkCmdBeginRendering` (dynamic rendering, core 1.3) | `OMSetRenderTargets` + `BeginRenderPass` (enhanced barriers) | `vkCmdBeginRendering` (if ext available) or `vkCmdBeginRenderPass` | `beginRenderPass()` on encoder | `glBindFramebuffer` + `glClear` |
-| `CmdEndRendering` | `vkCmdEndRendering` | `EndRenderPass` | `vkCmdEndRendering` / `vkCmdEndRenderPass` | `end()` on encoder | (implicit) |
+| `CmdEndRendering`   | `vkCmdEndRendering`                                 | `EndRenderPass`                                              | `vkCmdEndRendering` / `vkCmdEndRenderPass`                         | `end()` on encoder             | (implicit)                      |
 
 ### 7.4 Command Buffer Submission
 
@@ -963,22 +1070,22 @@ struct PipelineBarrierDesc {
 
 ### 9.4 Backend Mapping
 
-| RHI | Vulkan 1.4 | D3D12 | Vulkan Compat | WebGPU | OpenGL |
-|-----|-----------|-------|--------------|--------|--------|
-| Fence | `VkFence` | `ID3D12Fence` | `VkFence` | `mapAsync` callback | `glFenceSync` |
-| Timeline Semaphore | `VkSemaphore` (timeline) | `ID3D12Fence` (inherently timeline) | `VkSemaphore` (if ext) | N/A | N/A |
-| Binary Semaphore | `VkSemaphore` (binary) | N/A (use fence) | `VkSemaphore` | N/A | N/A |
-| Buffer Barrier | `vkCmdPipelineBarrier2` | Enhanced barrier / legacy `ResourceBarrier` | `vkCmdPipelineBarrier` | Implicit | `glMemoryBarrier` |
-| Texture Barrier | `vkCmdPipelineBarrier2` (image) | Enhanced barrier (texture) | `vkCmdPipelineBarrier` (image) | Implicit | `glMemoryBarrier` + `glTextureBarrier` |
+| RHI                | Vulkan 1.4                      | D3D12                                       | Vulkan Compat                  | WebGPU              | OpenGL                                 |
+| ------------------ | ------------------------------- | ------------------------------------------- | ------------------------------ | ------------------- | -------------------------------------- |
+| Fence              | `VkFence`                       | `ID3D12Fence`                               | `VkFence`                      | `mapAsync` callback | `glFenceSync`                          |
+| Timeline Semaphore | `VkSemaphore` (timeline)        | `ID3D12Fence` (inherently timeline)         | `VkSemaphore` (if ext)         | N/A                 | N/A                                    |
+| Binary Semaphore   | `VkSemaphore` (binary)          | N/A (use fence)                             | `VkSemaphore`                  | N/A                 | N/A                                    |
+| Buffer Barrier     | `vkCmdPipelineBarrier2`         | Enhanced barrier / legacy `ResourceBarrier` | `vkCmdPipelineBarrier`         | Implicit            | `glMemoryBarrier`                      |
+| Texture Barrier    | `vkCmdPipelineBarrier2` (image) | Enhanced barrier (texture)                  | `vkCmdPipelineBarrier` (image) | Implicit            | `glMemoryBarrier` + `glTextureBarrier` |
 
 **D3D12 Enhanced Barriers mapping note**: The RHI barrier model is Vulkan-centric (stage + access flags). D3D12 Enhanced Barriers use a **layout-based** model (`D3D12_BARRIER_LAYOUT`). The D3D12 backend maps RHI barriers as follows:
 
-| RHI Concept | D3D12 Enhanced Barrier Equivalent |
-|-------------|-----------------------------------|
-| `TextureLayout` | `D3D12_BARRIER_LAYOUT` (1:1 mapping: `ColorAttachment` → `DIRECT_QUEUE_SHADER_RESOURCE`, etc.) |
-| `srcStage` / `dstStage` | `D3D12_BARRIER_SYNC` flags (merge stage masks into sync scope) |
-| `srcAccess` / `dstAccess` | `D3D12_BARRIER_ACCESS` flags (direct mapping) |
-| Queue ownership transfer | `D3D12_TEXTURE_BARRIER` with cross-queue layout transition |
+| RHI Concept               | D3D12 Enhanced Barrier Equivalent                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `TextureLayout`           | `D3D12_BARRIER_LAYOUT` (1:1 mapping: `ColorAttachment` → `DIRECT_QUEUE_SHADER_RESOURCE`, etc.) |
+| `srcStage` / `dstStage`   | `D3D12_BARRIER_SYNC` flags (merge stage masks into sync scope)                                 |
+| `srcAccess` / `dstAccess` | `D3D12_BARRIER_ACCESS` flags (direct mapping)                                                  |
+| Queue ownership transfer  | `D3D12_TEXTURE_BARRIER` with cross-queue layout transition                                     |
 
 The D3D12 backend detects Enhanced Barriers support at init (`ID3D12Device10::CheckFeatureSupport`) and falls back to legacy `ResourceBarrier` if unavailable. The RHI public API remains unchanged — the mapping is internal to the D3D12 backend.
 
@@ -1055,13 +1162,14 @@ void Present(SwapchainHandle, std::span<const SemaphoreHandle> waitSemaphores);
 
 Multi-window rendering uses three decoupled subsystems (see companion document for full API):
 
-| Subsystem | Namespace | Responsibility |
-|-----------|-----------|---------------|
-| `WindowManager` | `miki::platform` | OS window tree (create/destroy/events), parent–child hierarchy, cascade destruction |
-| `SurfaceManager` | `miki::rhi` | Per-window `RenderSurface` + `FrameManager` lifecycle, GPU surface attach/detach |
-| `IDevice` (shared) | `miki::rhi` | Single GPU device shared by all windows; all GPU resources available to all surfaces |
+| Subsystem          | Namespace        | Responsibility                                                                       |
+| ------------------ | ---------------- | ------------------------------------------------------------------------------------ |
+| `WindowManager`    | `miki::platform` | OS window tree (create/destroy/events), parent–child hierarchy, cascade destruction  |
+| `SurfaceManager`   | `miki::rhi`      | Per-window `RenderSurface` + `FrameManager` lifecycle, GPU surface attach/detach     |
+| `IDevice` (shared) | `miki::rhi`      | Single GPU device shared by all windows; all GPU resources available to all surfaces |
 
 **Key design properties**:
+
 - **Tree-structured windows**: parent–child hierarchy with post-order cascade destruction (GPU surfaces drained before OS windows destroyed)
 - **GPU resource sharing**: single `IDevice`, textures/buffers/pipelines created once and used in any window's render passes
 - **Three-concern separation**: `WindowManager` never touches GPU; `SurfaceManager` never creates OS windows; events flow through `WindowManager` and are dispatched by application code
@@ -1113,13 +1221,13 @@ auto CreateShaderModule(const ShaderModuleDesc&) -> Result<ShaderModuleHandle>;
 └──────────┴──────────┴──────────┴───────────────┘
 ```
 
-| Backend | Allocator | Strategy |
-|---------|-----------|----------|
-| Vulkan 1.4 | VMA (Vulkan Memory Allocator) | Dedicated alloc for large (>256KB); sub-alloc for small; sparse binding for streaming |
-| D3D12 | D3D12MA (D3D12 Memory Allocator) | Placed resources in heaps; reserved resources for sparse |
-| Vulkan Compat | VMA | Same as T1 minus sparse |
-| WebGPU | API-managed | `createBuffer` / `createTexture` (no explicit memory) |
-| OpenGL | API-managed | `glBufferStorage` / `glTexStorage2D` (immutable) |
+| Backend       | Allocator                        | Strategy                                                                              |
+| ------------- | -------------------------------- | ------------------------------------------------------------------------------------- |
+| Vulkan 1.4    | VMA (Vulkan Memory Allocator)    | Dedicated alloc for large (>256KB); sub-alloc for small; sparse binding for streaming |
+| D3D12         | D3D12MA (D3D12 Memory Allocator) | Placed resources in heaps; reserved resources for sparse                              |
+| Vulkan Compat | VMA                              | Same as T1 minus sparse                                                               |
+| WebGPU        | API-managed                      | `createBuffer` / `createTexture` (no explicit memory)                                 |
+| OpenGL        | API-managed                      | `glBufferStorage` / `glTexStorage2D` (immutable)                                      |
 
 ### 13.2 Staging Ring Buffer
 
@@ -1161,6 +1269,39 @@ The RHI provides the primitives (see §5.6 Transient & Memory Aliasing API):
 
 Aliasing policy (lifetime analysis, group assignment, heap sizing) is entirely in RenderGraph — RHI provides primitives only.
 
+### 13.4 Memory Statistics API
+
+Debug and profiling layers (`MemProfiler`, `Telemetry`) need GPU memory budget and usage data. Without an RHI-level query, these layers would bypass the abstraction and call VMA / D3D12MA / DXGI directly — violating the Thin Abstraction boundary.
+
+```cpp
+struct MemoryHeapBudget {
+    uint64_t budgetBytes;       // OS-reported budget for this heap (DXGI / VK_EXT_memory_budget)
+    uint64_t usageBytes;        // Current usage in this heap
+    uint32_t heapIndex;         // Backend-specific heap index
+    bool     isDeviceLocal;     // true = VRAM, false = system RAM
+};
+
+struct MemoryStats {
+    uint32_t totalAllocationCount;   // Live allocations (VMA / D3D12MA tracked)
+    uint64_t totalAllocatedBytes;    // Total bytes allocated (including sub-allocation overhead)
+    uint64_t totalUsedBytes;         // Bytes actually in use by resources
+    uint32_t heapCount;              // Number of heaps reported
+};
+
+// Device API
+[[nodiscard]] auto GetMemoryStats() const -> MemoryStats;
+[[nodiscard]] auto GetMemoryHeapBudgets(std::span<MemoryHeapBudget> out) const -> uint32_t;
+```
+
+| Backend | `GetMemoryStats`                                                                    | `GetMemoryHeapBudgets`                                  |
+| ------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Vulkan  | `vmaCalculateStatistics()`                                                          | `vmaGetHeapBudgets()` (requires `VK_EXT_memory_budget`) |
+| D3D12   | `D3D12MA::Allocator::GetBudget()`                                                   | `IDXGIAdapter3::QueryVideoMemoryInfo()` per segment     |
+| OpenGL  | `GL_NVX_gpu_memory_info` / `GL_ATI_meminfo` (best-effort; returns 0 if unsupported) | Single heap, budget = queried VRAM                      |
+| WebGPU  | Returns `{0, 0, 0, 0}` (no memory introspection API)                                | `heapCount = 0`                                         |
+
+**Frequency**: These are **not** hot-path calls. Expected usage: once per frame by `MemProfiler::Snapshot()` (~1us). No caching needed at the RHI level.
+
 ---
 
 ## 14. Error Handling
@@ -1196,23 +1337,23 @@ No exceptions in hot paths. `DeviceLost` triggers graceful recovery (re-create d
 
 All `*Desc` structs have `const char* debugName`. Backends forward to:
 
-| Backend | API |
-|---------|-----|
-| Vulkan | `vkSetDebugUtilsObjectNameEXT` |
-| D3D12 | `SetName` (wide string) |
-| OpenGL | `glObjectLabel` |
-| WebGPU | `label` field |
+| Backend | API                            |
+| ------- | ------------------------------ |
+| Vulkan  | `vkSetDebugUtilsObjectNameEXT` |
+| D3D12   | `SetName` (wide string)        |
+| OpenGL  | `glObjectLabel`                |
+| WebGPU  | `label` field                  |
 
 ### 15.2 Debug Labels
 
 `CmdBeginDebugLabel` / `CmdEndDebugLabel` map to:
 
-| Backend | API |
-|---------|-----|
-| Vulkan | `vkCmdBeginDebugUtilsLabelEXT` |
-| D3D12 | `PIXBeginEvent` / `PIXEndEvent` |
-| OpenGL | `glPushDebugGroup` / `glPopDebugGroup` |
-| WebGPU | `pushDebugGroup` / `popDebugGroup` |
+| Backend | API                                    |
+| ------- | -------------------------------------- |
+| Vulkan  | `vkCmdBeginDebugUtilsLabelEXT`         |
+| D3D12   | `PIXBeginEvent` / `PIXEndEvent`        |
+| OpenGL  | `glPushDebugGroup` / `glPopDebugGroup` |
+| WebGPU  | `pushDebugGroup` / `popDebugGroup`     |
 
 ### 15.3 GPU Timestamps
 
@@ -1228,88 +1369,88 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 
 ### 16.1 Tier1 Vulkan 1.4 — Maximum Performance Path
 
-| Feature | Implementation |
-|---------|---------------|
+| Feature            | Implementation                                                       |
+| ------------------ | -------------------------------------------------------------------- |
 | Descriptor binding | `VK_EXT_descriptor_heap` (2026); fallback `VK_EXT_descriptor_buffer` |
-| Push constants | Native 256B `vkCmdPushConstants` |
-| Mesh shaders | `VK_EXT_mesh_shader` (task + mesh) |
-| Dynamic rendering | `VK_KHR_dynamic_rendering` (core 1.3) |
-| Barriers | `vkCmdPipelineBarrier2` (core 1.3) with `VK_KHR_synchronization2` |
-| Async compute | Dedicated compute queue + timeline semaphore |
-| Transfer | Dedicated transfer queue (Vulkan 1.4 streaming) |
-| BDA | `VK_KHR_buffer_device_address` (core 1.2) |
-| Ray tracing | `VK_KHR_ray_query` + `VK_KHR_acceleration_structure` |
-| VRS | `VK_KHR_fragment_shading_rate` |
-| Sparse binding | `VkSparseBufferMemoryBindInfo` for streaming pages |
-| Subgroup ops | `VK_KHR_shader_subgroup_extended_types` (core 1.2) |
+| Push constants     | Native 256B `vkCmdPushConstants`                                     |
+| Mesh shaders       | `VK_EXT_mesh_shader` (task + mesh)                                   |
+| Dynamic rendering  | `VK_KHR_dynamic_rendering` (core 1.3)                                |
+| Barriers           | `vkCmdPipelineBarrier2` (core 1.3) with `VK_KHR_synchronization2`    |
+| Async compute      | Dedicated compute queue + timeline semaphore                         |
+| Transfer           | Dedicated transfer queue (Vulkan 1.4 streaming)                      |
+| BDA                | `VK_KHR_buffer_device_address` (core 1.2)                            |
+| Ray tracing        | `VK_KHR_ray_query` + `VK_KHR_acceleration_structure`                 |
+| VRS                | `VK_KHR_fragment_shading_rate`                                       |
+| Sparse binding     | `VkSparseBufferMemoryBindInfo` for streaming pages                   |
+| Subgroup ops       | `VK_KHR_shader_subgroup_extended_types` (core 1.2)                   |
 
 ### 16.2 Tier1 D3D12 — Maximum Performance Path
 
-| Feature | Implementation |
-|---------|---------------|
+| Feature            | Implementation                                                |
+| ------------------ | ------------------------------------------------------------- |
 | Descriptor binding | Root signature + CBV/SRV/UAV descriptor heap (shader-visible) |
-| Root constants | 64 DWORDs in root signature |
-| Mesh shaders | Amplification + Mesh shader (SM 6.5) |
-| Render pass | `BeginRenderPass` / `EndRenderPass` with enhanced barriers |
-| Barriers | Enhanced barriers (`D3D12_BARRIER_*`) |
-| Async compute | Compute command queue + `ID3D12Fence` |
-| Transfer | Copy command queue |
-| BDA | `GetGPUVirtualAddress()` on buffers |
-| Ray tracing | DXR 1.1 (inline ray query in any shader) |
-| VRS | `RSSetShadingRate` + `RSSetShadingRateImage` |
-| Work graphs | `DispatchGraph` for GPU-driven work (future) |
+| Root constants     | 64 DWORDs in root signature                                   |
+| Mesh shaders       | Amplification + Mesh shader (SM 6.5)                          |
+| Render pass        | `BeginRenderPass` / `EndRenderPass` with enhanced barriers    |
+| Barriers           | Enhanced barriers (`D3D12_BARRIER_*`)                         |
+| Async compute      | Compute command queue + `ID3D12Fence`                         |
+| Transfer           | Copy command queue                                            |
+| BDA                | `GetGPUVirtualAddress()` on buffers                           |
+| Ray tracing        | DXR 1.1 (inline ray query in any shader)                      |
+| VRS                | `RSSetShadingRate` + `RSSetShadingRateImage`                  |
+| Work graphs        | `DispatchGraph` for GPU-driven work (future)                  |
 
 ### 16.3 Tier2 Vulkan Compat — Broad Compatibility
 
-| Feature | Implementation |
-|---------|---------------|
-| Descriptor binding | Traditional `VkDescriptorSet` with auto-growing pool |
-| Push constants | Native (256B) |
-| Geometry | Vertex shader + `vkCmdDrawIndexedIndirect` (MDI) |
-| Rendering | `vkCmdBeginRenderPass` (legacy) or dynamic rendering if ext available |
-| Barriers | `vkCmdPipelineBarrier` (Vulkan 1.0 style) |
-| No async compute | Single queue |
-| No ray tracing | CPU BVH fallback |
+| Feature            | Implementation                                                        |
+| ------------------ | --------------------------------------------------------------------- |
+| Descriptor binding | Traditional `VkDescriptorSet` with auto-growing pool                  |
+| Push constants     | Native (256B)                                                         |
+| Geometry           | Vertex shader + `vkCmdDrawIndexedIndirect` (MDI)                      |
+| Rendering          | `vkCmdBeginRenderPass` (legacy) or dynamic rendering if ext available |
+| Barriers           | `vkCmdPipelineBarrier` (Vulkan 1.0 style)                             |
+| No async compute   | Single queue                                                          |
+| No ray tracing     | CPU BVH fallback                                                      |
 
 ### 16.4 Tier3 WebGPU — Browser Target
 
-| Feature | Implementation |
-|---------|---------------|
-| Descriptor binding | `GPUBindGroup` per material/pass (immutable) |
-| Push constants | Emulated via 256B uniform buffer (offset 0, set 0) |
-| Geometry | `draw()` / `drawIndexed()` (no MDI) |
-| Rendering | Render pass encoder |
-| Barriers | Implicit (Dawn/wgpu handles transitions) |
-| SSBO limit | 128MB `maxStorageBufferBindingSize` → chunked binding |
-| Shader | WGSL (Slang → WGSL) |
-| Single queue | No async compute |
+| Feature            | Implementation                                        |
+| ------------------ | ----------------------------------------------------- |
+| Descriptor binding | `GPUBindGroup` per material/pass (immutable)          |
+| Push constants     | Emulated via 256B uniform buffer (offset 0, set 0)    |
+| Geometry           | `draw()` / `drawIndexed()` (no MDI)                   |
+| Rendering          | Render pass encoder                                   |
+| Barriers           | Implicit (Dawn/wgpu handles transitions)              |
+| SSBO limit         | 128MB `maxStorageBufferBindingSize` → chunked binding |
+| Shader             | WGSL (Slang → WGSL)                                   |
+| Single queue       | No async compute                                      |
 
 ### 16.5 Tier4 OpenGL 4.3 — Legacy / VM Target
 
-| Feature | Implementation |
-|---------|---------------|
+| Feature            | Implementation                                                     |
+| ------------------ | ------------------------------------------------------------------ |
 | Descriptor binding | Direct `glBindBufferRange` / `glBindTextureUnit` / `glBindSampler` |
-| Push constants | Emulated via 128B UBO (binding 0) |
-| Geometry | `glMultiDrawElementsIndirect` (MDI) |
-| Rendering | FBO bind/unbind |
-| Barriers | `glMemoryBarrier` (coarse) |
-| State | Direct State Access (DSA, GL 4.5 preferred) |
-| Compute | `glDispatchCompute` (GL 4.3 core) |
+| Push constants     | Emulated via 128B UBO (binding 0)                                  |
+| Geometry           | `glMultiDrawElementsIndirect` (MDI)                                |
+| Rendering          | FBO bind/unbind                                                    |
+| Barriers           | `glMemoryBarrier` (coarse)                                         |
+| State              | Direct State Access (DSA, GL 4.5 preferred)                        |
+| Compute            | `glDispatchCompute` (GL 4.3 core)                                  |
 
 ---
 
 ## 17. Thread Safety Model
 
-| Operation | Thread Safety |
-|-----------|--------------|
-| Device creation/destruction | Main thread only |
-| Resource creation/destruction | Thread-safe (internal lock on handle pool) |
-| Command buffer recording | **Per-command-buffer single-thread** (no lock needed) |
-| Command buffer submission | Thread-safe (queue lock) |
-| Descriptor set creation | Thread-safe |
-| Pipeline creation | Thread-safe (pipeline cache has internal lock) |
-| Swapchain operations | Main thread only |
-| Staging ring allocation | Per-thread ring or lock-free ring |
+| Operation                     | Thread Safety                                         |
+| ----------------------------- | ----------------------------------------------------- |
+| Device creation/destruction   | Main thread only                                      |
+| Resource creation/destruction | Thread-safe (internal lock on handle pool)            |
+| Command buffer recording      | **Per-command-buffer single-thread** (no lock needed) |
+| Command buffer submission     | Thread-safe (queue lock)                              |
+| Descriptor set creation       | Thread-safe                                           |
+| Pipeline creation             | Thread-safe (pipeline cache has internal lock)        |
+| Swapchain operations          | Main thread only                                      |
+| Staging ring allocation       | Per-thread ring or lock-free ring                     |
 
 **Design principle**: Command recording is lock-free. Multiple threads record into separate command buffers concurrently. Submission serializes at the queue level.
 
@@ -1343,6 +1484,7 @@ extern template class DeviceBase<OpenGLDevice>;
 ```
 
 **Benefits**:
+
 - Header-only declarations keep API fast to compile for users
 - Implementation details isolated to .cpp files
 - Explicit instantiation prevents code bloat in translation units
@@ -1358,7 +1500,7 @@ class HandlePool {
     std::atomic<uint32_t> freeListHead_;
     std::atomic<uint32_t> freeCount_;
     alignas(64) std::array<Slot, Capacity> slots_;  // Cache line aligned
-    
+
     struct Slot {
         alignas(32) T object;        // Avoid false sharing
         std::atomic<uint32_t> nextFree;
@@ -1408,13 +1550,13 @@ struct VulkanDeviceExtensions {
 
 ### 18.2 Future Extensions
 
-| Feature | Vulkan | D3D12 | RHI Impact |
-|---------|--------|-------|-----------|
-| Descriptor heap | `VK_EXT_descriptor_heap` (2026) | Already native | New descriptor path, coexists with descriptor buffer |
-| Work graphs | N/A (Vulkan equivalent TBD) | `DispatchGraph` (SM 6.8) | New `CmdDispatchGraph` command |
-| Cooperative matrix | `VK_KHR_cooperative_matrix` | SM 6.9 wave matrix | New shader intrinsics, no RHI API change |
-| GDeflate HW decode | `VK_NV_memory_decompression` | DirectStorage | New `CmdDecompressBuffer` command (see below) |
-| Fence barriers | N/A | D3D12 Fence Barriers (Tier-1) | Enhanced barrier model (see §9.4 mapping note) |
+| Feature            | Vulkan                          | D3D12                         | RHI Impact                                           |
+| ------------------ | ------------------------------- | ----------------------------- | ---------------------------------------------------- |
+| Descriptor heap    | `VK_EXT_descriptor_heap` (2026) | Already native                | New descriptor path, coexists with descriptor buffer |
+| Work graphs        | N/A (Vulkan equivalent TBD)     | `DispatchGraph` (SM 6.8)      | New `CmdDispatchGraph` command                       |
+| Cooperative matrix | `VK_KHR_cooperative_matrix`     | SM 6.9 wave matrix            | New shader intrinsics, no RHI API change             |
+| GDeflate HW decode | `VK_NV_memory_decompression`    | DirectStorage                 | New `CmdDecompressBuffer` command (see below)        |
+| Fence barriers     | N/A                             | D3D12 Fence Barriers (Tier-1) | Enhanced barrier model (see §9.4 mapping note)       |
 
 **`CmdDecompressBuffer` signature preview** (Phase 6b+, not yet active):
 
@@ -1439,11 +1581,11 @@ struct DecompressBufferDesc {
 void CmdDecompressBuffer(const DecompressBufferDesc&);
 ```
 
-| Backend | Implementation |
-|---------|---------------|
-| Vulkan (NV) | `vkCmdDecompressMemoryNV` (`VK_NV_memory_decompression`) |
-| D3D12 | DirectStorage `IDStorageQueue::EnqueueRequest` with GPU decompression |
-| Others | Not available — fallback to compute shader or CPU decode (handled by ChunkLoader, not RHI) |
+| Backend     | Implementation                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| Vulkan (NV) | `vkCmdDecompressMemoryNV` (`VK_NV_memory_decompression`)                                   |
+| D3D12       | DirectStorage `IDStorageQueue::EnqueueRequest` with GPU decompression                      |
+| Others      | Not available — fallback to compute shader or CPU decode (handled by ChunkLoader, not RHI) |
 
 ---
 
@@ -1464,16 +1606,20 @@ Files:            PascalCase.h / PascalCase.cpp
 
 ## 20. Summary: Design Decisions & Rationale
 
-| Decision | Alternatives Considered | Rationale |
-|----------|------------------------|-----------|
-| CRTP over virtual dispatch | vtable (NVRHI), type-erasure (wgpu) | Zero overhead in command recording hot path; backend known at compile time |
-| Explicit barriers over auto-tracking | NVRHI auto-tracking, wgpu implicit | RenderGraph already tracks states; double-tracking wastes CPU; explicit is debuggable |
-| 64-bit typed handles over raw pointers | COM pointers (D3D), shared_ptr | Cache-friendly (8B), generation-safe, no ref-count overhead, trivially copyable |
-| Dynamic rendering over render pass objects | VkRenderPass (Vulkan 1.0) | Simpler API, matches D3D12/WebGPU/GL model, core in Vulkan 1.3 |
-| Deferred destruction over ref-counting | COM AddRef/Release, shared_ptr | Deterministic, no atomic ref-count in hot path, 2-frame latency matches frames-in-flight |
-| Descriptor heap (Vk 1.4) as primary | Descriptor sets, descriptor buffer | Descriptor heap is the Vulkan Roadmap 2026 direction; maps 1:1 to D3D12; replaces descriptor buffer |
-| Slang as shader language | HLSL, GLSL, hand-written per-backend | Single source → all targets; Slang v2026.5 has mature WGSL/GLSL/SPIR-V/DXIL output |
-| No built-in render graph | Integrated RG (UE5 RDG) | Separation of concerns; RHI is reusable without RG; RG can be replaced independently |
+| Decision                                                                   | Alternatives Considered                                                         | Rationale                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CRTP over virtual dispatch                                                 | vtable (NVRHI), type-erasure (wgpu)                                             | Zero overhead in command recording hot path; backend known at compile time                                                                                                                                                                                                       |
+| Explicit barriers over auto-tracking                                       | NVRHI auto-tracking, wgpu implicit                                              | RenderGraph already tracks states; double-tracking wastes CPU; explicit is debuggable                                                                                                                                                                                            |
+| 64-bit typed handles over raw pointers                                     | COM pointers (D3D), shared_ptr                                                  | Cache-friendly (8B), generation-safe, no ref-count overhead, trivially copyable                                                                                                                                                                                                  |
+| Dynamic rendering over render pass objects                                 | VkRenderPass (Vulkan 1.0)                                                       | Simpler API, matches D3D12/WebGPU/GL model, core in Vulkan 1.3                                                                                                                                                                                                                   |
+| Deferred destruction over ref-counting                                     | COM AddRef/Release, shared_ptr                                                  | Deterministic, no atomic ref-count in hot path, 2-frame latency matches frames-in-flight                                                                                                                                                                                         |
+| Descriptor heap (Vk 1.4) as primary                                        | Descriptor sets, descriptor buffer                                              | Descriptor heap is the Vulkan Roadmap 2026 direction; maps 1:1 to D3D12; replaces descriptor buffer                                                                                                                                                                              |
+| Slang as shader language                                                   | HLSL, GLSL, hand-written per-backend                                            | Single source → all targets; Slang v2026.5 has mature WGSL/GLSL/SPIR-V/DXIL output                                                                                                                                                                                               |
+| No built-in render graph                                                   | Integrated RG (UE5 RDG)                                                         | Separation of concerns; RHI is reusable without RG; RG can be replaced independently                                                                                                                                                                                             |
+| `CommandListHandle` dispatch-once facade                                   | Command Packet serialization (bgfx, Filament/GL), full virtual `ICommandBuffer` | Type-erasure cost paid O(passes) ~50-100/frame (<1μs), not O(draws) ~10000+. Command Packets add ~100μs replay overhead, destroy debuggability (RenderDoc/PIX see `Translator::Execute()`), and double maintenance cost. Virtual dispatch adds ~2-5ns/draw ×10K = ~25-50μs/frame |
+| `GetMemoryStats()` / `GetMemoryHeapBudgets()` in RHI                       | Debug layer calls VMA/D3D12MA directly                                          | Maintains Thin Abstraction boundary; profilers should not bypass RHI to query allocator internals                                                                                                                                                                                |
+| Reserved binding `@group(0) @binding(0)` for push constant UBO (WebGPU/GL) | No reservation (implicit conflict)                                              | Prevents slot collision when Slang cross-compiles `[vk::push_constant]` to WGSL `var<uniform>`. Debug validation catches violations. Vulkan/D3D12 unaffected (native push constants)                                                                                             |
+| `SparseBindDesc` separates data from sync                                  | Vulkan-style embedded semaphores in `SparseBindDesc`                            | D3D12 `UpdateTileMappings` is queue-serialized — embedding semaphores forces D3D12 backend to fake `ID3D12Fence` management, violating Thin Abstraction. Sync passed at `SubmitSparseBinds()` call site instead                                                                  |
 
 ---
 

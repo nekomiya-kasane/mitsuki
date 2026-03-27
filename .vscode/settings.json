@@ -9,7 +9,7 @@
         "--fallback-style=LLVM",
         "--log=info",
         "--pretty",
-        "--compile-commands-dir=c:\\mitsuki\\build\\debug-vulkan"
+        "--compile-commands-dir=c:\\mitsuki\\build\\debug"
     ],
     "clangd.checkUpdates": false,
     "clangd.onConfigChanged": "restart",

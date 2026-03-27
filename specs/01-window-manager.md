@@ -10,14 +10,14 @@
 
 ## 1. Design Goals
 
-| # | Goal | Rationale |
-|---|------|-----------|
-| G1 | **Tree-structured parent–child hierarchy** | CAD/CAE apps need dockable panels, floating tool windows, property editors — all logically owned by a main window |
-| G2 | **Cascade destruction with GPU safety** | Destroying a parent must recursively destroy children; GPU work must drain before any surface teardown |
-| G3 | **Three-concern separation** | Window creation (OS), event dispatch (input), GPU surface (RHI) are independent subsystems; user explicitly wires them |
-| G4 | **Cross-window GPU resource sharing** | All windows share a single `DeviceHandle`; textures, buffers, pipelines created once, used in any window's render pass |
-| G5 | **Zero technical debt** | No `void*` leaks, no implicit lifetime coupling, no hidden state machines |
-| G6 | **Backend-agnostic** | GLFW, SDL3, Qt, Win32 — `IWindowBackend` abstracts all platform specifics |
+| #   | Goal                                       | Rationale                                                                                                              |
+| --- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| G1  | **Tree-structured parent–child hierarchy** | CAD/CAE apps need dockable panels, floating tool windows, property editors — all logically owned by a main window      |
+| G2  | **Cascade destruction with GPU safety**    | Destroying a parent must recursively destroy children; GPU work must drain before any surface teardown                 |
+| G3  | **Three-concern separation**               | Window creation (OS), event dispatch (input), GPU surface (RHI) are independent subsystems; user explicitly wires them |
+| G4  | **Cross-window GPU resource sharing**      | All windows share a single `DeviceHandle`; textures, buffers, pipelines created once, used in any window's render pass |
+| G5  | **Zero technical debt**                    | No `void*` leaks, no implicit lifetime coupling, no hidden state machines                                              |
+| G6  | **Backend-agnostic**                       | GLFW, SDL3, Qt, Win32 — `IWindowBackend` abstracts all platform specifics                                              |
 
 ### 1.1 Non-Goals
 
@@ -70,11 +70,11 @@ Application
 
 ### 3.1 Design Rationale
 
-| Approach | Used By | Pros | Cons |
-|----------|---------|------|------|
-| **Flat list** | Filament, old `MultiWindowManager` | Simple | No parent–child, no cascade destroy |
-| **N-ary tree** | Qt QObject, Win32 HWND | Natural ownership, cascade destroy | Slightly more complex iteration |
-| **Forest (multiple roots)** | ImGui multi-viewport | Multiple independent window hierarchies | Needs special "root" handling |
+| Approach                    | Used By                            | Pros                                    | Cons                                |
+| --------------------------- | ---------------------------------- | --------------------------------------- | ----------------------------------- |
+| **Flat list**               | Filament, old `MultiWindowManager` | Simple                                  | No parent–child, no cascade destroy |
+| **N-ary tree**              | Qt QObject, Win32 HWND             | Natural ownership, cascade destroy      | Slightly more complex iteration     |
+| **Forest (multiple roots)** | ImGui multi-viewport               | Multiple independent window hierarchies | Needs special "root" handling       |
 
 **miki choice**: **Forest of N-ary trees**. Each root window is independent. Child windows are owned by their parent. This matches Qt's `QObject` tree model and Win32's owner-window semantics.
 
@@ -138,17 +138,19 @@ struct WindowNode {
 };
 ```
 
-The tree is stored as a flat `std::vector<WindowNode>` with parent/child links (intrusive N-ary tree). This gives O(1) lookup by slot index and cache-friendly iteration.
+The tree is stored as a `ChunkedSlotMap<WindowNode, 16>` — a chunked slot array with free-list and generation counters. Each chunk holds 16 nodes in contiguous memory; new chunks are allocated on demand when all existing slots are occupied. This gives O(1) lookup by slot index, cache-friendly iteration within chunks, and **no hardcoded capacity limit**.
+
+> **Cross-ref**: `specs/03-sync.md` §6 describes the deferred destruction protocol for GPU resources associated with these windows.
 
 ### 3.5 Tree Invariants
 
-| Invariant | Enforcement |
-|-----------|-------------|
-| A child's parent must be alive at child creation time | `CreateWindow` validates `parent.IsValid()` and `parent.alive` |
-| Destroying a parent cascades to all descendants (post-order) | `DestroyWindow` recursively destroys children before self |
-| A root window has `parent = {}` | Checked in tree queries |
-| No cycles | Parent must have `id < child.id` (monotonic allocation) — structurally impossible |
-| Max depth = 4 | Prevents pathological nesting; CAD apps rarely need >3 levels |
+| Invariant                                                    | Enforcement                                                                       |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| A child's parent must be alive at child creation time        | `CreateWindow` validates `parent.IsValid()` and `parent.alive`                    |
+| Destroying a parent cascades to all descendants (post-order) | `DestroyWindow` recursively destroys children before self                         |
+| A root window has `parent = {}`                              | Checked in tree queries                                                           |
+| No cycles                                                    | Parent must have `id < child.id` (monotonic allocation) — structurally impossible |
+| Max depth = 4                                                | Prevents pathological nesting; CAD apps rarely need >3 levels                     |
 
 ---
 
@@ -159,8 +161,8 @@ namespace miki::platform {
 
 class WindowManager {
 public:
-    static constexpr uint32_t kMaxWindows = 16;
-    static constexpr uint32_t kMaxDepth   = 4;
+    static constexpr uint32_t kDefaultChunkSize = 16;  // ChunkedSlotMap chunk granularity (dynamic, no hard cap)
+    static constexpr uint32_t kMaxDepth         = 4;
 
     ~WindowManager();
 
@@ -240,16 +242,16 @@ private:
 
 ### 4.1 Key Changes from Current Design
 
-| Aspect | Old (`MultiWindowManager`) | New (`WindowManager`) |
-|--------|---------------------------|----------------------|
-| Namespace | `miki::rhi` | `miki::platform` |
-| Tree structure | Flat list | N-ary forest |
-| GPU coupling | Owns `RenderSurface` + `FrameManager` | Pure OS windows, no GPU |
-| Cascade destroy | None | Post-order recursive |
-| Handle | `uint32_t id` only | `id` + `generation` |
-| Close policy | `ProcessWindowEvents()` auto-destroys | `CloseRequested` event, user decides |
-| Max windows | 8 | 16 |
-| `WindowFlags` | None | Borderless, AlwaysOnTop, NoResize, Hidden |
+| Aspect          | Old (`MultiWindowManager`)            | New (`WindowManager`)                     |
+| --------------- | ------------------------------------- | ----------------------------------------- |
+| Namespace       | `miki::rhi`                           | `miki::platform`                          |
+| Tree structure  | Flat list                             | N-ary forest                              |
+| GPU coupling    | Owns `RenderSurface` + `FrameManager` | Pure OS windows, no GPU                   |
+| Cascade destroy | None                                  | Post-order recursive                      |
+| Handle          | `uint32_t id` only                    | `id` + `generation`                       |
+| Close policy    | `ProcessWindowEvents()` auto-destroys | `CloseRequested` event, user decides      |
+| Max windows     | 8                                     | 16                                        |
+| `WindowFlags`   | None                                  | Borderless, AlwaysOnTop, NoResize, Hidden |
 
 ### 4.2 IWindowBackend Changes
 
@@ -288,18 +290,18 @@ public:
 
 GLFW backend mapping:
 
-| IWindowBackend | GLFW |
-|----------------|------|
+| IWindowBackend                               | GLFW                                                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `CreateNativeWindow(desc, parentToken, ...)` | `glfwCreateWindow(w, h, title, nullptr, parentGlfw)` — `parentGlfw` is the share context for GL; for Vulkan parent is purely logical |
-| `ShowWindow` | `glfwShowWindow` |
-| `HideWindow` | `glfwHideWindow` |
+| `ShowWindow`                                 | `glfwShowWindow`                                                                                                                     |
+| `HideWindow`                                 | `glfwHideWindow`                                                                                                                     |
 
 Win32 backend mapping:
 
-| IWindowBackend | Win32 |
-|----------------|-------|
+| IWindowBackend                               | Win32                                                                            |
+| -------------------------------------------- | -------------------------------------------------------------------------------- |
 | `CreateNativeWindow(desc, parentToken, ...)` | `CreateWindowEx(WS_EX_TOOLWINDOW, ..., parentHwnd, ...)` — OS-level owner window |
-| Cascade close | Win32 automatically sends `WM_CLOSE` to owned windows when owner closes |
+| Cascade close                                | Win32 automatically sends `WM_CLOSE` to owned windows when owner closes          |
 
 ---
 
@@ -336,12 +338,15 @@ public:
     ) -> miki::core::Result<void>;
 
     /// @brief Detach and destroy the surface for a window.
-    ///        Waits for per-surface GPU idle before teardown.
+    ///        Waits for THIS surface's in-flight frames only (per-surface timeline wait).
+    ///        Other windows continue rendering uninterrupted.
+    ///        See specs/03-sync.md §9 for the timeline wait protocol.
     [[nodiscard]] auto DetachSurface(platform::WindowHandle iWindow)
         -> miki::core::Result<void>;
 
     /// @brief Detach surfaces for multiple windows (batch, post-order safe).
-    ///        Waits once for device-wide idle, then tears down all.
+    ///        Each surface is waited on individually (per-surface timeline wait).
+    ///        No device->WaitIdle() — other windows are unaffected.
     [[nodiscard]] auto DetachSurfaces(std::span<const platform::WindowHandle> iWindows)
         -> miki::core::Result<void>;
 
@@ -409,14 +414,39 @@ All windows share a single `DeviceHandle`. This is the standard approach used by
 
 **What is shared**: Everything else. A texture created for Window A can be sampled in Window B's render pass without copies.
 
+#### 5.2.1 Cross-Window Content Sharing Rule (Invariant)
+
+> **No render pass may directly read another window's swapchain image.**
+
+Swapchain images are owned by the OS presentation engine; their layout state (`VK_IMAGE_LAYOUT_PRESENT_SRC_KHR`) and lifetime are outside application control. Directly sampling them as SRV from another window's render pass violates Vulkan/D3D12 best practice and can trigger synchronization deadlocks.
+
+**Correct pattern**: If Window B needs to display Window A's rendered content (e.g., a thumbnail preview panel), Window A renders to a shared `OffscreenTarget` (a normal `VkImage`/`ID3D12Resource`), then both windows' compositor passes blit from that `OffscreenTarget` to their own swapchain.
+
+```
+Window A pipeline:
+  ... geometry → resolve → post → write to OffscreenTarget_A (shared VkImage)
+  Compositor: blit OffscreenTarget_A → Swapchain_A
+
+Window B pipeline (thumbnail panel):
+  Compositor: blit OffscreenTarget_A → Swapchain_B (downscaled)
+```
+
+This ensures:
+
+- Swapchain images never appear as SRV in any descriptor set
+- No cross-window synchronization required beyond normal shared-resource barriers
+- `DetachSurface(WindowA)` does not affect Window B's access to `OffscreenTarget_A` (the offscreen target outlives the swapchain)
+
+> **Cross-ref**: `specs/rendering-pipeline-architecture.md` Pass #66 (Offscreen Render) uses this pattern for hi-res tile-based rendering.
+
 Backend mapping:
 
-| Backend | Shared | Per-Window |
-|---------|--------|-----------|
-| Vulkan | `VkDevice`, `VkPhysicalDevice`, descriptor pools, pipeline cache, VMA allocator | `VkSwapchainKHR`, `VkSurfaceKHR`, per-frame `VkSemaphore`/`VkFence` |
-| D3D12 | `ID3D12Device`, `ID3D12CommandQueue`, descriptor heaps, PSO cache, D3D12MA | `IDXGISwapChain4`, per-frame `ID3D12Fence` |
-| WebGPU | `wgpu::Device`, bind group layouts, pipeline cache | `wgpu::Surface`, per-frame texture views |
-| OpenGL | Single shared context (all state) | FBO per window (or `wglMakeCurrent` context switch) |
+| Backend | Shared                                                                          | Per-Window                                                          |
+| ------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Vulkan  | `VkDevice`, `VkPhysicalDevice`, descriptor pools, pipeline cache, VMA allocator | `VkSwapchainKHR`, `VkSurfaceKHR`, per-frame `VkSemaphore`/`VkFence` |
+| D3D12   | `ID3D12Device`, `ID3D12CommandQueue`, descriptor heaps, PSO cache, D3D12MA      | `IDXGISwapChain4`, per-frame `ID3D12Fence`                          |
+| WebGPU  | `wgpu::Device`, bind group layouts, pipeline cache                              | `wgpu::Surface`, per-frame texture views                            |
+| OpenGL  | Single shared context (all state)                                               | FBO per window (or `wglMakeCurrent` context switch)                 |
 
 **OpenGL special case**: GL requires context-per-window or `wglShareLists`. The backend handles this internally — `GlfwWindowBackend` passes the first window's `GLFWwindow*` as share context to subsequent `glfwCreateWindow` calls. This is already implemented in `GlfwWindowBackend::glShareContext_`.
 
@@ -425,8 +455,12 @@ Backend mapping:
 ## 6. Cascade Destruction Protocol
 
 The most critical safety requirement. Destroying a window must:
-1. First destroy all GPU surfaces (leaf-to-root)
-2. Then destroy OS windows (leaf-to-root)
+
+1. First drain GPU work for each surface (**per-surface**, not global WaitIdle)
+2. Destroy GPU surfaces (leaf-to-root)
+3. Destroy OS windows (leaf-to-root)
+
+> **Cross-ref**: `specs/03-sync.md` §9 defines the detailed timeline semaphore wait protocol used here.
 
 ### 6.1 Destruction Sequence
 
@@ -441,11 +475,15 @@ User calls: DestroyWindowCascade(parentHandle)
                     │
                     ▼
     ┌─ SurfaceManager::DetachSurfaces(postOrderList) ───┐
-    │   1. device->WaitIdle()  (one global wait)                │
-    │   2. For each handle in post-order:                │
+    │   For each handle in post-order:                   │
     │      a. FrameManager::WaitAll()                    │
-    │      b. FrameManager destroyed                     │
-    │      c. RenderSurface destroyed                    │
+    │         T1: CPU wait on THIS surface's timeline    │
+    │             semaphore values (per-surface, surgical)│
+    │         T2: CPU wait on THIS surface's VkFences    │
+    │         *** NO device->WaitIdle() ***              │
+    │      b. DeferredDestructor::DrainAll() for surface │
+    │      c. FrameManager destroyed                     │
+    │      d. RenderSurface destroyed                    │
     │         (internally: vkDestroySwapchainKHR, etc.)  │
     └────────────────────────────────────────────────────┘
                     │
@@ -457,6 +495,10 @@ User calls: DestroyWindowCascade(parentHandle)
     └────────────────────────────────────────────────────┘
 ```
 
+**Key difference from previous design**: `DetachSurfaces` uses **per-surface `FrameManager::WaitAll()`** (which waits only on that surface's in-flight timeline values), NOT `device->WaitIdle()`. Other windows continue rendering uninterrupted during cascade destruction.
+
+**Why per-surface wait is safe**: The cross-window content sharing rule (§5.2.1) guarantees no render pass reads another window's swapchain image. Shared resources (textures, buffers, pipelines) are not destroyed during surface detach — only swapchain images and per-surface sync primitives are released. Therefore, waiting for only the target surface's in-flight frames is sufficient.
+
 ### 6.2 Helper: DestroyWindowCascade
 
 This is an application-level helper that orchestrates the two managers:
@@ -464,6 +506,7 @@ This is an application-level helper that orchestrates the two managers:
 ```cpp
 /// @brief Cascade-destroy a window and all children with GPU safety.
 ///        This is NOT a method on WindowManager — it orchestrates both managers.
+///        Other windows continue rendering uninterrupted (no global WaitIdle).
 [[nodiscard]] inline auto DestroyWindowCascade(
     platform::WindowManager& iWm,
     rhi::SurfaceManager&     iSm,
@@ -474,7 +517,7 @@ This is an application-level helper that orchestrates the two managers:
     auto victims = iWm.GetDescendantsPostOrder(iHandle);
     victims.push_back(iHandle);  // self last
 
-    // 2. Detach all GPU surfaces (batch: single WaitIdle)
+    // 2. Detach all GPU surfaces (per-surface timeline wait, NOT WaitIdle)
     auto detachResult = iSm.DetachSurfaces(victims);
     if (!detachResult) return detachResult;
 
@@ -488,13 +531,15 @@ This is an application-level helper that orchestrates the two managers:
 
 ### 6.3 Why Not Automatic Cascade in WindowManager?
 
-| Design | Pros | Cons |
-|--------|------|------|
-| Auto cascade (WindowManager owns surfaces) | Single call | Violates G3 (three-concern separation); WindowManager depends on RHI |
-| **Manual cascade (user orchestrates)** | Clean separation; testable independently | User writes 3 lines of glue code |
-| Callback-based (WindowManager fires "about to destroy" callback) | Separation preserved | Hidden control flow; harder to debug |
+| Design                                                           | Pros                                     | Cons                                                                 |
+| ---------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------- |
+| Auto cascade (WindowManager owns surfaces)                       | Single call                              | Violates G3 (three-concern separation); WindowManager depends on RHI |
+| **Manual cascade (user orchestrates)**                           | Clean separation; testable independently | User writes 3 lines of glue code                                     |
+| Callback-based (WindowManager fires "about to destroy" callback) | Separation preserved                     | Hidden control flow; harder to debug                                 |
 
-**miki choice**: Manual orchestration + helper function. The helper is trivial (shown above) and keeps the architecture clean. The `DestroyWindowCascade` helper is provided in `<miki/platform/WindowManagerUtils.h>`.
+**Choice**: Manual orchestration + helper function. The helper is trivial (shown above) and keeps the architecture clean. `DestroyWindowCascade` is provided in `<mitsuki/platform/WindowManagerUtils.h>`.
+
+> **Note**: While manual orchestration requires the caller to remember to use the helper, this is enforced at runtime: in debug builds, `WindowManager::DestroyWindow(h)` asserts that `SurfaceManager::HasSurface(h) == false`; in release builds, it returns `ErrorCode::PreconditionViolated`. This makes the "wrong path" immediately visible.
 
 ---
 
@@ -667,13 +712,13 @@ int main() {
 
 ## 10. Thread Safety Model
 
-| Operation | Thread Safety |
-|-----------|--------------|
-| `WindowManager` all operations | Main thread only |
-| `SurfaceManager` all operations | Main thread only |
-| `IWindowBackend` all operations | Main thread only |
+| Operation                                | Thread Safety                      |
+| ---------------------------------------- | ---------------------------------- |
+| `WindowManager` all operations           | Main thread only                   |
+| `SurfaceManager` all operations          | Main thread only                   |
+| `IWindowBackend` all operations          | Main thread only                   |
 | GPU resource creation via `DeviceHandle` | Thread-safe (§17 of rhi-design.md) |
-| Command buffer recording | Per-cmd-buffer single-thread |
+| Command buffer recording                 | Per-cmd-buffer single-thread       |
 
 **Rationale**: OS window operations (create, destroy, event poll) are inherently main-thread-only on all platforms (Win32, X11, Cocoa, GLFW, SDL). Forcing thread-safety here adds complexity with no benefit.
 
@@ -685,15 +730,15 @@ int main() {
 
 ### 11.1 Files to Modify
 
-| File | Action |
-|------|--------|
-| `include/miki/rhi/MultiWindowManager.h` | **Deprecated**, replaced by `platform/WindowManager.h` + `rhi/SurfaceManager.h` |
-| `include/miki/platform/WindowManager.h` | **Refactored**: add tree structure, generation handle, `GetDescendantsPostOrder` |
-| `include/miki/rhi/RenderSurface.h` | **Unchanged** — still the per-window surface abstraction |
-| `include/miki/rhi/FrameManager.h` | **Unchanged** — still per-window frame pacing |
-| `demos/framework/glfw/GlfwWindowBackend.h` | **Updated**: `CreateNativeWindow` gains `iParentToken`, add `ShowWindow`/`HideWindow` |
-| NEW: `include/miki/rhi/SurfaceManager.h` | New file: GPU surface lifecycle manager |
-| NEW: `include/miki/platform/WindowManagerUtils.h` | Helper: `DestroyWindowCascade` |
+| File                                              | Action                                                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `include/miki/rhi/MultiWindowManager.h`           | **Deprecated**, replaced by `platform/WindowManager.h` + `rhi/SurfaceManager.h`       |
+| `include/miki/platform/WindowManager.h`           | **Refactored**: add tree structure, generation handle, `GetDescendantsPostOrder`      |
+| `include/miki/rhi/RenderSurface.h`                | **Unchanged** — still the per-window surface abstraction                              |
+| `include/miki/rhi/FrameManager.h`                 | **Unchanged** — still per-window frame pacing                                         |
+| `demos/framework/glfw/GlfwWindowBackend.h`        | **Updated**: `CreateNativeWindow` gains `iParentToken`, add `ShowWindow`/`HideWindow` |
+| NEW: `include/miki/rhi/SurfaceManager.h`          | New file: GPU surface lifecycle manager                                               |
+| NEW: `include/miki/platform/WindowManagerUtils.h` | Helper: `DestroyWindowCascade`                                                        |
 
 ### 11.2 Backward Compatibility
 
@@ -813,8 +858,9 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 - `GetWindowInfo` returns correct `title`, `width`, `height`, `flags`, `alive`, and `minimized` state for a live window
 - `GetNativeHandle` returns a non-null `NativeWindowHandle` for a live window
 - `GetNativeToken` returns the same opaque pointer that `IWindowBackend::CreateNativeWindow` produced
-- After creating `kMaxWindows` (16) windows, the next `CreateWindow` fails with `ErrorCode::ResourceExhausted`
-- Destroying a window and then creating a new one succeeds (slot recycled), staying within the 16-window limit
+- Creating 16 windows (one chunk) succeeds; creating the 17th triggers a new chunk allocation and also succeeds (ChunkedSlotMap dynamic expansion)
+- Creating 256 windows (16 chunks) succeeds without error — no hardcoded capacity limit
+- Destroying a window and then creating a new one succeeds (slot recycled within its chunk)
 
 ### Cascade Destruction
 
@@ -825,9 +871,14 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 - `DestroyWindow` on the sole root of a tree destroys the entire tree; `GetWindowCount()` decreases by the tree size
 - `DestroyWindow` on an already-destroyed handle returns `ErrorCode::InvalidArgument`
 - `DestroyWindow` on `WindowHandle{}` (null) returns `ErrorCode::InvalidArgument`
-- `DestroyWindowCascade(wm, sm, parent)` executes in the correct sequence: (1) `GetDescendantsPostOrder` + self, (2) `DetachSurfaces` batch, (3) `DestroyWindow` — surfaces are torn down before OS windows
+- `DestroyWindowCascade(wm, sm, parent)` executes in the correct sequence: (1) `GetDescendantsPostOrder` + self, (2) `DetachSurfaces` batch (per-surface timeline wait, no global WaitIdle), (3) `DestroyWindow` — surfaces are torn down before OS windows
+- During `DetachSurfaces`, other windows' `BeginFrame`/`EndFrame` continue executing without stall (per-surface wait, see `specs/03-sync.md` §9)
 - Destroying multiple independent roots in sequence works; each cascade is independent
 - Destroying a parent while a child is hidden still destroys the hidden child
+- Destroying a child window does **not** affect the parent: parent remains alive, `GetWindowInfo(parent).alive == true`, parent's surface (if any) continues rendering normally
+- After destroying child C of parent P, `GetChildren(P)` no longer contains C; the remaining siblings' order is preserved
+- After destroying child C (which has a surface), calling `BeginFrame` / `EndFrame` on the parent's surface succeeds — parent rendering is uninterrupted
+- In debug builds, calling `DestroyWindow(h)` while `SurfaceManager::HasSurface(h) == true` triggers an assertion (`"DetachSurface before DestroyWindow"`); in release builds, `DestroyWindow` returns `ErrorCode::PreconditionViolated`
 
 ### IWindowBackend Contract
 
@@ -868,10 +919,12 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 - `AttachSurface` with an invalid (stale/null) `WindowHandle` returns an error
 - `DetachSurface(window)` destroys the surface and frame manager; `HasSurface(window)` returns `false`; `GetRenderSurface(window)` returns `nullptr`
 - `DetachSurface` on a window without a surface returns an error
-- `DetachSurfaces(batch)` detaches all listed windows in one call; a single `WaitIdle` is issued before teardown (not per-window)
+- `DetachSurfaces(batch)` detaches all listed windows in one call; a single device-wide `WaitIdle` is issued before teardown (not per-surface wait) — this is mandatory because cross-window command buffers may reference each other's swapchain images
 - `DetachSurfaces` with an empty span is a no-op (not an error)
 - `DetachSurfaces` with a mix of valid and invalid handles: the behavior is either all-or-nothing error, or partial detach with error reported (define which in impl)
 - After `DetachSurface`, immediately calling `AttachSurface` on the same window succeeds (re-attach)
+- `DetachSurface(child)` while parent's surface is mid-frame (`BeginFrame` called but `EndFrame` not yet): the device-wide `WaitIdle` in `DetachSurface` drains parent's in-flight work; after detach, parent can resume with a new `BeginFrame`/`EndFrame` cycle
+- After `DetachSurface(child)`, shared GPU resources (textures, buffers, pipelines) that were used by child's render passes remain valid and usable by other windows' surfaces
 
 ### SurfaceManager — Frame Operations
 
@@ -951,6 +1004,18 @@ Build the deepest allowed tree: root (depth 1) → child (2) → grandchild (3) 
 
 For a single window: attach surface → `BeginFrame`/`EndFrame` → detach surface → verify `HasSurface == false` → reattach with different `RenderSurfaceConfig` (e.g. different present mode) → `BeginFrame`/`EndFrame` → verify rendering works with new config. Repeat 20 times. Verify no resource leaks (VRAM usage stable within 5% of initial).
 
+### Child Destruction Isolation
+
+Create root R with children A, B, C (each with an attached surface). Run 10 frames of `BeginFrame`/`EndFrame` on all four windows. Then `DestroyWindowCascade(A)` — detach A's surface, destroy A's OS window. Verify: (1) R, B, C are alive with `GetWindowInfo(...).alive == true`, (2) `GetChildren(R)` returns exactly `[B, C]` in original creation order, (3) `BeginFrame`/`EndFrame` on R, B, C succeed for another 10 frames, (4) A's handle is stale (rejected by all APIs), (5) shared GPU resources (textures/pipelines) used by A's render passes remain valid for R/B/C. Then destroy B — verify `GetChildren(R) == [C]`. Destroy C — verify `GetChildren(R)` is empty. R continues rendering alone.
+
+### Cross-Window Cascade with Shared Resources
+
+Create root R → child A → grandchild A1. Attach surfaces to all three. Create a shared texture T via `DeviceHandle` and sample T in render passes of all three windows for 5 frames. Then `DestroyWindowCascade(A)` — this destroys A1 first, then A (post-order). Verify: (1) device-wide `WaitIdle` is called exactly once (not per-surface), (2) A1's surface is detached before A's surface, (3) R's surface is untouched and continues rendering using shared texture T, (4) T is not invalidated — `BeginFrame`/`EndFrame` on R using T succeeds for another 10 frames, (5) no Vulkan validation errors or D3D12 debug layer warnings throughout the sequence.
+
+### Dangling Surface Debug Assert
+
+Create window W, attach surface. In debug builds, call `wm.DestroyWindow(W)` **without** first calling `sm.DetachSurface(W)`. Verify an assertion fires (or in release builds, `DestroyWindow` returns `ErrorCode::PreconditionViolated`). Then properly detach the surface and retry `DestroyWindow` — verify it succeeds. This tests the safety net that prevents OS window destruction while GPU resources are still attached.
+
 ### Error Recovery Chain
 
 (1) Create window, attach surface, deliberately pass an invalid `NativeWindowHandle` to a second `AttachSurface` — verify error, verify first surface unaffected. (2) `DetachSurface` on a window that has no surface — verify error, verify other surfaces unaffected. (3) `DestroyWindow` with a null handle — verify error, verify all other windows alive. (4) Create 16 windows, attempt 17th — verify `ResourceExhausted`, verify all 16 are operational. After all error injections, perform a clean shutdown: cascade-destroy all roots, verify zero windows, zero surfaces.
@@ -959,13 +1024,15 @@ For a single window: attach surface → `BeginFrame`/`EndFrame` → detach surfa
 
 ## 14. Design Decisions Log
 
-| Decision | Rationale | Alternatives Considered |
-|----------|-----------|------------------------|
-| Forest of N-ary trees | Matches Win32 owner-window and Qt QObject tree models; natural for CAD multi-panel apps | Flat list (too simple), DAG (overcomplicated, no use case) |
-| Manual cascade orchestration | Preserves three-concern separation; easy to test each manager independently | Auto cascade in WindowManager (violates separation), callback-based (hidden control flow) |
-| Generation-counted handles | Prevents ABA/use-after-free; consistent with RHI handle design | Raw pointers (unsafe), `std::shared_ptr` (overhead, ref-counting in hot path) |
-| `SurfaceManager` as separate class | Decouples GPU lifecycle from OS window lifecycle; enables backend switching without touching windows | Embed in `WindowManager` (coupling), embed in `RenderGraph` (wrong level) |
-| Post-order destruction | GPU surfaces must be destroyed before OS windows; leaves-first ensures children's GPU work is drained before parent | Pre-order (would destroy parent surface while children still rendering), arbitrary order (unsafe) |
-| `CloseRequested` as event, not auto-destroy | Application may want to prompt "save changes?" or hide instead of destroy | Auto-destroy on close (inflexible, old design) |
-| Single `DeviceHandle` for all windows | Industry standard (Filament, Diligent, Vulkan best practice); maximizes resource sharing | Device-per-window (wasteful, no resource sharing, higher VRAM) |
-| `kMaxWindows = 16` | CAD apps rarely exceed 10 windows; 16 gives headroom without over-allocating | Dynamic (heap alloc per window — unnecessary for small N) |
+| Decision                                               | Rationale                                                                                                                               | Alternatives Considered                                                                                       |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Forest of N-ary trees                                  | Matches Win32 owner-window and Qt QObject tree models; natural for CAD multi-panel apps                                                 | Flat list (too simple), DAG (overcomplicated, no use case)                                                    |
+| Manual cascade orchestration                           | Preserves three-concern separation; easy to test each manager independently                                                             | Auto cascade in WindowManager (violates separation), callback-based (hidden control flow)                     |
+| Generation-counted handles                             | Prevents ABA/use-after-free; consistent with RHI handle design                                                                          | Raw pointers (unsafe), `std::shared_ptr` (overhead, ref-counting in hot path)                                 |
+| `SurfaceManager` as separate class                     | Decouples GPU lifecycle from OS window lifecycle; enables backend switching without touching windows                                    | Embed in `WindowManager` (coupling), embed in `RenderGraph` (wrong level)                                     |
+| Post-order destruction                                 | GPU surfaces must be destroyed before OS windows; leaves-first ensures children's GPU work is drained before parent                     | Pre-order (would destroy parent surface while children still rendering), arbitrary order (unsafe)             |
+| `CloseRequested` as event, not auto-destroy            | Application may want to prompt "save changes?" or hide instead of destroy                                                               | Auto-destroy on close (inflexible, old design)                                                                |
+| Single `DeviceHandle` for all windows                  | Industry standard (Filament, Diligent, Vulkan best practice); maximizes resource sharing                                                | Device-per-window (wasteful, no resource sharing, higher VRAM)                                                |
+| `kMaxWindows = 16`                                     | CAD apps rarely exceed 10 windows; 16 gives headroom without over-allocating                                                            | Dynamic (heap alloc per window — unnecessary for small N)                                                     |
+| `DestroyWindow` rejects windows with attached surfaces | Prevents GPU resource leaks and use-after-free of swapchain images referencing destroyed OS windows. Debug assert + release error code. | Auto-detach in DestroyWindow (violates separation, hides GPU lifecycle from caller), silent UB (unacceptable) |
+| `DetachSurfaces` uses device-wide `WaitIdle`           | Cross-window command buffers may sample each other's swapchain images; per-surface wait cannot guarantee all references are drained     | Per-surface `FrameManager::WaitAll()` only (unsafe for cross-window sampling), no wait (undefined behavior)   |

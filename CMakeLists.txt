@@ -112,6 +112,55 @@ if(NOT EMSCRIPTEN AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/miki/platform/Wind
 endif()
 
 # ---------------------------------------------------------------------------
+# miki_debug — Structured logging & debug infrastructure (Layer 1)
+# ---------------------------------------------------------------------------
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/miki/debug/StructuredLogger.cpp")
+    add_library(miki_debug STATIC
+        src/miki/debug/StructuredLogger.cpp
+        src/miki/debug/CrashHandler.cpp)
+    target_include_directories(miki_debug
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_features(miki_debug PUBLIC cxx_std_23)
+    target_link_libraries(miki_debug PUBLIC miki::third_party::tapioca)
+
+    if(MSVC)
+        target_compile_options(miki_debug PRIVATE /W4)
+    else()
+        target_compile_options(miki_debug PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
+
+    # Tests
+    if(MIKI_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_structured_logger.cpp")
+        if(NOT TARGET gtest)
+            enable_testing()
+        endif()
+        add_executable(test_structured_logger
+            tests/test_structured_logger.cpp)
+        target_link_libraries(test_structured_logger
+            PRIVATE miki_debug
+                    miki::third_party::gtest
+                    miki::third_party::gtest_main)
+        target_compile_features(test_structured_logger
+            PRIVATE cxx_std_23)
+        miki_copy_runtime_dlls(test_structured_logger)
+        add_test(NAME StructuredLoggerTest
+                 COMMAND test_structured_logger)
+    endif()
+
+    # Demo
+    if(MIKI_BUILD_EXAMPLES AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demos/debug/logger_demo.cpp")
+        add_executable(logger_demo
+            demos/debug/logger_demo.cpp)
+        target_link_libraries(logger_demo
+            PRIVATE miki_debug)
+        target_compile_features(logger_demo
+            PRIVATE cxx_std_23)
+        miki_copy_runtime_dlls(logger_demo)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Third-party demos (always built)
 # ---------------------------------------------------------------------------
 add_subdirectory(demos/thirdparty)
