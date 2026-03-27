@@ -545,7 +545,7 @@ namespace miki::debug {
         while (running_.load(std::memory_order_acquire)) {
             {
                 std::unique_lock lock(drainMutex_);
-                drainCv_.wait_for(lock, std::chrono::milliseconds(1));
+                drainCv_.wait_for(lock, std::chrono::milliseconds(1));  // todo (nekomiya): is this ok for CPU?
             }
 
             DrainOnce();
