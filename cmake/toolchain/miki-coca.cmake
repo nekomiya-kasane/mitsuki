@@ -13,22 +13,13 @@ if(NOT DEFINED ENV{COCA_TOOLCHAIN_CMAKE} OR "$ENV{COCA_TOOLCHAIN_CMAKE}" STREQUA
         "Then restart Cursor (or open a new terminal) and run CMake: Configure again.")
 else()
     include("$ENV{COCA_TOOLCHAIN_CMAKE}")
+    message(STATUS "COCA toolchain: $ENV{COCA_TOOLCHAIN_CMAKE}")
 endif()
-
-# Include the real COCA toolchain
 
 # wasm-emscripten profile: the COCA toolchain already delegates to
 # Emscripten.cmake. Skip all MSVC/Windows-specific fixups.
 if(DEFINED COCA_TARGET_PROFILE AND COCA_TARGET_PROFILE STREQUAL "wasm-emscripten")
     return()
-endif()
-
-# Fix archiver for win-x64-clang profile: COCA sets CMAKE_AR to llvm-lib
-# (MSVC-style) but the GNU driver causes CMake to emit ar-style flags (qc).
-# llvm-ar handles both COFF and ar-style flags correctly.
-if(CMAKE_CXX_COMPILER MATCHES "clang\\+\\+")
-    set(CMAKE_AR "$ENV{COCA_TOOLCHAIN_BIN}/llvm-ar${CMAKE_EXECUTABLE_SUFFIX}"
-        CACHE FILEPATH "" FORCE)
 endif()
 
 # Add WinRT SDK include path — COCA toolchain includes um/ucrt/shared but

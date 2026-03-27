@@ -146,10 +146,10 @@ namespace miki::debug::test {
 
     // ---- 4. Thread safety (4 threads x 1000 messages) ----
 
-    TEST_F(LoggerTest, ThreadSafety4Threads) {
+    TEST_F(LoggerTest, ThreadSafety12Threads) {
         std::atomic<int> count{0};
-        constexpr int kPerThread = 1000;
-        constexpr int kThreads = 4;
+        constexpr int kPerThread = 10000;
+        constexpr int kThreads = 12;
 
         auto& logger = StructuredLogger::Instance();
         logger.AddSink(CallbackSink([&](const LogEntry&) { count.fetch_add(1, std::memory_order_relaxed); }));

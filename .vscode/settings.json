@@ -1,4 +1,30 @@
 {
+    "terminal.integrated.defaultProfile.windows": "PowerShell (COCA)",
+    "terminal.integrated.profiles.windows": {
+        "PowerShell (COCA)": {
+            "source": "PowerShell",
+            "args": [
+                "-NoExit",
+                "-Command",
+                ". .\\setup_env.ps1"
+            ],
+            "icon": "terminal-powershell"
+        },
+        "PowerShell": {
+            "source": "PowerShell"
+        }
+    },
+    "cmake.cmakePath": "C:/Users/nekom/Downloads/22/toolchains/coca-toolchain/tools/cmake-4.2.3-windows-x86_64/bin/cmake.exe",
+    "cmake.configureEnvironment": {
+        "COCA_TOOLCHAIN": "C:/Users/nekom/Downloads/22/toolchains/coca-toolchain",
+        "COCA_TOOLCHAIN_BIN": "C:/Users/nekom/Downloads/22/toolchains/coca-toolchain/bin",
+        "COCA_TOOLCHAIN_CMAKE": "C:/Users/nekom/Downloads/22/toolchains/coca-toolchain/cmake/toolchain.cmake"
+    },
+    "cmake.buildEnvironment": {
+        "COCA_TOOLCHAIN": "C:/Users/nekom/Downloads/22/toolchains/coca-toolchain",
+        "COCA_TOOLCHAIN_BIN": "C:/Users/nekom/Downloads/22/toolchains/coca-toolchain/bin",
+        "COCA_TOOLCHAIN_CMAKE": "C:/Users/nekom/Downloads/22/toolchains/coca-toolchain/cmake/toolchain.cmake"
+    },
     "clangd.arguments": [
         "--background-index",
         "--header-insertion=never",
@@ -13,6 +39,7 @@
     ],
     "clangd.checkUpdates": false,
     "clangd.onConfigChanged": "restart",
+    "clangd.path": "C:/Users/nekom/Downloads/22/toolchains/coca-toolchain/bin/clangd.exe",
     "C_Cpp.intelliSenseEngine": "disabled",
     "C_Cpp.autocomplete": "disabled",
     "C_Cpp.errorSquiggles": "disabled",

@@ -39,14 +39,16 @@ else {
 Write-Host "[setup] Activating virtual environment..." -ForegroundColor Yellow
 & "venv\Scripts\Activate.ps1"
 
-# 3. Check if coca-tools is installed
+# 3. Check if coca-tools is installed (editable install creates .egg-link or .dist-info)
 $cocaToolsPath = "C:\Users\nekom\Downloads\22\COCAProjectInfra\python"
 $venvSitePackages = "venv\Lib\site-packages"
-$cocaInstalled = Test-Path "$venvSitePackages\coca_tools"
+$cocaInstalled = (Test-Path "$venvSitePackages\coca_tools") -or `
+(Test-Path "$venvSitePackages\coca-tools.egg-link") -or `
+(Get-ChildItem "$venvSitePackages" -Filter "coca_tools-*.dist-info" -ErrorAction SilentlyContinue)
 
 # Check if coca-tools is already installed in the virtual environment
 if ($cocaInstalled -and -not $reinstall) {
-    Write-Host "[setup] coca-tools already installed in virtual environment" -ForegroundColor Green
+    Write-Host "[setup] coca-tools already installed" -ForegroundColor Green
 }
 else {
     if ($reinstall -and $cocaInstalled) {
@@ -56,7 +58,7 @@ else {
     else {
         Write-Host "[setup] Installing coca-tools..." -ForegroundColor Yellow
     }
-    python -m pip install -e $cocaToolsPath --no-warn-script-location
+    python -m pip install -e $cocaToolsPath --no-warn-script-location -q
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[error] Failed to install coca-tools" -ForegroundColor Red
         exit 1

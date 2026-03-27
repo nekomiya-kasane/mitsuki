@@ -387,8 +387,8 @@ namespace miki::debug {
 
     auto StructuredLogger::GetThreadRing() -> SpscRingBuffer& {
         // RAII guard that unregisters the ring when the thread exits.
-        // Prevents use-after-free: thread_local ring is destroyed on thread
-        // exit, but rings_ would still hold a dangling pointer without this.
+        // Prevents use-after-free: thread_local ring is destroyed on thread exit, but rings_ would still hold a
+        // dangling pointer without this.
         struct RingGuard {
             SpscRingBuffer ring;
             RingGuard() = default;
