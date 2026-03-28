@@ -31,9 +31,11 @@ function(miki_copy_runtime_dlls TARGET_NAME)
 
     # ── 1. Linked SHARED libraries (automatic via CMake 3.21+) ────────────
     add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_RUNTIME_DLLS:${TARGET_NAME}>
-            $<TARGET_FILE_DIR:${TARGET_NAME}>
+        COMMAND "$<$<BOOL:$<TARGET_RUNTIME_DLLS:${TARGET_NAME}>>:${CMAKE_COMMAND}>"
+            "$<$<BOOL:$<TARGET_RUNTIME_DLLS:${TARGET_NAME}>>:-E>"
+            "$<$<BOOL:$<TARGET_RUNTIME_DLLS:${TARGET_NAME}>>:copy_if_different>"
+            "$<$<BOOL:$<TARGET_RUNTIME_DLLS:${TARGET_NAME}>>:$<TARGET_RUNTIME_DLLS:${TARGET_NAME}>>"
+            "$<$<BOOL:$<TARGET_RUNTIME_DLLS:${TARGET_NAME}>>:$<TARGET_FILE_DIR:${TARGET_NAME}>>"
         COMMAND_EXPAND_LISTS
         COMMENT "[miki] Copying linked runtime DLLs -> ${TARGET_NAME}"
     )

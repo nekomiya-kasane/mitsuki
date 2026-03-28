@@ -91,8 +91,7 @@ namespace miki::debug {
         Impl* impl_;
     };
 
-    /// @brief Scoped CPU timer. Writes begin/end events to thread-local ring.
-    /// RAII: records event on destruction.
+    /// @brief Scoped CPU timer. Writes begin/end events to thread-local ring. RAII: records event on destruction.
     class CpuProfileScope {
        public:
         CpuProfileScope(std::string_view name, LogCategory cat = LogCategory::Core)

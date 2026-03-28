@@ -4,7 +4,7 @@
  * converts to neko::platform::Event tagged with WindowHandle.
  */
 
-#include "GlfwWindowBackend.h"
+#include "miki/platform/glfw/GlfwWindowBackend.h"
 
 #include "miki/core/ErrorCode.h"
 
@@ -14,14 +14,17 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
-#ifdef _WIN32
+#ifdef __EMSCRIPTEN__
+#    include <GLFW/emscripten_glfw3.h>
+#    include <emscripten/emscripten.h>
+#elif defined(_WIN32)
 #    define GLFW_EXPOSE_NATIVE_WIN32
 #    include <GLFW/glfw3native.h>
 #endif
 
 #include <atomic>
 
-namespace miki::demo {
+namespace miki::platform {
 
     // ---------------------------------------------------------------------------
     // GLFW ref-counted init
@@ -63,43 +66,78 @@ namespace miki::demo {
     // IWindowBackend — CreateNativeWindow
     // ---------------------------------------------------------------------------
 
-    auto GlfwWindowBackend::CreateNativeWindow(const miki::platform::WindowDesc& iDesc, void*& oNativeToken)
-        -> miki::core::Result<miki::rhi::NativeWindowHandle> {
+    auto GlfwWindowBackend::CreateNativeWindow(
+        const miki::platform::WindowDesc& iDesc, void* iParentToken, void*& oNativeToken
+    ) -> miki::core::Result<miki::rhi::NativeWindowHandle> {
         if (!InitGlfw()) {
             return std::unexpected(miki::core::ErrorCode::DeviceNotReady);
         }
 
         glfwDefaultWindowHints();
 
-        if (!visible_) {
+        // WindowFlags → GLFW hints
+        bool hidden = !visible_ || iDesc.flags.Has(miki::platform::WindowFlags::Hidden);
+        if (hidden) {
             glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
         }
+        if (iDesc.flags.Has(miki::platform::WindowFlags::Borderless)) {
+            glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+        }
+        if (iDesc.flags.Has(miki::platform::WindowFlags::NoResize)) {
+            glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        } else {
+            glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+        }
+        if (iDesc.flags.Has(miki::platform::WindowFlags::AlwaysOnTop)) {
+            glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
+        }
 
+#ifdef __EMSCRIPTEN__
+        // Emscripten: determine canvas selector and bind before glfwCreateWindow
+        std::string selector;
+        if (!iDesc.canvasSelector.empty()) {
+            selector = std::string(iDesc.canvasSelector);
+        } else {
+            selector = "#" + std::string(iDesc.title);
+        }
+        emscripten::glfw3::SetNextWindowCanvasSelector(selector.c_str());
+
+        // WebGPU is the only GPU backend on Emscripten — no GL context needed
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        (void)iParentToken;  // parent-child is purely logical on Emscripten
+
+        std::string titleStr(iDesc.title);
+        auto* window = glfwCreateWindow(
+            static_cast<int>(iDesc.width), static_cast<int>(iDesc.height), titleStr.c_str(), nullptr, nullptr
+        );
+#else
         GLFWwindow* shareCtx = nullptr;
 
-        if (backendType_ == miki::rhi::BackendType::OpenGL) {
+        if (backendType_ == miki::rhi::BackendType::OpenGL43) {
             glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
             glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
             glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-            shareCtx = glShareContext_;
+            shareCtx = iParentToken ? static_cast<GLFWwindow*>(iParentToken) : glShareContext_;
         } else {
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+            (void)iParentToken;
         }
-
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
         std::string titleStr(iDesc.title);
         auto* window = glfwCreateWindow(
             static_cast<int>(iDesc.width), static_cast<int>(iDesc.height), titleStr.c_str(), nullptr, shareCtx
         );
+#endif
 
         if (!window) {
             return std::unexpected(miki::core::ErrorCode::DeviceNotReady);
         }
 
-        if (backendType_ == miki::rhi::BackendType::OpenGL && !glShareContext_) {
+#ifndef __EMSCRIPTEN__
+        if (backendType_ == miki::rhi::BackendType::OpenGL43 && !glShareContext_) {
             glShareContext_ = window;
         }
+#endif
 
         oNativeToken = static_cast<void*>(window);
 
@@ -125,9 +163,18 @@ namespace miki::demo {
         glfwSetWindowFocusCallback(window, WindowFocusCallback);
         glfwSetWindowCloseCallback(window, WindowCloseCallback);
 
-#ifdef _WIN32
+#ifdef __EMSCRIPTEN__
+        data.canvasSelector = std::move(selector);
+        return miki::rhi::NativeWindowHandle{miki::rhi::WebWindow{.canvasSelector = data.canvasSelector.c_str()}};
+#elif defined(_WIN32)
         HWND hwnd = glfwGetWin32Window(window);
         return miki::rhi::NativeWindowHandle{miki::rhi::Win32Window{.hwnd = static_cast<void*>(hwnd)}};
+#elif defined(__linux__)
+        // TODO: X11/Wayland native handle extraction
+        return std::unexpected(miki::core::ErrorCode::NotSupported);
+#elif defined(__APPLE__)
+        // TODO: Cocoa native handle extraction
+        return std::unexpected(miki::core::ErrorCode::NotSupported);
 #else
         return std::unexpected(miki::core::ErrorCode::NotSupported);
 #endif
@@ -145,9 +192,11 @@ namespace miki::demo {
 
         auto* window = static_cast<GLFWwindow*>(iNativeToken);
 
+#ifndef __EMSCRIPTEN__
         if (window == glShareContext_) {
             glShareContext_ = nullptr;
         }
+#endif
 
         glfwSetWindowUserPointer(window, nullptr);
         glfwDestroyWindow(window);
@@ -194,6 +243,10 @@ namespace miki::demo {
     }
 
     auto GlfwWindowBackend::IsMinimized(void* iNativeToken) -> bool {
+#ifdef __EMSCRIPTEN__
+        (void)iNativeToken;
+        return false;  // Browsers have no minimize concept for canvases
+#else
         auto* window = static_cast<GLFWwindow*>(iNativeToken);
         if (!window) {
             return true;
@@ -201,6 +254,155 @@ namespace miki::demo {
         int w = 0, h = 0;
         glfwGetFramebufferSize(window, &w, &h);
         return w == 0 || h == 0;
+#endif
+    }
+
+    auto GlfwWindowBackend::ShowWindow(void* iNativeToken) -> void {
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwShowWindow(window);
+        }
+    }
+
+    auto GlfwWindowBackend::HideWindow(void* iNativeToken) -> void {
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwHideWindow(window);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // IWindowBackend — Window state operations
+    // ---------------------------------------------------------------------------
+
+    auto GlfwWindowBackend::ResizeWindow(void* iNativeToken, uint32_t iWidth, uint32_t iHeight) -> void {
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwSetWindowSize(window, static_cast<int>(iWidth), static_cast<int>(iHeight));
+        }
+    }
+
+    auto GlfwWindowBackend::SetWindowPosition(void* iNativeToken, int32_t iX, int32_t iY) -> void {
+#ifdef __EMSCRIPTEN__
+        auto it = windowData_.find(iNativeToken);
+        if (it != windowData_.end() && !it->second.canvasSelector.empty()) {
+            // Set canvas position via CSS
+            EM_ASM_(
+                {
+                    var selector = UTF8ToString($0);
+                    var canvas = document.querySelector(selector);
+                    if (canvas) {
+                        canvas.style.position = 'absolute';
+                        canvas.style.left = $1 + 'px';
+                        canvas.style.top = $2 + 'px';
+                    }
+                },
+                it->second.canvasSelector.c_str(), iX, iY
+            );
+        }
+#else
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwSetWindowPos(window, iX, iY);
+        }
+#endif
+    }
+
+    auto GlfwWindowBackend::GetWindowPosition(void* iNativeToken) const -> std::pair<int32_t, int32_t> {
+#ifdef __EMSCRIPTEN__
+        auto it = windowData_.find(iNativeToken);
+        if (it != windowData_.end() && !it->second.canvasSelector.empty()) {
+            int x = EM_ASM_INT(
+                {
+                    var selector = UTF8ToString($0);
+                    var canvas = document.querySelector(selector);
+                    if (canvas) {
+                        var rect = canvas.getBoundingClientRect();
+                        return Math.round(rect.left);
+                    }
+                    return 0;
+                },
+                it->second.canvasSelector.c_str()
+            );
+            int y = EM_ASM_INT(
+                {
+                    var selector = UTF8ToString($0);
+                    var canvas = document.querySelector(selector);
+                    if (canvas) {
+                        var rect = canvas.getBoundingClientRect();
+                        return Math.round(rect.top);
+                    }
+                    return 0;
+                },
+                it->second.canvasSelector.c_str()
+            );
+            return {x, y};
+        }
+        return {0, 0};
+#else
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (!window) {
+            return {0, 0};
+        }
+        int x = 0, y = 0;
+        glfwGetWindowPos(window, &x, &y);
+        return {x, y};
+#endif
+    }
+
+    auto GlfwWindowBackend::MinimizeWindow(void* iNativeToken) -> void {
+#ifdef __EMSCRIPTEN__
+        (void)iNativeToken;
+        // No-op on Emscripten — browsers have no minimize concept
+#else
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwIconifyWindow(window);
+        }
+#endif
+    }
+
+    auto GlfwWindowBackend::MaximizeWindow(void* iNativeToken) -> void {
+#ifdef __EMSCRIPTEN__
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            // Request fullscreen on Emscripten (requires user gesture)
+            emscripten::glfw3::RequestFullscreen(window, false, true);
+        }
+#else
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwMaximizeWindow(window);
+        }
+#endif
+    }
+
+    auto GlfwWindowBackend::RestoreWindow(void* iNativeToken) -> void {
+#ifdef __EMSCRIPTEN__
+        (void)iNativeToken;
+        // Exit fullscreen if active
+        emscripten_exit_fullscreen();
+#else
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwRestoreWindow(window);
+        }
+#endif
+    }
+
+    auto GlfwWindowBackend::FocusWindow(void* iNativeToken) -> void {
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwFocusWindow(window);
+        }
+    }
+
+    auto GlfwWindowBackend::SetWindowTitle(void* iNativeToken, std::string_view iTitle) -> void {
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            std::string titleStr(iTitle);
+            glfwSetWindowTitle(window, titleStr.c_str());
+        }
     }
 
     // ===========================================================================
@@ -466,4 +668,4 @@ namespace miki::demo {
         data->owner->pendingEvents_.push_back({data->handle, neko::platform::CloseRequested{}});
     }
 
-}  // namespace miki::demo
+}  // namespace miki::platform

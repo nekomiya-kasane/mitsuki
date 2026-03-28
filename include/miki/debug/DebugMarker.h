@@ -21,9 +21,8 @@ namespace miki::debug {
         inline constexpr float kUI[4] = {1.0f, 1.0f, 1.0f, 1.0f};           // White - UI rendering
     }  // namespace DebugColors
 
-    /// @brief Scoped debug region. Calls CmdBeginDebugLabel on construction,
-    ///        CmdEndDebugLabel on destruction. Works with any RHI CommandBuffer
-    ///        type (CRTP concrete or type-erased CommandListHandle).
+    /// @brief Scoped debug region. Calls CmdBeginDebugLabel on construction, CmdEndDebugLabel on destruction. Works
+    /// with any RHI CommandBuffer type (CRTP concrete or type-erased CommandListHandle).
     ///
     /// @tparam CmdBuf Command buffer type with CmdBeginDebugLabel/CmdEndDebugLabel methods.
     ///

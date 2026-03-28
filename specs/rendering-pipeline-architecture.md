@@ -21,6 +21,54 @@ miki is a GPU-native CAD/CAE rendering engine. The rendering pipeline achieves *
 - **Clustered light culling** supports 4096 simultaneous lights (Tier1)
 - **Layered DSPBR BSDF** -- full Dassault Enterprise PBR (8 material layers, conditional skip)
 
+Target Architecture (11 Layers)
+
+```
+Layer 11 ─ Application & Integration
+           SDK (MikiEngine/MikiView), Reference UI (miki_editor), Cloud Render
+           Collaborative Viewer, LLM Agent Adapter, Multi-Window, HeadlessDevice
+Layer 10 ─ Plugin / Extension
+           IPlugin (lifecycle: Discover→Load→Init→Activate→Deactivate→Unload)
+           PluginRegistry, PluginManifest (JSON), versioned API surface
+           Extension points: ITranslator, IKernel, IUiBridge, custom RenderGraph passes
+           Vertical industry plugins: Piping, HVAC, Electrical, Shipbuilding (post-1.1)
+Layer 9  ─ Interactive Tools
+           Gizmo, Compass, Snap, CommandBus, OpHistory, PreviewManager
+           SelectionOutline, RichTextInput, MeshEditor, TopoEditEngine
+Layer 8b ─ CAE / DFM / PointCloud / Import
+           CAE Vis (FEM/Scalar/Vector/Contour/Streamline/Deformation/Tensor)
+           PointCloud (Loader/Renderer/ICP/ScanToCAD), PointCloudFilter
+           Import (STEP/JT/glTF/3DXML), GPU Tess, Boolean Preview
+           DFM (DraftAngle/WallThickness/Undercut/Curvature/Interference/Distance/MassProps)
+Layer 8a ─ CAD Core
+           CadScene, LayerStack, ConfigurationManager, DisplayStyles
+           GPU HLR, SectionPlane, SectionVolume, OIT, Explode, RTAO
+           PMI Renderer, DrawingProjector, 2D Markup
+Layer 7  ─ Rendering Layer Stack
+           Scene / Preview / Overlay / HUD — per-layer render graph
+Layer 6  ─ GPU-Driven Geometry
+           Task/Mesh Amplification, VisBuffer, ClusterDAG, Radix Sort
+           GPU Scene Submission, Persistent Compute, Nanite-grade LOD
+           GPU QEM (Mesh Simplification), Meshlet Compression, Cooperative Matrix
+Layer 5  ─ Core Rendering
+           RenderGraph (conditional + async), Deferred, PBR, VSM Shadows
+           TAA/FSR/DLSS, FXAA/MSAA, GTAO/SSAO, VRS, BackgroundMode
+           Material Graph, Shader Permutation Cache, Hot-Reload, SlangCompiler
+           ReSTIR DI/GI, DDGI, Neural Denoiser (1.1 optional quality tier)
+Layer 4  ─ Scene & Data
+           ECS, SpatialIndex (BVH+Octree), RTE, IUiBridge
+           IKernel (pluggable, OCCT=ref impl), IGpuGeometry
+Layer 3  ─ Resource & Memory
+           Bindless (descriptor buffer), BDA, SlotMap, StagingRing
+           ChunkLoader, MemBudget, Residency Feedback
+Layer 2  ─ RHI
+           IDevice, ICommandBuffer, VulkanDevice, D3D12Device
+           OpenGlDevice, WebGpuDevice, MockDevice, ImGuiBackend
+Layer 1  ─ Foundation
+           Math, GFX Types, Coca Runtime, ErrorCode
+           Debug & Profiling, Telemetry, StructuredLogger
+```
+
 ### 1.2 Two Render Paths
 
 | Path       | Factory                 | Backends                                       | Geometry            | Shadows         | AO          | AA             | OIT         |

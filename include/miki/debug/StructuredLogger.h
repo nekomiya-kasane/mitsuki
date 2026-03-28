@@ -150,8 +150,7 @@ namespace miki::debug {
         /// @return true if written, false if full (Drop policy).
         [[nodiscard]] auto TryWrite(const void* data, uint32_t size) -> bool;
 
-        /// @brief Read all available data, invoking callback per entry.
-        /// Called only by the drain thread.
+        /// @brief Read all available data, invoking callback per entry. Called only by the drain thread.
         using ReadCallback = void (*)(const void* data, uint32_t size, void* userCtx);
         auto ReadAll(ReadCallback cb, void* userCtx) -> uint32_t;
 

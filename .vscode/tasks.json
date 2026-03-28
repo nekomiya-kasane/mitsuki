@@ -1,0 +1,49 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "serve-wasm",
+            "type": "shell",
+            "command": "py",
+            "args": [
+                "-m",
+                "http.server",
+                "8888"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/build-wasm"
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^$"
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^Serving HTTP",
+                    "endsPattern": "^$"
+                }
+            },
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "build-wasm",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "build-wasm",
+                "--target",
+                "window_manager_demo"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": "$gcc"
+        }
+    ]
+}

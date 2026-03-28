@@ -17,16 +17,16 @@
 
 ## 2. Communication Rules
 
-| Rule | Detail |
-|------|--------|
-| **No filler** | Never start with "You're absolutely right!" / "Great question!" / "I understand". Answer directly. |
-| **Chinese reply** | If user writes Chinese, reply in Chinese. Code stays English. |
-| **Code citations** | Use backtick + absolute path format `@/path/to/file.h:line`. Never bare paths. |
-| **Tables first** | Comparisons, evaluations, checklists — use Markdown tables, not long prose. |
-| **No guessing** | When uncertain, use tools (`code_search` / `grep_search` / `read_file`) to verify. Never fabricate. |
-| **No overreach** | If user asks "how", answer "how". Only start coding when user says "implement". |
-| **No emoji** | No emoji in code or docs unless user explicitly requests. |
-| **No unnecessary files** | Do not create `.md` / `.txt` files unless user explicitly asks. |
+| Rule                     | Detail                                                                                              |
+| ------------------------ | --------------------------------------------------------------------------------------------------- |
+| **No filler**            | Never start with "You're absolutely right!" / "Great question!" / "I understand". Answer directly.  |
+| **Chinese reply**        | If user writes Chinese, reply in Chinese. Code stays English.                                       |
+| **Code citations**       | Use backtick + absolute path format `@/path/to/file.h:line`. Never bare paths.                      |
+| **Tables first**         | Comparisons, evaluations, checklists — use Markdown tables, not long prose.                         |
+| **No guessing**          | When uncertain, use tools (`code_search` / `grep_search` / `read_file`) to verify. Never fabricate. |
+| **No overreach**         | If user asks "how", answer "how". Only start coding when user says "implement".                     |
+| **No emoji**             | No emoji in code or docs unless user explicitly requests.                                           |
+| **No unnecessary files** | Do not create `.md` / `.txt` files unless user explicitly asks.                                     |
 
 ### Review & Evaluation Protocol
 
@@ -44,11 +44,13 @@ When asked to review code or roadmap:
 Agent is a peer technical collaborator, not a pure executor.
 
 **Allowed and encouraged:**
+
 - Identify and propose missing features when implementation gaps exist
 - Align with CAD/CAE industry requirements not covered by roadmap
 - Always explain before implementing: what, why, which phase
 
 **Must reject user when:**
+
 - User's approach degrades performance → point out, offer better solution
 - User's approach hurts maintainability → explain risk, propose alternative
 - User's opinion is suboptimal → propose better approach with data/industry practice
@@ -70,28 +72,28 @@ When user requests roadmap review or polish:
 
 Agent should suggest model switching when appropriate:
 
-| Task Type | Recommended Model | Reason |
-|-----------|------------------|--------|
-| Phase planning / architecture | Claude Opus (thinking) | Deep cross-phase reasoning |
-| C++23 implementation | Claude Opus | Best SWE-bench + TerminalBench scores |
-| Large codebase analysis | Claude Sonnet 4.5+ (1M context) | Can load entire codebase |
-| Quick fixes / simple tasks | SWE-1.5 or Gemini 3 Pro | Save credits, fast |
-| Debugging (multi-step) | Claude Opus | Strongest agentic tool-use |
+| Task Type                     | Recommended Model               | Reason                                |
+| ----------------------------- | ------------------------------- | ------------------------------------- |
+| Phase planning / architecture | Claude Opus (thinking)          | Deep cross-phase reasoning            |
+| C++23 implementation          | Claude Opus                     | Best SWE-bench + TerminalBench scores |
+| Large codebase analysis       | Claude Sonnet 4.5+ (1M context) | Can load entire codebase              |
+| Quick fixes / simple tasks    | SWE-1.5 or Gemini 3 Pro         | Save credits, fast                    |
+| Debugging (multi-step)        | Claude Opus                     | Strongest agentic tool-use            |
 
 ---
 
 ## 3. Project Scale Reference
 
-| Metric | Value |
-|--------|-------|
-| Architecture layers | 11 (Layer 1 Foundation -> Layer 11 Application) |
-| Render backends | 5 (Vulkan Tier1, Compat Tier2, D3D12, OpenGL Tier4, WebGPU Tier3) + Mock |
-| Namespaces | ~21 |
-| Roadmap phases | 27 (Phase 1a through Phase 18) |
-| Calendar weeks | ~133 (1.0: 98w + 1.1: 35w) |
-| Target tests | ~10000+ |
-| Target headers | ~500+ |
-| Target demos | ~100+ |
+| Metric              | Value                                                                    |
+| ------------------- | ------------------------------------------------------------------------ |
+| Architecture layers | 11 (Layer 1 Foundation -> Layer 11 Application)                          |
+| Render backends     | 5 (Vulkan Tier1, Compat Tier2, D3D12, OpenGL Tier4, WebGPU Tier3) + Mock |
+| Namespaces          | ~21                                                                      |
+| Roadmap phases      | 27 (Phase 1a through Phase 18)                                           |
+| Calendar weeks      | ~133 (1.0: 98w + 1.1: 35w)                                               |
+| Target tests        | ~10000+                                                                  |
+| Target headers      | ~500+                                                                    |
+| Target demos        | ~100+                                                                    |
 
 ---
 
@@ -113,26 +115,26 @@ Agent should suggest model switching when appropriate:
 Plan -> Implement -> Test -> Demo (optional) -> Verify -> Gate Check
 ```
 
-| Step | Requirement |
-|------|-------------|
-| **Plan** | Create TODO list (`todo_list` tool), each sub-step has clear acceptance criteria |
-| **Implement** | One sub-step at a time. Follow coding standards below. |
-| **Test** | Tests written alongside implementation. `TEST(ModuleName, SpecificBehavior)`. Zero regression. **Mandatory test categories per component** (see §4.4). |
-| **Demo** | Milestone phases provide interactive demo (GLFW window), in `demos/<name>/` |
-| **Verify** | Both build paths (default + vulkan) must pass with zero errors and zero failures |
-| **Gate Check** | All features complete, tests sufficient, no residual issues. Only then proceed. |
+| Step           | Requirement                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Plan**       | Create TODO list (`todo_list` tool), each sub-step has clear acceptance criteria                                                                       |
+| **Implement**  | One sub-step at a time. Follow coding standards below.                                                                                                 |
+| **Test**       | Tests written alongside implementation. `TEST(ModuleName, SpecificBehavior)`. Zero regression. **Mandatory test categories per component** (see §4.4). |
+| **Demo**       | Milestone phases provide interactive demo (GLFW window), in `demos/<name>/`                                                                            |
+| **Verify**     | Both build paths (default + vulkan) must pass with zero errors and zero failures                                                                       |
+| **Gate Check** | All features complete, tests sufficient, no residual issues. Only then proceed.                                                                        |
 
 ### 4.2.1 Phase Planning Quality Checklist (Mandatory)
 
 Before marking a phase plan as "PLANNING COMPLETE", agent must verify the following checklist. These checks prevent the class of planning omissions where steady-state behavior is specified but transition/boundary/interaction behavior is not.
 
-| # | Check | What to do | Example failure mode |
-|---|-------|-----------|---------------------|
-| 1 | **Interaction Scenario Walkthrough** | For every user-facing subsystem, mentally simulate the 3-5 most common real-time interaction sequences (zoom, pan, resize, drag, undo). Write down what happens at each continuous state transition. | MSDF/bitmap hard-switch pop during scroll-zoom |
-| 2 | **Algorithm Parameter Extreme Analysis** | For every core algorithm, identify its key parameter and analyze behavior at min/max/zero/negative extremes. Document degenerate cases and their mitigations. | `screenPxRange -> 0` producing noise; atlas page count -> 0; empty glyph run |
-| 3 | **Subsystem Seam Behavior** | When two tasks share a boundary (one produces, other consumes, or they operate on overlapping parameter ranges), explicitly define the behavior at the seam. "What happens at the exact switchover point?" must have a written answer. | MSDF task and Bitmap task both claim 8px but neither defines the crossfade |
-| 4 | **Dynamic Quality Metrics** | In addition to throughput/latency targets, define at least one visual-continuity metric per user-facing subsystem: "no visible pop", "smooth fade", "no flicker during X". | Missing "continuous zoom shows no pop" acceptance criterion |
-| 5 | **Known-Defect Survey** | When adopting a technique (MSDF, SDF, LOD, etc.), search for its known limitations and community-reported artifacts. Cross-check that mitigations are planned. | MSDF zoom-out artifacts widely reported in three.js/Godot forums but not addressed |
+| #   | Check                                    | What to do                                                                                                                                                                                                                             | Example failure mode                                                               |
+| --- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1   | **Interaction Scenario Walkthrough**     | For every user-facing subsystem, mentally simulate the 3-5 most common real-time interaction sequences (zoom, pan, resize, drag, undo). Write down what happens at each continuous state transition.                                   | MSDF/bitmap hard-switch pop during scroll-zoom                                     |
+| 2   | **Algorithm Parameter Extreme Analysis** | For every core algorithm, identify its key parameter and analyze behavior at min/max/zero/negative extremes. Document degenerate cases and their mitigations.                                                                          | `screenPxRange -> 0` producing noise; atlas page count -> 0; empty glyph run       |
+| 3   | **Subsystem Seam Behavior**              | When two tasks share a boundary (one produces, other consumes, or they operate on overlapping parameter ranges), explicitly define the behavior at the seam. "What happens at the exact switchover point?" must have a written answer. | MSDF task and Bitmap task both claim 8px but neither defines the crossfade         |
+| 4   | **Dynamic Quality Metrics**              | In addition to throughput/latency targets, define at least one visual-continuity metric per user-facing subsystem: "no visible pop", "smooth fade", "no flicker during X".                                                             | Missing "continuous zoom shows no pop" acceptance criterion                        |
+| 5   | **Known-Defect Survey**                  | When adopting a technique (MSDF, SDF, LOD, etc.), search for its known limitations and community-reported artifacts. Cross-check that mitigations are planned.                                                                         | MSDF zoom-out artifacts widely reported in three.js/Godot forums but not addressed |
 
 ### 4.3 File Organization
 
@@ -162,13 +164,13 @@ specs/                        <- Design documents, roadmap
 
 Every component must have tests in **5 mandatory categories**. Together they fully define the component's observable behavior.
 
-| # | Category | Purpose | Naming Convention | Minimum Count |
-|---|----------|---------|-------------------|---------------|
-| 1 | **Positive** | Core functionality works as designed | `TEST(Mod, VerbNoun)` e.g. `CreateReturnsValid` | >= public API count |
-| 2 | **Boundary** | Edge cases, limits, empty/max/zero inputs | `TEST(Mod, Noun_BoundaryCondition)` e.g. `Upload_ZeroBytes` | >= 1 per API that accepts ranges/sizes |
-| 3 | **Error** | Invalid input, resource exhaustion, misuse | `TEST(Mod, Noun_ErrorCondition)` e.g. `Create_NullDevice` | >= 1 per `expected<>` return |
-| 4 | **State** | Object lifecycle, state transitions, invariants | `TEST(Mod, Noun_StateTransition)` e.g. `MoveAssign_TransfersOwnership` | >= 1 per stateful class |
-| 5 | **Integration** | Multi-API workflow simulating real usage | `TEST(Mod, EndToEnd_Scenario)` e.g. `EndToEnd_UploadFlushReset` | **>= 1 per component** |
+| #   | Category        | Purpose                                         | Naming Convention                                                      | Minimum Count                          |
+| --- | --------------- | ----------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------- |
+| 1   | **Positive**    | Core functionality works as designed            | `TEST(Mod, VerbNoun)` e.g. `CreateReturnsValid`                        | >= public API count                    |
+| 2   | **Boundary**    | Edge cases, limits, empty/max/zero inputs       | `TEST(Mod, Noun_BoundaryCondition)` e.g. `Upload_ZeroBytes`            | >= 1 per API that accepts ranges/sizes |
+| 3   | **Error**       | Invalid input, resource exhaustion, misuse      | `TEST(Mod, Noun_ErrorCondition)` e.g. `Create_NullDevice`              | >= 1 per `expected<>` return           |
+| 4   | **State**       | Object lifecycle, state transitions, invariants | `TEST(Mod, Noun_StateTransition)` e.g. `MoveAssign_TransfersOwnership` | >= 1 per stateful class                |
+| 5   | **Integration** | Multi-API workflow simulating real usage        | `TEST(Mod, EndToEnd_Scenario)` e.g. `EndToEnd_UploadFlushReset`        | **>= 1 per component**                 |
 
 **Minimum test count formula**: `N >= max(P * 3, 8)` where `P` = number of public API functions in the component. Rationale: each API needs at least positive + boundary + error coverage. Floor of 8 prevents trivially under-tested components.
 
@@ -178,26 +180,26 @@ Every component must have tests in **5 mandatory categories**. Together they ful
 
 **Test completeness self-check** (agent runs after writing tests):
 
-| Check | Criterion |
-|-------|-----------|
-| Every public method has >= 1 positive test | No untested API |
-| Every `expected<>` return has >= 1 error-path test | Error paths are not dead code |
-| Every stateful class has lifecycle test (create-use-move-destroy) | Resource leaks caught |
-| Every RAII class has `MoveSemantics` test | Double-free / use-after-move caught |
-| At least 1 `EndToEnd_*` test exists | Interaction bugs caught |
-| No test is a tautology (`EXPECT_TRUE(true)`) | Tests actually verify behavior |
+| Check                                                             | Criterion                           |
+| ----------------------------------------------------------------- | ----------------------------------- |
+| Every public method has >= 1 positive test                        | No untested API                     |
+| Every `expected<>` return has >= 1 error-path test                | Error paths are not dead code       |
+| Every stateful class has lifecycle test (create-use-move-destroy) | Resource leaks caught               |
+| Every RAII class has `MoveSemantics` test                         | Double-free / use-after-move caught |
+| At least 1 `EndToEnd_*` test exists                               | Interaction bugs caught             |
+| No test is a tautology (`EXPECT_TRUE(true)`)                      | Tests actually verify behavior      |
 
 **Planning-time test audit protocol** (agent runs after writing Task test lists):
 
-| Audit Step | What to Check |
-|------------|--------------|
-| 1. List all feature behaviors from Context Anchor | Each behavior = potential test |
-| 2. Map behaviors to 5 categories | Ensure all 5 categories are covered |
-| 3. Count: `N >= max(P * 3, 8)` | Reject Task if below minimum |
-| 4. Check every RAII class has MoveSemantics | Add if missing |
-| 5. Check every `Create()` has null/invalid input error test | Add if missing |
-| 6. Check at least 1 EndToEnd integration test | Add if missing |
-| 7. Final count = sum of all tests | Update phase spec test summary |
+| Audit Step                                                  | What to Check                       |
+| ----------------------------------------------------------- | ----------------------------------- |
+| 1. List all feature behaviors from Context Anchor           | Each behavior = potential test      |
+| 2. Map behaviors to 5 categories                            | Ensure all 5 categories are covered |
+| 3. Count: `N >= max(P * 3, 8)`                              | Reject Task if below minimum        |
+| 4. Check every RAII class has MoveSemantics                 | Add if missing                      |
+| 5. Check every `Create()` has null/invalid input error test | Add if missing                      |
+| 6. Check at least 1 EndToEnd integration test               | Add if missing                      |
+| 7. Final count = sum of all tests                           | Update phase spec test summary      |
 
 ---
 
@@ -205,16 +207,16 @@ Every component must have tests in **5 mandatory categories**. Together they ful
 
 ### 5.1 Naming Conventions
 
-| Type | Style | Example |
-|------|-------|---------|
-| Class/Struct | PascalCase | `class RenderPipeline` |
-| Function | CamelCase | `RenderFrame(int iArg, int& oArg)` |
-| Private member | camelCase + `_` prefix | `_impl`, `_frameNumber` |
-| Public member | camelCase | `frameNumber` |
-| Enum | PascalCase type + PascalCase values | `enum class PassType { Graphics, Compute }` |
-| Macro/Constant | UPPER_SNAKE_CASE or k-prefix | `MAX_MESHLET_VERTICES`, `kDefaultBufferSize` |
-| Template param | PascalCase | `typename TResult` |
-| Concept | PascalCase | `template<Sender S>` |
+| Type           | Style                               | Example                                      |
+| -------------- | ----------------------------------- | -------------------------------------------- |
+| Class/Struct   | PascalCase                          | `class RenderPipeline`                       |
+| Function       | CamelCase                           | `RenderFrame(int iArg, int& oArg)`           |
+| Private member | camelCase + `_` prefix              | `_impl`, `_frameNumber`                      |
+| Public member  | camelCase                           | `frameNumber`                                |
+| Enum           | PascalCase type + PascalCase values | `enum class PassType { Graphics, Compute }`  |
+| Macro/Constant | UPPER_SNAKE_CASE or k-prefix        | `MAX_MESHLET_VERTICES`, `kDefaultBufferSize` |
+| Template param | PascalCase                          | `typename TResult`                           |
+| Concept        | PascalCase                          | `template<Sender S>`                         |
 
 ### 5.2 C++23 Paradigms (Mandatory)
 
@@ -253,13 +255,13 @@ Tags: `@brief`, `@param`, `@return`, `@note`, `@see`, `@tparam`, `@throws`.
 
 ### 5.5 Slang Shader Conventions
 
-| Type | Style | Example |
-|------|-------|---------|
-| Function | camelCase | `evaluateBrdf(float3 N, float3 V)` |
-| Struct | PascalCase | `struct MeshletPayload` |
-| Constant | kPrefixCamelCase | `static const uint kMaxMeshletVertices = 64;` |
-| Entry point | camelCase | `[shader("compute")] void mainCull(...)` |
-| Texture/Buffer | camelCase | `Texture2D<float4> gAlbedo` |
+| Type           | Style            | Example                                       |
+| -------------- | ---------------- | --------------------------------------------- |
+| Function       | camelCase        | `evaluateBrdf(float3 N, float3 V)`            |
+| Struct         | PascalCase       | `struct MeshletPayload`                       |
+| Constant       | kPrefixCamelCase | `static const uint kMaxMeshletVertices = 64;` |
+| Entry point    | camelCase        | `[shader("compute")] void mainCull(...)`      |
+| Texture/Buffer | camelCase        | `Texture2D<float4> gAlbedo`                   |
 
 - Default workgroup: `[numthreads(8, 8, 1)]` unless domain-specific
 - GPU struct must match C++ counterpart: identical field order, types, padding
@@ -283,25 +285,25 @@ Tags: `@brief`, `@param`, `@return`, `@note`, `@see`, `@tparam`, `@throws`.
 
 ## 6. Key Technical Decisions (Locked)
 
-| Decision | Content | Reason |
-|----------|---------|--------|
-| GPU-first | All render paths run on GPU from day one | Avoid CPU ref -> GPU port double rewrite |
-| 11-layer arch | Layer 1 (Foundation) -> Layer 11 (Application). Layer 8 = 8a (CAD) + 8b (CAE/DFM/PointCloud). Layer 10 = Plugin | Unidirectional dependency, separation of concerns |
-| 5 backends day 1 | Vulkan 1.4 Tier1 + Compat Tier2 + D3D12 + OpenGL 4.3 Tier4 + WebGPU Tier3 | Eliminate compatibility debt |
-| IPipelineFactory | Main (Task/Mesh, Tier1+D3D12) + Compat (Vertex+MDI, Tier2/3/4). No `if (compat)` branches | Independent render paths, not degradation |
-| Task/Mesh shader | Primary draw path uses task + mesh shader | Zero CPU draw calls, GPU amplification |
-| Macro-Binning 3 bucket | Opaque->VisBuffer, Transparent->OIT, Wireframe->SDF line. Fixed 3 PSO/frame | Material count doesn't affect PSO cost |
-| SortKey 64-bit | `{zLayer:8, pipeline:16, material:16, mesh:24}` | Single sort for all draw order |
-| InstanceData 80B | `alignas(16)`, explicit padding | GPU struct discipline |
-| AttributeResolver 6-level | Lock -> Local -> Style -> Layer -> Parent -> Scene Default | CAD industry standard |
-| IKernel pluggable | Abstract B-Rep kernel. `OcctKernel` = ref, `SimKernel` = CI stub | Decouple from specific CAD kernel |
-| IUiBridge | Abstract UI. `ImGuiBridge` (default), `NullBridge` (headless) | Embeddable in Qt/Electron/Slint/any |
-| IPlugin | `Discover->Load->Init->Activate->Deactivate->Unload`. JSON manifest | Vertical industry plugins |
-| Coca coroutine | `stdexec` + `std::jthread`. Phase 1-12 synchronous; Phase 13 adds async | Async is optimization, not infrastructure |
-| Slang shader | Slang -> SPIR-V + DXIL + GLSL 4.30 + WGSL quad-target | Cross-platform shader, CI quad-target gate |
-| std::expected | No exceptions, monadic ops chain | Zero-overhead error handling on hot paths |
-| LLVM sandbox | Pinned LLVM 20 + Clang 20 + libc++ 20 for all code | Eliminate cross-platform STL ABI issues |
-| Injection-first | miki never creates windows or API contexts. Host injects via `IDevice::CreateFromExisting()` | Embeddable anywhere |
+| Decision                  | Content                                                                                                         | Reason                                            |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| GPU-first                 | All render paths run on GPU from day one                                                                        | Avoid CPU ref -> GPU port double rewrite          |
+| 11-layer arch             | Layer 1 (Foundation) -> Layer 11 (Application). Layer 8 = 8a (CAD) + 8b (CAE/DFM/PointCloud). Layer 10 = Plugin | Unidirectional dependency, separation of concerns |
+| 5 backends day 1          | Vulkan 1.4 Tier1 + Compat Tier2 + D3D12 + OpenGL 4.3 Tier4 + WebGPU Tier3                                       | Eliminate compatibility debt                      |
+| IPipelineFactory          | Main (Task/Mesh, Tier1+D3D12) + Compat (Vertex+MDI, Tier2/3/4). No `if (compat)` branches                       | Independent render paths, not degradation         |
+| Task/Mesh shader          | Primary draw path uses task + mesh shader                                                                       | Zero CPU draw calls, GPU amplification            |
+| Macro-Binning 3 bucket    | Opaque->VisBuffer, Transparent->OIT, Wireframe->SDF line. Fixed 3 PSO/frame                                     | Material count doesn't affect PSO cost            |
+| SortKey 64-bit            | `{zLayer:8, pipeline:16, material:16, mesh:24}`                                                                 | Single sort for all draw order                    |
+| InstanceData 80B          | `alignas(16)`, explicit padding                                                                                 | GPU struct discipline                             |
+| AttributeResolver 6-level | Lock -> Local -> Style -> Layer -> Parent -> Scene Default                                                      | CAD industry standard                             |
+| IKernel pluggable         | Abstract B-Rep kernel. `OcctKernel` = ref, `SimKernel` = CI stub                                                | Decouple from specific CAD kernel                 |
+| IUiBridge                 | Abstract UI. `ImGuiBridge` (default), `NullBridge` (headless)                                                   | Embeddable in Qt/Electron/Slint/any               |
+| IPlugin                   | `Discover->Load->Init->Activate->Deactivate->Unload`. JSON manifest                                             | Vertical industry plugins                         |
+| Coca coroutine            | `stdexec` + `std::jthread`. Phase 1-12 synchronous; Phase 13 adds async                                         | Async is optimization, not infrastructure         |
+| Slang shader              | Slang -> SPIR-V + DXIL + GLSL 4.30 + WGSL quad-target                                                           | Cross-platform shader, CI quad-target gate        |
+| std::expected             | No exceptions, monadic ops chain                                                                                | Zero-overhead error handling on hot paths         |
+| LLVM sandbox              | Pinned LLVM 20 + Clang 20 + libc++ 20 for all code                                                              | Eliminate cross-platform STL ABI issues           |
+| Injection-first           | miki never creates windows or API contexts. Host injects via `IDevice::CreateFromExisting()`                    | Embeddable anywhere                               |
 
 ---
 
@@ -317,13 +319,13 @@ Tags: `@brief`, `@param`, `@return`, `@note`, `@see`, `@tparam`, `@throws`.
 
 ### Priority Order
 
-| Priority | Method | When to Use |
-|----------|--------|-------------|
-| **1** | **RenderDoc MCP** | GPU rendering errors: wrong visuals, missing faces, wrong colors, depth/stencil issues |
-| **2** | **LLDB MCP** | CPU crashes, logic errors, memory issues, Vulkan validation error |
-| **3** | **Vulkan Validation Layer** | API usage errors, sync issues, resource leaks |
-| **4** | **Targeted print/log** | Timing issues, high-frequency stats, MCP unavailable |
-| **5** | **Ask user to observe** | Last resort only |
+| Priority | Method                      | When to Use                                                                            |
+| -------- | --------------------------- | -------------------------------------------------------------------------------------- |
+| **1**    | **RenderDoc MCP**           | GPU rendering errors: wrong visuals, missing faces, wrong colors, depth/stencil issues |
+| **2**    | **LLDB MCP**                | CPU crashes, logic errors, memory issues, Vulkan validation error                      |
+| **3**    | **Vulkan Validation Layer** | API usage errors, sync issues, resource leaks                                          |
+| **4**    | **Targeted print/log**      | Timing issues, high-frequency stats, MCP unavailable                                   |
+| **5**    | **Ask user to observe**     | Last resort only                                                                       |
 
 ### RenderDoc MCP Protocol
 
@@ -351,40 +353,40 @@ Tags: `@brief`, `@param`, `@return`, `@note`, `@see`, `@tparam`, `@throws`.
 
 > **When stuck debugging, stop and ask — do not spin, summarize your attempts and notify the user**
 
-| Trigger | Action |
-|---------|--------|
-| **4 failed fix attempts** on the same bug | Pause. Summarize findings so far (what was tried, what was observed, what was ruled out). Ask user for guidance. |
+| Trigger                                                       | Action                                                                                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **4 failed fix attempts** on the same bug                     | Pause. Summarize findings so far (what was tried, what was observed, what was ruled out). Ask user for guidance.                |
 | **Root cause unclear** after reading all relevant code + logs | State explicitly: "I cannot determine root cause with available information." Propose next diagnostic steps for user to choose. |
-| **Fix introduces new failures** | Revert to last known-good state. Report the regression. Do not layer more fixes on top. |
-| **Environment / toolchain issue suspected** | Do not guess. Describe symptoms and ask user to verify environment state (driver version, SDK path, build cache, etc.). |
+| **Fix introduces new failures**                               | Revert to last known-good state. Report the regression. Do not layer more fixes on top.                                         |
+| **Environment / toolchain issue suspected**                   | Do not guess. Describe symptoms and ask user to verify environment state (driver version, SDK path, build cache, etc.).         |
 
 Rationale: Agent time is user time. Unbounded debug loops waste both. A concise handoff with structured context lets the user unblock faster than another blind attempt.
 
 ### When Print is Still Correct
 
-| Scenario | Reason |
-|----------|--------|
+| Scenario                              | Reason                                           |
+| ------------------------------------- | ------------------------------------------------ |
 | Multi-frame continuous state tracking | LLDB breakpoints interrupt real-time render loop |
-| High-frequency per-frame statistics | Need continuous frame-by-frame trends |
-| Async/multi-thread timing | Breakpoints change timing (Heisenbug) |
-| MCP connection unavailable | Fallback |
+| High-frequency per-frame statistics   | Need continuous frame-by-frame trends            |
+| Async/multi-thread timing             | Breakpoints change timing (Heisenbug)            |
+| MCP connection unavailable            | Fallback                                         |
 
 ---
 
 ## 9. Common Pitfalls
 
-| Pitfall | Prevention |
-|---------|-----------|
-| Missing `#pragma once` | All `.h` files must start with `#pragma once` |
-| Creating unnecessary .md files | Only when user explicitly asks |
-| Repeating checkpoint responses | Do not acknowledge system-injected checkpoint messages |
-| Modifying tests blindly | First determine if test expectation or implementation is wrong |
-| Debug build for benchmarks | Always use Release builds for performance testing |
-| `<unexpected>` header in coca toolchain | Use `<expected>` — coca LLVM 20 has no `<unexpected>` |
-| Layering violation (upper includes lower) | Check namespace/include path against §7 namespace map before adding `#include` |
-| Subsystem transition/seam behavior undefined | When two subsystems share a parameter range boundary (e.g., MSDF vs bitmap at 8px), always define crossfade/transition behavior explicitly. Never rely on hard threshold switches for user-facing visual output. Run the §4.2.1 checklist before marking plan complete. |
-| Pipeline viz out of sync with codebase | When implementing or completing a pass/component, **always update** `demos/pipeline-viz/src/data/pipelineData.ts`: (1) set `implStatus` to `"implemented"` / `"stub"`, (2) add `implPhase`, (3) add `sourceFiles[]`, (4) add `"T0"` to the pass's `tier` array. Also update OverviewPanel `TIER_FLOWS.T0.steps` to include the new pass. This is part of the Definition of Done for every Task. |
-| T0 tier not updated after session | At every session end, **review all newly implemented passes** and verify they have `"T0"` in their tier array and appear in `OverviewPanel TIER_FLOWS.T0.steps`. T0 = "what actually runs in the codebase today". |
+| Pitfall                                      | Prevention                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Missing `#pragma once`                       | All `.h` files must start with `#pragma once`                                                                                                                                                                                                                                                                                                                                                   |
+| Creating unnecessary .md files               | Only when user explicitly asks                                                                                                                                                                                                                                                                                                                                                                  |
+| Repeating checkpoint responses               | Do not acknowledge system-injected checkpoint messages                                                                                                                                                                                                                                                                                                                                          |
+| Modifying tests blindly                      | First determine if test expectation or implementation is wrong                                                                                                                                                                                                                                                                                                                                  |
+| Debug build for benchmarks                   | Always use Release builds for performance testing                                                                                                                                                                                                                                                                                                                                               |
+| `<unexpected>` header in coca toolchain      | Use `<expected>` — coca LLVM 20 has no `<unexpected>`                                                                                                                                                                                                                                                                                                                                           |
+| Layering violation (upper includes lower)    | Check namespace/include path against §7 namespace map before adding `#include`                                                                                                                                                                                                                                                                                                                  |
+| Subsystem transition/seam behavior undefined | When two subsystems share a parameter range boundary (e.g., MSDF vs bitmap at 8px), always define crossfade/transition behavior explicitly. Never rely on hard threshold switches for user-facing visual output. Run the §4.2.1 checklist before marking plan complete.                                                                                                                         |
+| Pipeline viz out of sync with codebase       | When implementing or completing a pass/component, **always update** `demos/pipeline-viz/src/data/pipelineData.ts`: (1) set `implStatus` to `"implemented"` / `"stub"`, (2) add `implPhase`, (3) add `sourceFiles[]`, (4) add `"T0"` to the pass's `tier` array. Also update OverviewPanel `TIER_FLOWS.T0.steps` to include the new pass. This is part of the Definition of Done for every Task. |
+| T0 tier not updated after session            | At every session end, **review all newly implemented passes** and verify they have `"T0"` in their tier array and appear in `OverviewPanel TIER_FLOWS.T0.steps`. T0 = "what actually runs in the codebase today".                                                                                                                                                                               |
 
 ---
 
@@ -395,10 +397,10 @@ Rationale: Agent time is user time. Unbounded debug loops waste both. A concise 
 
 ### 10.1 Pitfall Log (layered storage)
 
-| Layer | Location | Content | Token cost |
-|-------|----------|---------|------------|
-| **Hot** | `.windsurfrules` §9 (above) | Top 5-10 high-frequency / cross-module pitfalls | Always injected (~10 lines) |
-| **Cold** | `.windsurf/pitfalls.md` | Full history: date, module, trigger, root cause, prevention | Agent reads on-demand via `read_file` when entering a related module |
+| Layer    | Location                    | Content                                                     | Token cost                                                           |
+| -------- | --------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------- |
+| **Hot**  | `.windsurfrules` §9 (above) | Top 5-10 high-frequency / cross-module pitfalls             | Always injected (~10 lines)                                          |
+| **Cold** | `.windsurf/pitfalls.md`     | Full history: date, module, trigger, root cause, prevention | Agent reads on-demand via `read_file` when entering a related module |
 
 **Promotion rule**: a pitfall moves from Cold to Hot when it recurs 2+ times OR is cross-module.
 **Retirement rule**: a Hot pitfall may be removed from §9 when a linter/CI check covers it mechanically.
@@ -426,3 +428,5 @@ These are planned but NOT yet implemented. Agent should propose when the codebas
 **Attention: ** We use miki namespace instead of mitsuki
 
 **Attention: ** Every line contains no more than 120 characters, don't use manual \n before 120 characters
+
+**Attention: ** Run `setup_env.ps1` to activate toolchain environment.

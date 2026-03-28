@@ -1,13 +1,17 @@
 /** @brief GlfwWindowBackend — GLFW3 implementation of IWindowBackend.
  *
- * Creates/destroys GLFW windows, extracts native handles (HWND on Win32),
- * polls events with full input event bridging (keyboard, mouse, scroll,
- * resize, focus, close, text input). Backend-aware window hints.
+ * Creates/destroys GLFW windows, extracts native handles (HWND on Win32,
+ * canvas selector on Emscripten/WASM). Polls events with full input event
+ * bridging (keyboard, mouse, scroll, resize, focus, close, text input).
+ * Backend-aware window hints.
+ *
+ * On Emscripten, uses contrib.glfw3 (pongasoft/emscripten-glfw) which maps
+ * each GLFWwindow to an HTML <canvas> element. See specs/01-window-manager.md §9.5.
  *
  * Absorbs the former GlfwBridge's callback logic — each window gets its own
  * event buffer, collected during PollEvents().
  *
- * Namespace: miki::demo
+ * Namespace: miki::platform
  */
 #pragma once
 
@@ -19,7 +23,7 @@
 
 struct GLFWwindow;
 
-namespace miki::demo {
+namespace miki::platform {
 
     class GlfwWindowBackend final : public miki::platform::IWindowBackend {
        public:
@@ -32,8 +36,9 @@ namespace miki::demo {
         GlfwWindowBackend(const GlfwWindowBackend&) = delete;
         auto operator=(const GlfwWindowBackend&) -> GlfwWindowBackend& = delete;
 
-        [[nodiscard]] auto CreateNativeWindow(const miki::platform::WindowDesc& iDesc, void*& oNativeToken)
-            -> miki::core::Result<miki::rhi::NativeWindowHandle> override;
+        [[nodiscard]] auto CreateNativeWindow(
+            const miki::platform::WindowDesc& iDesc, void* iParentToken, void*& oNativeToken
+        ) -> miki::core::Result<miki::rhi::NativeWindowHandle> override;
 
         auto DestroyNativeWindow(void* iNativeToken) -> void override;
         auto PollEvents(std::vector<miki::platform::WindowEvent>& ioEvents) -> void override;
@@ -41,11 +46,29 @@ namespace miki::demo {
         [[nodiscard]] auto ShouldClose(void* iNativeToken) -> bool override;
         [[nodiscard]] auto GetFramebufferSize(void* iNativeToken) -> miki::rhi::Extent2D override;
         [[nodiscard]] auto IsMinimized(void* iNativeToken) -> bool override;
+        auto ShowWindow(void* iNativeToken) -> void override;
+        auto HideWindow(void* iNativeToken) -> void override;
+
+        // Window state operations
+        auto ResizeWindow(void* iNativeToken, uint32_t iWidth, uint32_t iHeight) -> void override;
+        auto SetWindowPosition(void* iNativeToken, int32_t iX, int32_t iY) -> void override;
+        [[nodiscard]] auto GetWindowPosition(void* iNativeToken) const -> std::pair<int32_t, int32_t> override;
+        auto MinimizeWindow(void* iNativeToken) -> void override;
+        auto MaximizeWindow(void* iNativeToken) -> void override;
+        auto RestoreWindow(void* iNativeToken) -> void override;
+        auto FocusWindow(void* iNativeToken) -> void override;
+        auto SetWindowTitle(void* iNativeToken, std::string_view iTitle) -> void override;
+
         auto SetWindowHandle(void* iNativeToken, miki::platform::WindowHandle iHandle) -> void override;
 
         /** @brief Get the GLFWwindow* for a given native token. Used by ImGui init. */
         [[nodiscard]] static auto GetGlfwWindow(void* iNativeToken) noexcept -> GLFWwindow* {
             return static_cast<GLFWwindow*>(iNativeToken);
+        }
+
+        /** @brief Get mutable reference to pending events for EventSimulator injection. */
+        [[nodiscard]] auto GetPendingEvents() noexcept -> std::vector<miki::platform::WindowEvent>& {
+            return pendingEvents_;
         }
 
        private:
@@ -57,11 +80,16 @@ namespace miki::demo {
             miki::platform::WindowHandle handle = {};
             double lastMouseX = 0.0;
             double lastMouseY = 0.0;
+#ifdef __EMSCRIPTEN__
+            std::string canvasSelector;  // e.g. "#canvas1" — owned string for NativeWindowHandle lifetime
+#endif
         };
 
         miki::rhi::BackendType backendType_;
         bool visible_;
-        GLFWwindow* glShareContext_ = nullptr;
+#ifndef __EMSCRIPTEN__
+        GLFWwindow* glShareContext_ = nullptr;  // OpenGL shared context (desktop only)
+#endif
 
         // token (GLFWwindow*) → PerWindowData
         std::unordered_map<void*, PerWindowData> windowData_;
@@ -87,4 +115,4 @@ namespace miki::demo {
         [[nodiscard]] static auto MapAction(int iGlfwAction) noexcept -> neko::platform::Action;
     };
 
-}  // namespace miki::demo
+}  // namespace miki::platform

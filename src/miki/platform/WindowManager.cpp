@@ -1,29 +1,35 @@
-/** @brief WindowManager implementation.
+/** @brief WindowManager implementation — N-ary forest with cascade destruction.
  *
- * Owns per-window WindowSlot (native token + state). No GPU resources.
- * Delegates OS window ops to IWindowBackend. Stable monotonic handle IDs.
- * PollEvents() collects per-window events from backend, detects close requests,
- * and updates minimized state.
+ * Uses ChunkedSlotMap<WindowNode, 16> for O(1) lookup with generation-counted handles.
+ * Tree structure: each node stores parent handle + children vector.
+ * Cascade destroy: post-order traversal (leaves first).
+ * PollEvents() does NOT auto-destroy — emits CloseRequested events for user decision.
+ *
+ * See: specs/01-window-manager.md §3–§8.
  */
 
 #include "miki/platform/WindowManager.h"
 
+#include "miki/core/ChunkedSlotMap.h"
 #include "miki/core/ErrorCode.h"
 
-#include <algorithm>
-#include <ranges>
+#include <cassert>
 
 namespace miki::platform {
 
     // ===========================================================================
-    // Internal WindowSlot
+    // WindowNode — internal per-window state (stored in ChunkedSlotMap)
     // ===========================================================================
 
-    struct WindowSlot {
-        uint32_t id = 0;
+    struct WindowNode {
+        WindowHandle handle;
+        WindowHandle parent;
+        std::vector<WindowHandle> children;
         void* nativeToken = nullptr;
         rhi::NativeWindowHandle nativeWindow = rhi::Win32Window{};
-        bool alive = false;
+        rhi::Extent2D extent = {};
+        core::EnumFlags<WindowFlags> flags = WindowFlags::None;
+        bool alive = true;
         bool minimized = false;
     };
 
@@ -33,30 +39,53 @@ namespace miki::platform {
 
     struct WindowManager::Impl {
         std::unique_ptr<IWindowBackend> backend;
-        std::vector<WindowSlot> slots;
+        core::ChunkedSlotMap<WindowNode, 16> nodes;
         std::vector<WindowEvent> eventBuffer;
-        uint32_t nextId = 1;  // 0 = invalid sentinel
+        HasSurfaceFn hasSurfaceCallback = nullptr;
 
-        [[nodiscard]] auto FindSlot(WindowHandle iHandle) -> WindowSlot* {
-            for (auto& s : slots) {
-                if (s.id == iHandle.id && s.alive) {
-                    return &s;
-                }
-            }
-            return nullptr;
+        [[nodiscard]] auto ToSlot(WindowHandle wh) const -> core::SlotHandle {
+            return {.id = wh.id, .generation = wh.generation};
         }
 
-        [[nodiscard]] auto FindSlotConst(WindowHandle iHandle) const -> const WindowSlot* {
-            for (auto const& s : slots) {
-                if (s.id == iHandle.id && s.alive) {
-                    return &s;
-                }
-            }
-            return nullptr;
+        [[nodiscard]] auto ToWin(core::SlotHandle sh) const -> WindowHandle {
+            return {.id = sh.id, .generation = sh.generation};
         }
 
-        [[nodiscard]] auto AliveCount() const noexcept -> uint32_t {
-            return static_cast<uint32_t>(std::ranges::count_if(slots, [](auto const& s) { return s.alive; }));
+        [[nodiscard]] auto Find(WindowHandle wh) -> WindowNode* { return nodes.Get(ToSlot(wh)); }
+
+        [[nodiscard]] auto Find(WindowHandle wh) const -> const WindowNode* { return nodes.Get(ToSlot(wh)); }
+
+        [[nodiscard]] auto ComputeDepth(WindowHandle wh) const -> uint32_t {
+            uint32_t depth = 0;
+            auto cur = wh;
+            while (cur.IsValid()) {
+                ++depth;
+                auto* n = Find(cur);
+                if (!n) {
+                    break;
+                }
+                cur = n->parent;
+            }
+            return depth;
+        }
+
+        void CollectPostOrder(WindowHandle wh, std::vector<WindowHandle>& out) const {
+            auto* n = Find(wh);
+            if (!n) {
+                return;
+            }
+            for (auto& child : n->children) {
+                CollectPostOrder(child, out);
+                out.push_back(child);
+            }
+        }
+
+        void DestroyNodeOS(WindowNode& node) {
+            if (backend && node.nativeToken) {
+                backend->DestroyNativeWindow(node.nativeToken);
+                node.nativeToken = nullptr;
+            }
+            node.alive = false;
         }
     };
 
@@ -70,15 +99,12 @@ namespace miki::platform {
         if (!impl_) {
             return;
         }
-        for (auto& slot : impl_->slots) {
-            if (!slot.alive) {
-                continue;
+        auto cleanup = [&](core::SlotHandle, WindowNode& node) {
+            if (node.alive) {
+                impl_->DestroyNodeOS(node);
             }
-            if (impl_->backend && slot.nativeToken) {
-                impl_->backend->DestroyNativeWindow(slot.nativeToken);
-            }
-            slot.alive = false;
-        }
+        };
+        impl_->nodes.ForEach(cleanup);
     }
 
     WindowManager::WindowManager(WindowManager&&) noexcept = default;
@@ -101,78 +127,276 @@ namespace miki::platform {
         if (!impl_ || !impl_->backend) {
             return std::unexpected(miki::core::ErrorCode::InvalidState);
         }
-        if (impl_->AliveCount() >= kMaxWindows) {
-            return std::unexpected(miki::core::ErrorCode::ResourceExhausted);
-        }
         if (iDesc.width == 0 || iDesc.height == 0) {
             return std::unexpected(miki::core::ErrorCode::InvalidArgument);
         }
 
+        // Validate parent & depth
+        void* parentToken = nullptr;
+        if (iDesc.parent.IsValid()) {
+            auto* pn = impl_->Find(iDesc.parent);
+            if (!pn || !pn->alive) {
+                return std::unexpected(miki::core::ErrorCode::InvalidArgument);
+            }
+            if (impl_->ComputeDepth(iDesc.parent) >= kMaxDepth) {
+                return std::unexpected(miki::core::ErrorCode::InvalidArgument);
+            }
+            parentToken = pn->nativeToken;
+        }
+
         void* nativeToken = nullptr;
-        auto nativeResult = impl_->backend->CreateNativeWindow(iDesc, nativeToken);
+        auto nativeResult = impl_->backend->CreateNativeWindow(iDesc, parentToken, nativeToken);
         if (!nativeResult) {
             return std::unexpected(nativeResult.error());
         }
 
-        uint32_t id = impl_->nextId++;
-        WindowHandle handle{id};
+        auto extent = impl_->backend->GetFramebufferSize(nativeToken);
 
-        // Inform backend of the assigned handle (for event tagging in callbacks)
-        impl_->backend->SetWindowHandle(nativeToken, handle);
+        WindowNode node{};
+        node.parent = iDesc.parent;
+        node.nativeToken = nativeToken;
+        node.nativeWindow = *nativeResult;
+        node.extent = extent;
+        node.flags = iDesc.flags;
+        node.alive = true;
 
-        impl_->slots.push_back(
-            WindowSlot{
-                .id = id,
-                .nativeToken = nativeToken,
-                .nativeWindow = *nativeResult,
-                .alive = true,
-                .minimized = false,
+        auto sh = impl_->nodes.Emplace(std::move(node));
+        WindowHandle wh = impl_->ToWin(sh);
+
+        // Set handle on the node itself
+        impl_->nodes.Get(sh)->handle = wh;
+
+        // Register as child of parent
+        if (iDesc.parent.IsValid()) {
+            if (auto* pn = impl_->Find(iDesc.parent)) {
+                pn->children.push_back(wh);
             }
-        );
-        return handle;
+        }
+
+        impl_->backend->SetWindowHandle(nativeToken, wh);
+        return wh;
     }
 
-    auto WindowManager::DestroyWindow(WindowHandle iHandle) -> miki::core::Result<void> {
+    auto WindowManager::DestroyWindow(WindowHandle iHandle) -> miki::core::Result<std::vector<WindowHandle>> {
         if (!impl_) {
             return std::unexpected(miki::core::ErrorCode::InvalidState);
         }
-
-        auto* slot = impl_->FindSlot(iHandle);
-        if (!slot) {
+        if (!iHandle.IsValid() || !impl_->Find(iHandle)) {
             return std::unexpected(miki::core::ErrorCode::InvalidArgument);
         }
 
-        if (impl_->backend && slot->nativeToken) {
-            impl_->backend->DestroyNativeWindow(slot->nativeToken);
-            slot->nativeToken = nullptr;
+        // Collect victims: descendants in post-order, then self
+        std::vector<WindowHandle> victims;
+        impl_->CollectPostOrder(iHandle, victims);
+        victims.push_back(iHandle);
+
+        // Assert no GPU surfaces attached (debug only)
+        if (impl_->hasSurfaceCallback) {
+            for (auto& v : victims) {
+                assert(!impl_->hasSurfaceCallback(v) && "DetachSurface before DestroyWindow");
+            }
         }
 
-        slot->alive = false;
-        return {};
+        // Destroy in post-order
+        for (auto& v : victims) {
+            auto* node = impl_->Find(v);
+            if (!node) {
+                continue;
+            }
+            impl_->DestroyNodeOS(*node);
+            node->children.clear();
+            // Remove from parent's children list
+            if (node->parent.IsValid()) {
+                if (auto* pn = impl_->Find(node->parent)) {
+                    auto& pc = pn->children;
+                    pc.erase(std::remove(pc.begin(), pc.end(), v), pc.end());
+                }
+            }
+            impl_->nodes.Free(impl_->ToSlot(v));
+        }
+
+        return victims;
+    }
+
+    auto WindowManager::ShowWindow(WindowHandle iHandle) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->ShowWindow(node->nativeToken);
+        }
+    }
+
+    auto WindowManager::HideWindow(WindowHandle iHandle) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->HideWindow(node->nativeToken);
+        }
     }
 
     // ===========================================================================
-    // Query
+    // Window state operations
+    // ===========================================================================
+
+    auto WindowManager::ResizeWindow(WindowHandle iHandle, uint32_t iWidth, uint32_t iHeight) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->ResizeWindow(node->nativeToken, iWidth, iHeight);
+            node->extent = impl_->backend->GetFramebufferSize(node->nativeToken);
+        }
+    }
+
+    auto WindowManager::SetWindowPosition(WindowHandle iHandle, int32_t iX, int32_t iY) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->SetWindowPosition(node->nativeToken, iX, iY);
+        }
+    }
+
+    auto WindowManager::GetWindowPosition(WindowHandle iHandle) const -> std::pair<int32_t, int32_t> {
+        if (!impl_ || !impl_->backend) {
+            return {0, 0};
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            return impl_->backend->GetWindowPosition(node->nativeToken);
+        }
+        return {0, 0};
+    }
+
+    auto WindowManager::MinimizeWindow(WindowHandle iHandle) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->MinimizeWindow(node->nativeToken);
+            node->minimized = true;
+        }
+    }
+
+    auto WindowManager::MaximizeWindow(WindowHandle iHandle) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->MaximizeWindow(node->nativeToken);
+        }
+    }
+
+    auto WindowManager::RestoreWindow(WindowHandle iHandle) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->RestoreWindow(node->nativeToken);
+            node->minimized = false;
+        }
+    }
+
+    auto WindowManager::FocusWindow(WindowHandle iHandle) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->FocusWindow(node->nativeToken);
+        }
+    }
+
+    auto WindowManager::SetWindowTitle(WindowHandle iHandle, std::string_view iTitle) -> void {
+        if (!impl_ || !impl_->backend) {
+            return;
+        }
+        auto* node = impl_->Find(iHandle);
+        if (node && node->alive && node->nativeToken) {
+            impl_->backend->SetWindowTitle(node->nativeToken, iTitle);
+        }
+    }
+
+    // ===========================================================================
+    // Tree queries
+    // ===========================================================================
+
+    auto WindowManager::GetParent(WindowHandle iHandle) const -> WindowHandle {
+        if (!impl_) {
+            return {};
+        }
+        auto* n = impl_->Find(iHandle);
+        return n ? n->parent : WindowHandle{};
+    }
+
+    auto WindowManager::GetChildren(WindowHandle iHandle) const -> std::span<const WindowHandle> {
+        if (!impl_) {
+            return {};
+        }
+        auto* n = impl_->Find(iHandle);
+        return n ? std::span<const WindowHandle>{n->children} : std::span<const WindowHandle>{};
+    }
+
+    auto WindowManager::GetRoot(WindowHandle iHandle) const -> WindowHandle {
+        if (!impl_) {
+            return {};
+        }
+        auto cur = iHandle;
+        while (true) {
+            auto* n = impl_->Find(cur);
+            if (!n || !n->parent.IsValid()) {
+                return cur;
+            }
+            cur = n->parent;
+        }
+    }
+
+    auto WindowManager::GetDepth(WindowHandle iHandle) const -> uint32_t {
+        if (!impl_) {
+            return 0;
+        }
+        return impl_->ComputeDepth(iHandle);
+    }
+
+    auto WindowManager::GetDescendantsPostOrder(WindowHandle iHandle) const -> std::vector<WindowHandle> {
+        std::vector<WindowHandle> result;
+        if (!impl_) {
+            return result;
+        }
+        impl_->CollectPostOrder(iHandle, result);
+        return result;
+    }
+
+    // ===========================================================================
+    // State queries
     // ===========================================================================
 
     auto WindowManager::GetWindowInfo(WindowHandle iHandle) const -> WindowInfo {
         if (!impl_) {
             return {};
         }
-        auto* slot = impl_->FindSlotConst(iHandle);
-        if (!slot) {
+        auto* n = impl_->Find(iHandle);
+        if (!n) {
             return {};
         }
-
-        auto ext = (impl_->backend && slot->nativeToken) ? impl_->backend->GetFramebufferSize(slot->nativeToken)
-                                                         : rhi::Extent2D{};
-
+        auto ext
+            = (impl_->backend && n->nativeToken) ? impl_->backend->GetFramebufferSize(n->nativeToken) : rhi::Extent2D{};
         return WindowInfo{
-            .handle = {slot->id},
+            .handle = n->handle,
             .extent = ext,
-            .nativeWindow = slot->nativeWindow,
-            .alive = slot->alive,
-            .minimized = slot->minimized,
+            .nativeWindow = n->nativeWindow,
+            .flags = n->flags,
+            .alive = n->alive,
+            .minimized = n->minimized,
         };
     }
 
@@ -180,16 +404,16 @@ namespace miki::platform {
         if (!impl_) {
             return rhi::Win32Window{};
         }
-        auto* slot = impl_->FindSlotConst(iHandle);
-        return slot ? slot->nativeWindow : rhi::NativeWindowHandle{rhi::Win32Window{}};
+        auto* n = impl_->Find(iHandle);
+        return n ? n->nativeWindow : rhi::NativeWindowHandle{rhi::Win32Window{}};
     }
 
     auto WindowManager::GetNativeToken(WindowHandle iHandle) const -> void* {
         if (!impl_) {
             return nullptr;
         }
-        auto* slot = impl_->FindSlotConst(iHandle);
-        return slot ? slot->nativeToken : nullptr;
+        auto* n = impl_->Find(iHandle);
+        return n ? n->nativeToken : nullptr;
     }
 
     // ===========================================================================
@@ -197,7 +421,7 @@ namespace miki::platform {
     // ===========================================================================
 
     auto WindowManager::GetWindowCount() const noexcept -> uint32_t {
-        return impl_ ? impl_->AliveCount() : 0;
+        return impl_ ? impl_->nodes.Size() : 0;
     }
 
     auto WindowManager::GetAllWindows() const -> std::vector<WindowHandle> {
@@ -205,11 +429,26 @@ namespace miki::platform {
         if (!impl_) {
             return result;
         }
-        for (auto const& s : impl_->slots) {
-            if (s.alive) {
-                result.push_back({s.id});
+        auto collect = [&](core::SlotHandle, const WindowNode& node) {
+            if (node.alive) {
+                result.push_back(node.handle);
             }
+        };
+        impl_->nodes.ForEach(collect);
+        return result;
+    }
+
+    auto WindowManager::GetRootWindows() const -> std::vector<WindowHandle> {
+        std::vector<WindowHandle> result;
+        if (!impl_) {
+            return result;
         }
+        auto collect = [&](core::SlotHandle, const WindowNode& node) {
+            if (node.alive && !node.parent.IsValid()) {
+                result.push_back(node.handle);
+            }
+        };
+        impl_->nodes.ForEach(collect);
         return result;
     }
 
@@ -218,22 +457,23 @@ namespace miki::platform {
         if (!impl_) {
             return result;
         }
-        for (auto& s : impl_->slots) {
-            if (!s.alive) {
-                continue;
+        auto collect = [&](core::SlotHandle, WindowNode& node) {
+            if (!node.alive) {
+                return;
             }
-            if (impl_->backend && s.nativeToken) {
-                s.minimized = impl_->backend->IsMinimized(s.nativeToken);
+            if (impl_->backend && node.nativeToken) {
+                node.minimized = impl_->backend->IsMinimized(node.nativeToken);
             }
-            if (!s.minimized) {
-                result.push_back({s.id});
+            if (!node.minimized) {
+                result.push_back(node.handle);
             }
-        }
+        };
+        impl_->nodes.ForEach(collect);
         return result;
     }
 
     // ===========================================================================
-    // Frame-level operations
+    // Event polling
     // ===========================================================================
 
     auto WindowManager::PollEvents() -> std::span<const WindowEvent> {
@@ -244,21 +484,19 @@ namespace miki::platform {
         impl_->eventBuffer.clear();
         impl_->backend->PollEvents(impl_->eventBuffer);
 
-        // Post-poll: detect close requests and update minimized state
-        for (auto& slot : impl_->slots) {
-            if (!slot.alive || !slot.nativeToken) {
-                continue;
+        // Filter out events for stale handles; update minimized state.
+        // CloseRequested is forwarded as-is — caller decides policy.
+        auto updater = [&](core::SlotHandle, WindowNode& node) {
+            if (!node.alive || !node.nativeToken) {
+                return;
             }
+            node.minimized = impl_->backend->IsMinimized(node.nativeToken);
+            node.extent = impl_->backend->GetFramebufferSize(node.nativeToken);
+        };
+        impl_->nodes.ForEach(updater);
 
-            if (impl_->backend->ShouldClose(slot.nativeToken)) {
-                impl_->backend->DestroyNativeWindow(slot.nativeToken);
-                slot.nativeToken = nullptr;
-                slot.alive = false;
-                continue;
-            }
-
-            slot.minimized = impl_->backend->IsMinimized(slot.nativeToken);
-        }
+        // Remove events targeting dead windows
+        std::erase_if(impl_->eventBuffer, [&](const WindowEvent& e) { return !impl_->Find(e.window); });
 
         return impl_->eventBuffer;
     }
@@ -267,7 +505,17 @@ namespace miki::platform {
         if (!impl_) {
             return true;
         }
-        return impl_->AliveCount() == 0;
+        return impl_->nodes.Size() == 0;
+    }
+
+    auto WindowManager::SetHasSurfaceCallback(HasSurfaceFn iCallback) -> void {
+        if (impl_) {
+            impl_->hasSurfaceCallback = iCallback;
+        }
+    }
+
+    auto WindowManager::GetBackend() noexcept -> IWindowBackend* {
+        return impl_ ? impl_->backend.get() : nullptr;
     }
 
 }  // namespace miki::platform

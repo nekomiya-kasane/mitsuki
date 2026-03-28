@@ -70,6 +70,16 @@ namespace miki::rhi {
          *  GL: core 3.2+ | WebGPU: N/A */
         GeometryShader,
 
+        /** @brief Multi-draw indirect (batch draw calls with GPU-side parameters).
+         *  Vk: core 1.0 (multiDrawIndirect feature) | D3D12: always (ExecuteIndirect) |
+         *  GL: ARB_multi_draw_indirect | WebGPU: N/A */
+        MultiDrawIndirect,
+
+        /** @brief Multi-draw indirect count (GPU-driven draw count).
+         *  Vk: VK_KHR_draw_indirect_count (core 1.2) | D3D12: ExecuteIndirect with count buffer |
+         *  GL: ARB_indirect_parameters | WebGPU: N/A */
+        MultiDrawIndirectCount,
+
         // =====================================================================
         // Ray tracing
         // =====================================================================
@@ -122,6 +132,26 @@ namespace miki::rhi {
          * ResourceDescriptorHeap) | GL: ARB_bindless_texture | WebGPU: N/A */
         DescriptorIndexing,
 
+        /** @brief Sparse binding (virtual memory / tiled resources).
+         *  Vk: sparseBinding feature | D3D12: Tiled Resources Tier 1+ |
+         *  GL: ARB_sparse_texture | WebGPU: N/A */
+        SparseBinding,
+
+        /** @brief Resizable BAR (large CPU-visible GPU memory).
+         *  Vk: VK_EXT_memory_budget + large HOST_VISIBLE heap | D3D12: D3D12_FEATURE_DATA_ARCHITECTURE1 |
+         *  GL: N/A | WebGPU: N/A */
+        ResizableBAR,
+
+        /** @brief Memory budget query (real-time VRAM usage tracking).
+         *  Vk: VK_EXT_memory_budget | D3D12: IDXGIAdapter3::QueryVideoMemoryInfo |
+         *  GL: N/A | WebGPU: N/A */
+        MemoryBudgetQuery,
+
+        /** @brief Hardware decompression (GDeflate).
+         *  Vk: VK_NV_memory_decompression | D3D12: DirectStorage 1.1+ |
+         *  GL: N/A | WebGPU: N/A */
+        HardwareDecompression,
+
         // =====================================================================
         // Compute
         // =====================================================================
@@ -136,10 +166,25 @@ namespace miki::rhi {
          *  GL: ARB_shader_atomic_counter_ops + NV_shader_atomic_int64 | WebGPU: N/A */
         Int64Atomics,
 
+        /** @brief 64-bit floating point operations in shaders.
+         *  Vk: shaderFloat64 feature | D3D12: D3D_SHADER_MODEL_6_2+ |
+         *  GL: ARB_gpu_shader_fp64 | WebGPU: N/A */
+        Float64,
+
         /** @brief Subgroup (wave) operations.
          *  Vk: core 1.1 (subgroup ops) | D3D12: SM 6.0+ (wave intrinsics) |
          *  GL: ARB_shader_ballot + ARB_shader_group_vote | WebGPU: subgroups (experimental) */
         SubgroupOps,
+
+        /** @brief Async compute queue support.
+         *  Vk: multiple queue families | D3D12: D3D12_COMMAND_LIST_TYPE_COMPUTE |
+         *  GL: N/A | WebGPU: N/A */
+        AsyncCompute,
+
+        /** @brief Work graphs (GPU-driven task scheduling).
+         *  Vk: N/A | D3D12: SM 6.8 DispatchGraph |
+         *  GL: N/A | WebGPU: N/A */
+        WorkGraphs,
 
         // =====================================================================
         // Texture compression

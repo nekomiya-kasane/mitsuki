@@ -18,7 +18,7 @@ Diagnostics:
   Suppress:
     - -Wunused-variable
     - -Wmissing-field-initializers
-    - pp_file_not_found         # transient missing headers during indexing
+    - pp_file_not_found # transient missing headers during indexing
   ClangTidy:
     Add:
       - bugprone-*
@@ -30,11 +30,12 @@ Diagnostics:
       - misc-*
       - cert-*
     Remove:
-      - modernize-use-trailing-return-type   # project style: no trailing return
-      - modernize-avoid-c-arrays             # C arrays used in low-level GPU code
-      - modernize-use-std-print              # crashes clangd 21.x on fprintf (LLVM #98758)
+      - modernize-use-trailing-return-type # project style: no trailing return
+      - modernize-avoid-c-arrays # C arrays used in low-level GPU code
+      - modernize-use-std-print # crashes clangd 21.x on fprintf (LLVM #98758)
       - bugprone-easily-swappable-parameters # too noisy for handle-heavy APIs
       - cppcoreguidelines-pro-bounds-pointer-arithmetic # Low-level GPU code needs pointer arithmetic
+      - cppcoreguidelines-avoid-do-while
     CheckOptions:
       readability-identifier-naming.ClassCase: CamelCase
       readability-identifier-naming.FunctionCase: CamelCase

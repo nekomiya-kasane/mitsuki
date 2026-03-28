@@ -88,6 +88,19 @@ foreach ($line in $setupLines) {
 Write-Host "[ready] COCA toolchain environment setup complete!" -ForegroundColor Green
 Write-Host "[info] Toolchain root: $env:COCA_TOOLCHAIN" -ForegroundColor Cyan
 
+# 5. Setup Emscripten SDK environment
+$emsdkPath = "C:\Users\nekom\Downloads\22\toolchains\coca-toolchain\tools\emsdk"
+if (Test-Path "$emsdkPath\emsdk_env.ps1") {
+    Write-Host "[setup] Activating Emscripten SDK..." -ForegroundColor Yellow
+    Push-Location $emsdkPath
+    & .\emsdk_env.ps1
+    Pop-Location
+    Write-Host "[setup] Emscripten SDK activated" -ForegroundColor Green
+}
+else {
+    Write-Host "[warning] Emscripten SDK not found at $emsdkPath" -ForegroundColor Yellow
+}
+
 # Verify installation
 Write-Host "[info] Verifying installation..." -ForegroundColor Cyan
 try {
@@ -104,6 +117,14 @@ try {
 }
 catch {
     Write-Host "[warning] Ninja not found in PATH" -ForegroundColor Yellow
+}
+
+try {
+    $emccVersion = emcc --version 2>$null | Select-Object -First 1
+    Write-Host "[info] Emscripten: $emccVersion" -ForegroundColor Gray
+}
+catch {
+    Write-Host "[warning] emcc not found in PATH" -ForegroundColor Yellow
 }
 
 Write-Host "[info] Environment is ready for development!" -ForegroundColor Green

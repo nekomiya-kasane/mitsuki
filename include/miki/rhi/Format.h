@@ -35,29 +35,35 @@ namespace miki::rhi {
         BGRA8_SRGB,
 
         // --- 16-bit per channel ---
-        R16_FLOAT,
         R16_UNORM,
+        R16_SNORM,
         R16_UINT,
         R16_SINT,
-        RG16_FLOAT,
+        R16_FLOAT,
         RG16_UNORM,
+        RG16_SNORM,
         RG16_UINT,
         RG16_SINT,
-        RGBA16_FLOAT,
+        RG16_FLOAT,
         RGBA16_UNORM,
+        RGBA16_SNORM,
         RGBA16_UINT,
         RGBA16_SINT,
+        RGBA16_FLOAT,
 
         // --- 32-bit per channel ---
-        R32_FLOAT,
         R32_UINT,
         R32_SINT,
-        RG32_FLOAT,
+        R32_FLOAT,
         RG32_UINT,
         RG32_SINT,
-        RGBA32_FLOAT,
+        RG32_FLOAT,
+        RGB32_UINT,
+        RGB32_SINT,
+        RGB32_FLOAT,
         RGBA32_UINT,
         RGBA32_SINT,
+        RGBA32_FLOAT,
 
         // --- Packed ---
         RGB10A2_UNORM,
@@ -84,6 +90,10 @@ namespace miki::rhi {
         BC6H_SFLOAT,
         BC7_UNORM,
         BC7_SRGB,
+
+        // --- ASTC (mobile/WebGPU) ---
+        ASTC_4x4_UNORM,
+        ASTC_4x4_SRGB,
 
         Count_
     };
@@ -126,37 +136,45 @@ namespace miki::rhi {
             case Format::BGRA8_SRGB: return {4, 1, 4, false, false, false};
 
             // 16-bit single channel
-            case Format::R16_FLOAT:
             case Format::R16_UNORM:
+            case Format::R16_SNORM:
             case Format::R16_UINT:
-            case Format::R16_SINT: return {2, 1, 1, false, false, false};
+            case Format::R16_SINT:
+            case Format::R16_FLOAT: return {2, 1, 1, false, false, false};
 
             // 16-bit two channel
-            case Format::RG16_FLOAT:
             case Format::RG16_UNORM:
+            case Format::RG16_SNORM:
             case Format::RG16_UINT:
-            case Format::RG16_SINT: return {4, 1, 2, false, false, false};
+            case Format::RG16_SINT:
+            case Format::RG16_FLOAT: return {4, 1, 2, false, false, false};
 
             // 16-bit four channel
-            case Format::RGBA16_FLOAT:
             case Format::RGBA16_UNORM:
+            case Format::RGBA16_SNORM:
             case Format::RGBA16_UINT:
-            case Format::RGBA16_SINT: return {8, 1, 4, false, false, false};
+            case Format::RGBA16_SINT:
+            case Format::RGBA16_FLOAT: return {8, 1, 4, false, false, false};
 
             // 32-bit single channel
-            case Format::R32_FLOAT:
             case Format::R32_UINT:
-            case Format::R32_SINT: return {4, 1, 1, false, false, false};
+            case Format::R32_SINT:
+            case Format::R32_FLOAT: return {4, 1, 1, false, false, false};
 
             // 32-bit two channel
-            case Format::RG32_FLOAT:
             case Format::RG32_UINT:
-            case Format::RG32_SINT: return {8, 1, 2, false, false, false};
+            case Format::RG32_SINT:
+            case Format::RG32_FLOAT: return {8, 1, 2, false, false, false};
+
+            // 32-bit three channel
+            case Format::RGB32_UINT:
+            case Format::RGB32_SINT:
+            case Format::RGB32_FLOAT: return {12, 1, 3, false, false, false};
 
             // 32-bit four channel
-            case Format::RGBA32_FLOAT:
             case Format::RGBA32_UINT:
-            case Format::RGBA32_SINT: return {16, 1, 4, false, false, false};
+            case Format::RGBA32_SINT:
+            case Format::RGBA32_FLOAT: return {16, 1, 4, false, false, false};
 
             // Packed
             case Format::RGB10A2_UNORM: return {4, 1, 4, false, false, false};
@@ -193,6 +211,10 @@ namespace miki::rhi {
             // BC7: 16 bytes per 4x4 block, 4 channels
             case Format::BC7_UNORM:
             case Format::BC7_SRGB: return {16, 4, 4, true, false, false};
+
+            // ASTC 4x4: 16 bytes per 4x4 block, 4 channels
+            case Format::ASTC_4x4_UNORM:
+            case Format::ASTC_4x4_SRGB: return {16, 4, 4, true, false, false};
 
             case Format::Undefined:
             case Format::Count_:

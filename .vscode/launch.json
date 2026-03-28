@@ -5,10 +5,46 @@
             "name": "Debug Test (test_structured_logger)",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug/test_structured_logger.exe",
+            "program": "${workspaceFolder}/build/test_structured_logger.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
             "env": {}
+        },
+        {
+            "name": "Debug Test (test_window_manager)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/test_window_manager.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {}
+        },
+        {
+            "name": "Debug Demo (window_manager_demo)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/window_manager_demo.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {}
+        },
+        {
+            "name": "WASM Demo (window_manager_demo) - Chrome",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8888/window_manager_demo.html",
+            "webRoot": "${workspaceFolder}/build-wasm",
+            "sourceMaps": true,
+            "preLaunchTask": "serve-wasm"
+        },
+        {
+            "name": "WASM Demo (window_manager_demo) - Edge",
+            "type": "msedge",
+            "request": "launch",
+            "url": "http://localhost:8888/window_manager_demo.html",
+            "webRoot": "${workspaceFolder}/build-wasm",
+            "sourceMaps": true,
+            "preLaunchTask": "serve-wasm"
         }
     ]
 }

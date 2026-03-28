@@ -1,187 +1,217 @@
-/** @brief RenderSurface implementation — Pimpl forwarding + factory dispatch.
+/** @file RenderSurface.cpp
+ *  @brief RenderSurface PIMPL implementation.
  *
- * Impl base class is defined in RenderSurfaceImpl.h (shared internal header).
- * Factory dispatch by BackendType creates the correct backend subclass.
+ *  All DeviceBase calls go through DeviceHandle::Dispatch, which requires
+ *  complete backend class definitions — hence the AllBackends.h include.
+ *  See specs/02-rhi-design.md SS2.2 for the Dispatch architecture.
  */
 
-#include "RenderSurfaceImpl.h"
+#include "miki/rhi/RenderSurface.h"
 
-#include "miki/core/ErrorCode.h"
-#include "miki/rhi/IDevice.h"
+#include <array>
 
-// Backend forward declarations (defined in backend TUs)
-#ifdef MIKI_BUILD_VULKAN
-[[nodiscard]] auto CreateVulkanRenderSurface(miki::rhi::IDevice& iDevice, const miki::rhi::RenderSurfaceDesc& iDesc)
-    -> miki::core::Result<std::unique_ptr<miki::rhi::RenderSurface::Impl>>;
-#endif
-#ifdef MIKI_BUILD_D3D12
-[[nodiscard]] auto CreateD3D12RenderSurface(miki::rhi::IDevice& iDevice, const miki::rhi::RenderSurfaceDesc& iDesc)
-    -> miki::core::Result<std::unique_ptr<miki::rhi::RenderSurface::Impl>>;
-#endif
-#ifdef MIKI_BUILD_WEBGPU
-[[nodiscard]] auto CreateWebGpuRenderSurface(miki::rhi::IDevice& iDevice, const miki::rhi::RenderSurfaceDesc& iDesc)
-    -> miki::core::Result<std::unique_ptr<miki::rhi::RenderSurface::Impl>>;
-#endif
-#ifdef MIKI_BUILD_MOCK
-[[nodiscard]] auto CreateMockRenderSurface(miki::rhi::IDevice& iDevice, const miki::rhi::RenderSurfaceDesc& iDesc)
-    -> miki::core::Result<std::unique_ptr<miki::rhi::RenderSurface::Impl>>;
-#endif
+#include "miki/rhi/backend/AllBackends.h"
 
 namespace miki::rhi {
 
-    // ===========================================================================
-    // RenderSurface — Pimpl forwarding
-    // ===========================================================================
+    // =========================================================================
+    // RenderSurface::Impl
+    // =========================================================================
 
+    struct RenderSurface::Impl {
+        DeviceHandle device;
+        NativeWindowHandle nativeWindow;
+        SwapchainHandle swapchain;
+        RenderSurfaceConfig config;
+        Extent2D extent{};
+        Format actualFormat = Format::BGRA8_SRGB;
+        uint32_t currentImageIndex = 0;
+        SubmitSyncInfo syncInfo;
+
+        explicit Impl(DeviceHandle iDevice, NativeWindowHandle iNativeWindow)
+            : device(iDevice), nativeWindow(iNativeWindow) {}
+    };
+
+    // =========================================================================
+    // Config resolution
+    // =========================================================================
+
+    /// Resolve RenderSurfaceConfig (intent) -> SwapchainDesc (precise params).
+    static auto ResolveSwapchainDesc(
+        const RenderSurfaceConfig& iConfig, const NativeWindowHandle& iWindow, uint32_t iWidth, uint32_t iHeight
+    ) -> SwapchainDesc {
+        SwapchainDesc desc;
+        desc.surface = iWindow;
+        desc.width = iWidth;
+        desc.height = iHeight;
+        desc.preferredFormat = iConfig.preferredFormat;
+        desc.presentMode = iConfig.presentMode;
+        desc.colorSpace = iConfig.colorSpace;
+
+        switch (iConfig.imageCount) {
+            case ImageCountHint::Auto: desc.imageCount = (iConfig.presentMode == PresentMode::Mailbox) ? 3 : 2; break;
+            case ImageCountHint::Minimal: desc.imageCount = 2; break;
+            case ImageCountHint::Triple: desc.imageCount = 3; break;
+        }
+
+        // Backend may override format based on color space:
+        //   scRGBLinear -> RGBA16_FLOAT (FP16 linear)
+        //   HDR10_ST2084 -> RGB10A2_UNORM (PQ 10-bit)
+        if (iConfig.colorSpace == SurfaceColorSpace::scRGBLinear) {
+            desc.preferredFormat = Format::RGBA16_FLOAT;
+        } else if (iConfig.colorSpace == SurfaceColorSpace::HDR10_ST2084) {
+            desc.preferredFormat = Format::RGB10A2_UNORM;
+        }
+
+        return desc;
+    }
+
+    // =========================================================================
+    // Lifecycle
+    // =========================================================================
+
+    RenderSurface::~RenderSurface() {
+        if (impl_ && impl_->swapchain.IsValid()) {
+            impl_->device.Dispatch([&](auto& dev) { dev.DestroySwapchain(impl_->swapchain); });
+        }
+    }
+
+    RenderSurface::RenderSurface(RenderSurface&&) noexcept = default;
+    auto RenderSurface::operator=(RenderSurface&&) noexcept -> RenderSurface& = default;
     RenderSurface::RenderSurface(std::unique_ptr<Impl> iImpl) : impl_(std::move(iImpl)) {}
 
-    RenderSurface::~RenderSurface() = default;
-
-    RenderSurface::RenderSurface(RenderSurface&& iOther) noexcept = default;
-    auto RenderSurface::operator=(RenderSurface&& iOther) noexcept -> RenderSurface& = default;
-
-    auto RenderSurface::Create(IDevice& iDevice, const RenderSurfaceDesc& iDesc)
-        -> miki::core::Result<std::unique_ptr<RenderSurface>> {
-        [[maybe_unused]] auto backend = iDevice.GetBackendType();
-        miki::core::Result<std::unique_ptr<Impl>> implResult = std::unexpected(miki::core::ErrorCode::NotSupported);
-
-#ifdef MIKI_BUILD_VULKAN
-        if (backend == BackendType::Vulkan) {
-            implResult = CreateVulkanRenderSurface(iDevice, iDesc);
+    auto RenderSurface::Create(DeviceHandle iDevice, NativeWindowHandle iNativeWindow)
+        -> core::Result<std::unique_ptr<RenderSurface>> {
+        if (!iDevice.IsValid()) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
         }
-#endif
-#ifdef MIKI_BUILD_D3D12
-        if (backend == BackendType::D3D12) {
-            implResult = CreateD3D12RenderSurface(iDevice, iDesc);
-        }
-#endif
-#ifdef MIKI_BUILD_WEBGPU
-        if (backend == BackendType::WebGPU) {
-            implResult = CreateWebGpuRenderSurface(iDevice, iDesc);
-        }
-#endif
-#ifdef MIKI_BUILD_MOCK
-        if (backend == BackendType::Mock) {
-            implResult = CreateMockRenderSurface(iDevice, iDesc);
-        }
-#endif
-
-        if (!implResult) {
-            return std::unexpected(implResult.error());
-        }
-
-        return std::unique_ptr<RenderSurface>(new RenderSurface(std::move(*implResult)));
+        auto impl = std::make_unique<Impl>(iDevice, iNativeWindow);
+        return std::unique_ptr<RenderSurface>(new RenderSurface(std::move(impl)));
     }
 
-    auto RenderSurface::Configure(const RenderSurfaceConfig& iConfig) -> miki::core::Result<void> {
+    // =========================================================================
+    // Configuration
+    // =========================================================================
+
+    auto RenderSurface::Configure(const RenderSurfaceConfig& iConfig, uint32_t iWidth, uint32_t iHeight)
+        -> core::Result<void> {
         if (!impl_) {
-            return std::unexpected(miki::core::ErrorCode::InvalidState);
+            return std::unexpected(core::ErrorCode::InvalidState);
         }
-        return impl_->Configure(iConfig);
+
+        // Destroy old swapchain if exists
+        if (impl_->swapchain.IsValid()) {
+            impl_->device.Dispatch([&](auto& dev) { dev.DestroySwapchain(impl_->swapchain); });
+            impl_->swapchain = {};
+        }
+
+        auto desc = ResolveSwapchainDesc(iConfig, impl_->nativeWindow, iWidth, iHeight);
+        auto result = impl_->device.Dispatch([&](auto& dev) { return dev.CreateSwapchain(desc); });
+        if (!result) {
+            return std::unexpected(core::ErrorCode::InvalidState);
+        }
+
+        impl_->swapchain = *result;
+        impl_->config = iConfig;
+        impl_->extent = {iWidth, iHeight};
+        impl_->actualFormat = desc.preferredFormat;
+        return {};
     }
 
-    auto RenderSurface::Resize(uint32_t iWidth, uint32_t iHeight) -> miki::core::Result<void> {
-        if (!impl_) {
-            return std::unexpected(miki::core::ErrorCode::InvalidState);
+    auto RenderSurface::Resize(uint32_t iWidth, uint32_t iHeight) -> core::Result<void> {
+        if (!impl_ || !impl_->swapchain.IsValid()) {
+            return std::unexpected(core::ErrorCode::InvalidState);
         }
-        auto config = impl_->GetConfig();
-        config.width = iWidth;
-        config.height = iHeight;
-        return impl_->Configure(config);
+        auto result
+            = impl_->device.Dispatch([&](auto& dev) { return dev.ResizeSwapchain(impl_->swapchain, iWidth, iHeight); });
+        if (!result) {
+            return std::unexpected(core::ErrorCode::InvalidState);
+        }
+        impl_->extent = {iWidth, iHeight};
+        return {};
     }
 
-    auto RenderSurface::GetConfig() const noexcept -> RenderSurfaceConfig {
-        if (!impl_) {
-            return {};
-        }
-        return impl_->GetConfig();
+    auto RenderSurface::Reconfigure(const RenderSurfaceConfig& iConfig) -> core::Result<void> {
+        return Configure(iConfig, impl_->extent.width, impl_->extent.height);
     }
 
-    auto RenderSurface::GetCapabilities() const -> RenderSurfaceCapabilities {
-        if (!impl_) {
-            return {};
+    // =========================================================================
+    // Per-frame operations
+    // =========================================================================
+
+    auto RenderSurface::AcquireNextImage() -> core::Result<uint32_t> {
+        if (!impl_ || !impl_->swapchain.IsValid()) {
+            return std::unexpected(core::ErrorCode::InvalidState);
         }
-        return impl_->GetCapabilities();
+        auto result = impl_->device.Dispatch([&](auto& dev) {
+            return dev.AcquireNextImage(
+                impl_->swapchain, impl_->syncInfo.imageAvailable, impl_->syncInfo.inFlightFence
+            );
+        });
+        if (!result) {
+            return std::unexpected(core::ErrorCode::InvalidState);
+        }
+        impl_->currentImageIndex = *result;
+        return *result;
     }
 
-    auto RenderSurface::AcquireNextImage() -> miki::core::Result<TextureHandle> {
-        if (!impl_) {
-            return std::unexpected(miki::core::ErrorCode::InvalidState);
+    auto RenderSurface::Present() -> core::Result<void> {
+        if (!impl_ || !impl_->swapchain.IsValid()) {
+            return std::unexpected(core::ErrorCode::InvalidState);
         }
-        return impl_->AcquireNextImage();
+        std::array waitSems = {impl_->syncInfo.renderFinished};
+        impl_->device.Dispatch([&](auto& dev) {
+            dev.Present(impl_->swapchain, std::span<const SemaphoreHandle>{waitSems});
+        });
+        return {};
     }
 
-    auto RenderSurface::Present() -> miki::core::Result<void> {
-        if (!impl_) {
-            return std::unexpected(miki::core::ErrorCode::InvalidState);
-        }
-        return impl_->Present();
-    }
+    // =========================================================================
+    // Queries
+    // =========================================================================
 
+    auto RenderSurface::GetConfig() const noexcept -> const RenderSurfaceConfig& {
+        return impl_->config;
+    }
     auto RenderSurface::GetFormat() const noexcept -> Format {
-        if (!impl_) {
-            return Format::BGRA8_UNORM;
-        }
-        return impl_->GetFormat();
+        return impl_->actualFormat;
     }
-
     auto RenderSurface::GetExtent() const noexcept -> Extent2D {
-        if (!impl_) {
-            return {};
-        }
-        return impl_->GetExtent();
+        return impl_->extent;
+    }
+    auto RenderSurface::GetCurrentImageIndex() const noexcept -> uint32_t {
+        return impl_->currentImageIndex;
     }
 
     auto RenderSurface::GetCurrentTexture() const noexcept -> TextureHandle {
-        if (!impl_) {
+        if (!impl_ || !impl_->swapchain.IsValid()) {
             return {};
         }
-        return impl_->GetCurrentTexture();
+        return impl_->device.Dispatch([&](auto& dev) {
+            return dev.GetSwapchainTexture(impl_->swapchain, impl_->currentImageIndex);
+        });
     }
 
-    auto RenderSurface::GetSubmitSyncInfo() const noexcept -> SubmitSyncInfo {
-        if (!impl_) {
-            return {};
-        }
-        return impl_->GetSubmitSyncInfo();
+    auto RenderSurface::GetSwapchainHandle() const noexcept -> SwapchainHandle {
+        return impl_ ? impl_->swapchain : SwapchainHandle{};
     }
 
-    auto RenderSurface::GetSubmitSyncInfo2() const noexcept -> SubmitSyncInfo2 {
-        if (!impl_) {
-            return {};
-        }
-        return impl_->GetSubmitSyncInfo2();
+    auto RenderSurface::GetSubmitSyncInfo() const noexcept -> const SubmitSyncInfo& {
+        return impl_->syncInfo;
     }
 
-    auto RenderSurface::UsesTimelineFramePacing() const noexcept -> bool {
-        if (!impl_) {
-            return false;
-        }
-        return impl_->UsesTimelineFramePacing();
-    }
-
-    auto RenderSurface::BuildSubmitInfo() const noexcept -> SubmitInfo2 {
-        if (!impl_) {
-            return {};
-        }
-
-        if (impl_->UsesTimelineFramePacing()) {
-            auto sync2 = impl_->GetSubmitSyncInfo2();
-            return SubmitInfo2{
-                .queue = QueueType::Graphics,
-                .timelineSignals = sync2.timelineSignals,
-                .waitSemaphores = sync2.waitBinarySemaphores,
-                .signalSemaphores = sync2.signalBinarySemaphores,
-            };
-        }
-
-        auto sync = impl_->GetSubmitSyncInfo();
-        return SubmitInfo2{
-            .queue = QueueType::Graphics,
-            .waitSemaphores = sync.waitSemaphores,
-            .signalSemaphores = sync.signalSemaphores,
-            .signalFence = sync.signalFence,
-        };
+    auto RenderSurface::GetCapabilities() const -> RenderSurfaceCapabilities {
+        // TODO(Phase-Backend): Query actual capabilities from device/surface via
+        // backend-specific surface capability queries (vkGetPhysicalDeviceSurfaceCapabilitiesKHR, etc.)
+        RenderSurfaceCapabilities caps;
+        caps.supportedFormats = {Format::BGRA8_SRGB, Format::RGBA8_SRGB};
+        caps.supportedPresentModes = {PresentMode::Fifo, PresentMode::Mailbox};
+        caps.supportedColorSpaces = {SurfaceColorSpace::SRGB};
+        caps.minExtent = {1, 1};
+        caps.maxExtent = {16384, 16384};
+        caps.minImageCount = 2;
+        caps.maxImageCount = 8;
+        return caps;
     }
 
 }  // namespace miki::rhi

@@ -369,7 +369,7 @@ Color mapping (auto-degraded via `tapioca::ansi_emitter::transition()`):
 
 For non-TTY output (pipe/file redirection), `terminal::is_tty(stderr)` returns false → `console_config.no_color = true` → `ansi_emitter` outputs no escape sequences.
 
-### 3.2 CrashHandler
+### 3.2 CrashHandler [already implemented]
 
 **Motivation**: When the application crashes (SIGSEGV, SIGABRT, access violation, etc.), we need to dump the logger's ring buffer contents to a file for post-mortem analysis. This must be done using only async-signal-safe operations — no heap allocation, no `std::visit`, no `fwrite`.
 
@@ -491,7 +491,7 @@ miki::debug::InstallCrashHandlers(emergencyPath, [](const CrashContext& ctx, int
 
 The callback uses only `SafeWrite*` functions — no `std::format`, no `std::visit`, no heap allocation.
 
-### 3.3 CpuProfiler
+### 3.3 CpuProfiler [already implemented]
 
 **Motivation**: Identify CPU bottlenecks in scene upload, BVH build, tessellation, render graph compilation.
 
@@ -791,7 +791,7 @@ private:
 | WebGPU  | No-op                                                        |       N/A        |
 | Mock    | CPU-side tracking (always survives)                          |       Yes        |
 
-### 3.7 DebugMarker (RAII wrapper for RHI debug labels)
+### 3.7 DebugMarker (RAII wrapper for RHI debug labels) [already implemented]
 
 **Motivation**: RenderDoc/PIX/NSight need named regions in command buffers for readability.
 
@@ -1019,7 +1019,7 @@ private:
 
 ---
 
-## 4. Foundation Types (miki::core extensions)
+## 4. Foundation Types (miki::core extensions) [already implemented]
 
 ### 4.1 Flags.h — Type-safe bitfield
 
@@ -1115,7 +1115,7 @@ concept MikiMatrix = requires(T m) {
 
 ---
 
-## 5. ErrorCode Extensions
+## 5. ErrorCode Extensions [already implemented]
 
 Add `Debug` error range to existing `ErrorCode.h`:
 

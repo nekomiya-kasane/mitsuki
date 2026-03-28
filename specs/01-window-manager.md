@@ -194,6 +194,40 @@ public:
     /// @brief Hide a window without destroying it.
     auto HideWindow(WindowHandle iHandle) -> void;
 
+    // ── Window state operations ──────────────────────────────────
+
+    /// @brief Programmatically resize a window's client area.
+    ///        On Emscripten: may be limited by CSS layout constraints.
+    auto ResizeWindow(WindowHandle iHandle, uint32_t iWidth, uint32_t iHeight) -> void;
+
+    /// @brief Move a window to a new screen position (top-left corner).
+    ///        On Emscripten: no-op (canvas position is CSS-controlled).
+    auto SetWindowPosition(WindowHandle iHandle, int32_t iX, int32_t iY) -> void;
+
+    /// @brief Get the current window position (top-left corner).
+    ///        On Emscripten: returns (0, 0).
+    [[nodiscard]] auto GetWindowPosition(WindowHandle iHandle) const -> std::pair<int32_t, int32_t>;
+
+    /// @brief Minimize (iconify) a window.
+    ///        On Emscripten: no-op (browsers have no minimize).
+    auto MinimizeWindow(WindowHandle iHandle) -> void;
+
+    /// @brief Maximize a window to fill the screen/work area.
+    ///        On Emscripten: requests fullscreen (requires user gesture).
+    auto MaximizeWindow(WindowHandle iHandle) -> void;
+
+    /// @brief Restore a minimized or maximized window to normal state.
+    ///        On Emscripten: exits fullscreen if active.
+    auto RestoreWindow(WindowHandle iHandle) -> void;
+
+    /// @brief Request input focus for a window.
+    ///        May be ignored by the OS if the application is not in foreground.
+    auto FocusWindow(WindowHandle iHandle) -> void;
+
+    /// @brief Change the window title at runtime.
+    ///        On Emscripten: sets document.title for the first window.
+    auto SetWindowTitle(WindowHandle iHandle, std::string_view iTitle) -> void;
+
     // ── Tree queries ────────────────────────────────────────────
 
     [[nodiscard]] auto GetParent(WindowHandle iHandle) const -> WindowHandle;
@@ -280,6 +314,32 @@ public:
     /// @brief Hide a window.
     virtual auto HideWindow(void* iNativeToken) -> void = 0;
 
+    // ── Window state operations ──────────────────────────────────
+
+    /// @brief Resize window client area.
+    virtual auto ResizeWindow(void* iNativeToken, uint32_t iWidth, uint32_t iHeight) -> void = 0;
+
+    /// @brief Set window position (top-left corner in screen coordinates).
+    virtual auto SetWindowPosition(void* iNativeToken, int32_t iX, int32_t iY) -> void = 0;
+
+    /// @brief Get window position (top-left corner in screen coordinates).
+    [[nodiscard]] virtual auto GetWindowPosition(void* iNativeToken) const -> std::pair<int32_t, int32_t> = 0;
+
+    /// @brief Minimize (iconify) a window.
+    virtual auto MinimizeWindow(void* iNativeToken) -> void = 0;
+
+    /// @brief Maximize a window.
+    virtual auto MaximizeWindow(void* iNativeToken) -> void = 0;
+
+    /// @brief Restore a minimized or maximized window to normal state.
+    virtual auto RestoreWindow(void* iNativeToken) -> void = 0;
+
+    /// @brief Request input focus for a window.
+    virtual auto FocusWindow(void* iNativeToken) -> void = 0;
+
+    /// @brief Change the window title.
+    virtual auto SetWindowTitle(void* iNativeToken, std::string_view iTitle) -> void = 0;
+
     virtual auto SetWindowHandle(void* iNativeToken, WindowHandle iHandle) -> void {
         (void)iNativeToken; (void)iHandle;
     }
@@ -290,11 +350,12 @@ public:
 
 **`iParentToken` semantics are backend-defined** — the backend interprets the opaque `void*` according to its platform model. The public RHI/WindowManager API is unaware of the distinction; all parent-child logic above the backend is purely handle-based.
 
-| Backend              | `iParentToken` interpretation                                           | GPU-level effect                                                     |
-| -------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| GLFW (OpenGL)        | `GLFWwindow*` of parent — passed as share context to `glfwCreateWindow` | Shared GL context (textures, buffers, shaders shared across windows) |
-| GLFW (Vulkan/WebGPU) | `GLFWwindow*` of parent — stored for logical tree tracking              | None (Vulkan surfaces are independent; no shared context concept)    |
-| Win32                | `HWND` of parent — passed as owner to `CreateWindowEx`                  | None (owner window controls lifetime/z-order, not GPU resources)     |
+| Backend              | `iParentToken` interpretation                                           | GPU-level effect                                                      |
+| -------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| GLFW (OpenGL)        | `GLFWwindow*` of parent — passed as share context to `glfwCreateWindow` | Shared GL context (textures, buffers, shaders shared across windows)  |
+| GLFW (Vulkan/WebGPU) | `GLFWwindow*` of parent — stored for logical tree tracking              | None (Vulkan surfaces are independent; no shared context concept)     |
+| GLFW (Emscripten)    | `GLFWwindow*` of parent — logical tree only (no OS owner window)        | None (browser manages canvas z-order; parent-child is purely logical) |
+| Win32                | `HWND` of parent — passed as owner to `CreateWindowEx`                  | None (owner window controls lifetime/z-order, not GPU resources)      |
 
 GLFW backend mapping:
 
@@ -303,6 +364,34 @@ GLFW backend mapping:
 | `CreateNativeWindow(desc, parentToken, ...)` | `glfwCreateWindow(w, h, title, nullptr, parentGlfw)` — GL: share context; Vulkan: logical parent only (no GPU-level sharing, stored for tree ops) |
 | `ShowWindow`                                 | `glfwShowWindow`                                                                                                                                  |
 | `HideWindow`                                 | `glfwHideWindow`                                                                                                                                  |
+| `ResizeWindow`                               | `glfwSetWindowSize`                                                                                                                               |
+| `SetWindowPosition`                          | `glfwSetWindowPos`                                                                                                                                |
+| `GetWindowPosition`                          | `glfwGetWindowPos`                                                                                                                                |
+| `MinimizeWindow`                             | `glfwIconifyWindow`                                                                                                                               |
+| `MaximizeWindow`                             | `glfwMaximizeWindow`                                                                                                                              |
+| `RestoreWindow`                              | `glfwRestoreWindow`                                                                                                                               |
+| `FocusWindow`                                | `glfwFocusWindow`                                                                                                                                 |
+| `SetWindowTitle`                             | `glfwSetWindowTitle`                                                                                                                              |
+
+Emscripten (GLFW `contrib.glfw3`) backend mapping:
+
+| IWindowBackend                               | Emscripten GLFW (`contrib.glfw3`)                                                                                                                                                       |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CreateNativeWindow(desc, parentToken, ...)` | `emscripten::glfw3::SetNextWindowCanvasSelector(selector)` then `glfwCreateWindow(w, h, title, nullptr, nullptr)` — each window maps to one `<canvas>`. `iParentToken` is logical only. |
+| `ShowWindow`                                 | `glfwShowWindow` (maps to CSS `display` property on the canvas)                                                                                                                         |
+| `HideWindow`                                 | `glfwHideWindow` (maps to CSS `display:none`)                                                                                                                                           |
+| `IsMinimized`                                | Always `false` (browsers have no minimize); optionally check `document.hidden` for tab-away                                                                                             |
+| `GetFramebufferSize`                         | `glfwGetFramebufferSize` — Hi DPI aware (respects `GLFW_SCALE_FRAMEBUFFER`)                                                                                                             |
+| `ShouldClose`                                | `glfwWindowShouldClose` — triggered by application logic (no OS close button on canvas)                                                                                                 |
+| `NativeWindowHandle`                         | Returns `WebWindow{canvasSelector}` — the CSS selector string (e.g. `"#canvas1"`)                                                                                                       |
+| `ResizeWindow`                               | `glfwSetWindowSize` — may be constrained by CSS layout; canvas size changes but container may override                                                                                  |
+| `SetWindowPosition`                          | No-op — canvas position is CSS-controlled                                                                                                                                               |
+| `GetWindowPosition`                          | Returns `(0, 0)` — position is not meaningful for embedded canvases                                                                                                                     |
+| `MinimizeWindow`                             | No-op — browsers have no minimize concept                                                                                                                                               |
+| `MaximizeWindow`                             | `emscripten::glfw3::RequestFullscreen(window, false, true)` — requires user gesture                                                                                                     |
+| `RestoreWindow`                              | `emscripten_exit_fullscreen()` if in fullscreen; otherwise no-op                                                                                                                        |
+| `FocusWindow`                                | `glfwFocusWindow` — focuses the canvas element                                                                                                                                          |
+| `SetWindowTitle`                             | `glfwSetWindowTitle` — sets `document.title` for first window, custom attribute for others                                                                                              |
 
 Win32 backend mapping:
 
@@ -800,6 +889,102 @@ int main() {
 - **Resource sharing**: All textures, buffers, programs are shared across contexts via `wglShareLists` / `glXShareLists` (handled by GLFW internally).
 - **Already implemented**: `GlfwWindowBackend::glShareContext_` field exists.
 
+### 9.5 Emscripten/WASM Adaptation
+
+On the web platform, there are no OS windows — each GLFW "window" maps to an HTML `<canvas>` element. The adaptation uses `contrib.glfw3` (pongasoft/emscripten-glfw), a full C++ reimplementation of GLFW 3.4 for Emscripten that supports multiple canvases, Hi DPI, keyboard/mouse, gamepad, clipboard, and fullscreen.
+
+#### 9.5.1 Core Mapping: Window = Canvas
+
+| Desktop Concept      | Emscripten Equivalent                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| OS window            | `<canvas>` element in the HTML DOM, identified by CSS selector (e.g. `"#canvas1"`)                                              |
+| `NativeWindowHandle` | `WebWindow{canvasSelector}` — stored as `const char*` pointing to a backend-owned string                                        |
+| `nativeToken`        | `GLFWwindow*` — same as desktop GLFW, but backed by a canvas instead of an OS window                                            |
+| Window title         | Set via `glfwSetWindowTitle` — maps to `document.title` for the first window, or a custom attribute for subsequent ones         |
+| Window position      | Not meaningful — canvas position is controlled by CSS layout                                                                    |
+| Framebuffer size     | `glfwGetFramebufferSize` — respects `GLFW_SCALE_FRAMEBUFFER` for Hi DPI (canvas pixel size ≠ CSS size on 4K displays)           |
+| Minimize / Maximize  | Not applicable — `IsMinimized` always returns `false`. Tab visibility via `document.hidden` emits `Focus{false}` events instead |
+| Close button         | No OS chrome — `CloseRequested` must be triggered programmatically by the application                                           |
+
+#### 9.5.2 Multi-Canvas Setup
+
+Each `WindowManager::CreateWindow` call creates a GLFW window bound to a distinct canvas:
+
+```cpp
+// Backend internally calls:
+emscripten::glfw3::SetNextWindowCanvasSelector(canvasSelector); // e.g. "#canvas1"
+GLFWwindow* w = glfwCreateWindow(desc.width, desc.height, desc.title, nullptr, nullptr);
+```
+
+**Canvas selector derivation**: The backend generates selectors from `WindowDesc::title` (sanitized) or from an explicit `canvasSelector` field in `WindowDesc` (Emscripten-specific extension, `#ifdef __EMSCRIPTEN__`).
+
+**HTML template requirement**: The host page must contain `<canvas id="canvas1">` etc. elements. The backend does NOT create DOM elements — it binds to existing ones. A minimal shell template is provided in `demos/shell/miki_shell.html`.
+
+#### 9.5.3 WindowFlags Mapping
+
+| Flag          | Desktop Effect           | Emscripten Effect                                                       |
+| ------------- | ------------------------ | ----------------------------------------------------------------------- |
+| `Borderless`  | Remove window decoration | No-op (canvas has no decoration)                                        |
+| `AlwaysOnTop` | Pin above other windows  | No-op (canvas z-order is CSS-controlled)                                |
+| `NoResize`    | Disable user resize      | Skip `MakeCanvasResizable` call — canvas stays at initial size          |
+| `Hidden`      | Create window hidden     | `glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE)` — canvas gets `display:none` |
+
+#### 9.5.4 Event Loop Integration
+
+Emscripten requires `emscripten_set_main_loop` or `requestAnimationFrame` instead of a blocking `while(!shouldClose)` loop. The adaptation:
+
+1. `WindowManager::PollEvents()` calls `glfwPollEvents()` as on desktop — this works because `contrib.glfw3` hooks browser events internally.
+2. The **application** (not WindowManager) must use `emscripten_set_main_loop_arg` to drive the frame loop. WindowManager is loop-agnostic.
+3. `ShouldClose()` still works — returns `true` when all root windows are destroyed by application code.
+
+#### 9.5.5 WebGPU Surface from Canvas
+
+`SurfaceManager::AttachSurface` on Emscripten extracts the canvas selector from `WebWindow::canvasSelector` and creates a WebGPU surface:
+
+```cpp
+wgpu::SurfaceDescriptorFromCanvasHTMLSelector canvasDesc{};
+canvasDesc.selector = nativeHandle.canvasSelector;  // e.g. "#canvas1"
+wgpu::SurfaceDescriptor surfDesc{ .nextInChain = &canvasDesc };
+wgpu::Surface surface = instance.CreateSurface(&surfDesc);
+```
+
+#### 9.5.6 Parent-Child on Emscripten
+
+- `iParentToken` is stored for logical tree tracking only — no OS-level owner window exists.
+- Cascade destruction still works identically: post-order traversal destroys children before parent.
+- The only difference is visual: there is no OS-enforced z-order or lifetime coupling between canvases.
+
+#### 9.5.7 Resize and Fullscreen
+
+- **Resizable canvas**: Backend calls `emscripten::glfw3::MakeCanvasResizable(window, containerSelector)` unless `NoResize` flag is set.
+- **Full-window canvas**: Use `"window"` as `containerSelector` — canvas fills browser viewport.
+- **Fullscreen**: `emscripten::glfw3::RequestFullscreen(window, lockPointer, resizeCanvas)` — must be triggered from a user gesture (browser security).
+
+#### 9.5.8 Build Configuration
+
+```cmake
+if(EMSCRIPTEN)
+    # Use contrib.glfw3 port (pongasoft/emscripten-glfw)
+    target_compile_options(miki_core PUBLIC "--use-port=contrib.glfw3")
+    target_link_options(miki_core PUBLIC "--use-port=contrib.glfw3" "-sUSE_WEBGPU=1")
+    # GlfwWindowBackend compiles on Emscripten with #ifdef __EMSCRIPTEN__ adaptations
+endif()
+```
+
+#### 9.5.9 Limitations and Divergences
+
+| Feature             | Desktop                             | Emscripten                                                                |
+| ------------------- | ----------------------------------- | ------------------------------------------------------------------------- |
+| Window count        | Unlimited (OS-limited)              | Unlimited canvases, but each needs a pre-existing DOM element             |
+| Minimize / Maximize | OS-managed                          | Not available — `IsMinimized` always `false`                              |
+| Window position     | `glfwSetWindowPos`                  | No-op (CSS layout controls position)                                      |
+| Native drag / move  | OS title bar                        | Not available (canvas is embedded in page flow)                           |
+| Multi-monitor       | `glfwGetMonitors` + per-monitor DPI | Single "monitor" (browser viewport); DPI from `devicePixelRatio`          |
+| Clipboard           | OS clipboard                        | Async Clipboard API (requires user gesture); supported by `contrib.glfw3` |
+| File drag-and-drop  | `glfwSetDropCallback`               | HTML5 drag-and-drop — requires JS interop (not in contrib.glfw3 scope)    |
+| Threads             | Multi-threaded rendering            | Single-threaded main; SharedArrayBuffer for pthreads (requires COOP/COEP) |
+| GPU backend         | Vulkan T1 / D3D12 T1 / OpenGL T4    | WebGPU T3 only                                                            |
+
 ---
 
 ## 10. Thread Safety Model
@@ -860,13 +1045,26 @@ public:
 ```
 rhi-design.md §11          This document
 ─────────────────          ──────────────
-SwapchainDesc              RenderSurfaceConfig
+SwapchainDesc              RenderSurfaceConfig (intent → resolved params)
 CreateSwapchain            RenderSurface::Create (wraps)
 DestroySwapchain           RenderSurface::~RenderSurface (wraps)
 AcquireNextImage           RenderSurface::AcquireNextImage (wraps)
 Present                    RenderSurface::Present (wraps)
 SwapchainHandle            Internal to RenderSurface::Impl
+SurfaceColorSpace          Shared enum (both levels use it)
 ```
+
+`RenderSurfaceConfig` is a **declarative intent** (what the application wants). `SwapchainDesc` is **resolved parameters** (what the backend receives). `RenderSurface::Create` converts between them:
+
+| `RenderSurfaceConfig` field   | Conversion                                            | `SwapchainDesc` field   |
+| ----------------------------- | ----------------------------------------------------- | ----------------------- |
+| `presentMode`                 | direct passthrough                                    | `presentMode`           |
+| `colorSpace`                  | direct passthrough                                    | `colorSpace`            |
+| `preferredFormat`             | intersect with backend support                        | `preferredFormat`       |
+| `imageCount` (ImageCountHint) | resolve: Auto→backend optimal, Minimal→2, Triple→3    | `imageCount` (uint32_t) |
+| `vrrMode`                     | does NOT affect SwapchainDesc (affects Present flags) | —                       |
+| —                             | from `AttachSurface(nativeWindow)`                    | `surface`               |
+| —                             | from `GetFramebufferSize()`                           | `width`, `height`       |
 
 `RenderSurface` is a higher-level wrapper around the raw swapchain API. `SurfaceManager` manages the lifecycle of `RenderSurface` instances.
 
@@ -953,6 +1151,31 @@ Both documents agree: window/swapchain operations are main-thread-only. GPU reso
 - Creating 16 windows (one chunk) succeeds; creating the 17th triggers a new chunk allocation and also succeeds (ChunkedSlotMap dynamic expansion)
 - Creating 256 windows (16 chunks) succeeds without error — no hardcoded capacity limit
 - Destroying a window and then creating a new one succeeds (slot recycled within its chunk)
+
+### Window State Operations
+
+- `ResizeWindow(h, 800, 600)` changes the window's client area; subsequent `GetWindowInfo(h).extent` returns `{800, 600}`
+- `ResizeWindow` with `(0, 0)` is handled gracefully — either no-op or sets to minimum size (backend-defined)
+- `ResizeWindow` on a minimized window stores the size for when the window is restored
+- `SetWindowPosition(h, 100, 200)` moves the window; `GetWindowPosition(h)` returns `(100, 200)` (within OS tolerance)
+- `SetWindowPosition` with negative coordinates is valid (window partially off-screen)
+- `GetWindowPosition` on a newly created window returns the OS-assigned initial position
+- `MinimizeWindow(h)` iconifies the window; `GetWindowInfo(h).minimized == true`; `IsMinimized` backend call returns `true`
+- `MinimizeWindow` on an already-minimized window is a no-op (no error)
+- `MaximizeWindow(h)` maximizes the window; `GetWindowInfo(h).maximized == true` (if tracked)
+- `MaximizeWindow` on an already-maximized window is a no-op
+- `RestoreWindow(h)` on a minimized window restores it; `GetWindowInfo(h).minimized == false`
+- `RestoreWindow` on a maximized window restores to normal size
+- `RestoreWindow` on a normal window is a no-op
+- `FocusWindow(h)` requests focus; if the application is in foreground, the window receives focus
+- `FocusWindow` on a hidden window shows it first (GLFW behavior), then focuses
+- `FocusWindow` on a minimized window restores it first, then focuses
+- `SetWindowTitle(h, "New Title")` changes the title; the backend receives the new title string
+- `SetWindowTitle` with an empty string is valid (clears the title)
+- `SetWindowTitle` with UTF-8 characters (e.g., "日本語") is correctly passed to the backend
+- All window state operations on a stale handle return silently (no crash) or log a warning in debug builds
+- On Emscripten: `SetWindowPosition` is a no-op; `GetWindowPosition` returns `(0, 0)`
+- On Emscripten: `MinimizeWindow` is a no-op; `MaximizeWindow` requests fullscreen (may require user gesture)
 
 ### Cascade Destruction
 
@@ -1129,17 +1352,19 @@ Create window W, attach surface. In debug builds, call `wm.DestroyWindow(W)` **w
 
 ## 14. Design Decisions Log
 
-| Decision                                                       | Rationale                                                                                                                                                | Alternatives Considered                                                                                                                          |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Forest of N-ary trees                                          | Matches Win32 owner-window and Qt QObject tree models; natural for CAD multi-panel apps                                                                  | Flat list (too simple), DAG (overcomplicated, no use case)                                                                                       |
-| Manual cascade orchestration                                   | Preserves three-concern separation; easy to test each manager independently                                                                              | Auto cascade in WindowManager (violates separation), callback-based (hidden control flow)                                                        |
-| Generation-counted handles                                     | Prevents ABA/use-after-free; consistent with RHI handle design                                                                                           | Raw pointers (unsafe), `std::shared_ptr` (overhead, ref-counting in hot path)                                                                    |
-| `SurfaceManager` as separate class                             | Decouples GPU lifecycle from OS window lifecycle; enables backend switching without touching windows                                                     | Embed in `WindowManager` (coupling), embed in `RenderGraph` (wrong level)                                                                        |
-| Post-order destruction                                         | GPU surfaces must be destroyed before OS windows; leaves-first ensures children's GPU work is drained before parent                                      | Pre-order (would destroy parent surface while children still rendering), arbitrary order (unsafe)                                                |
-| `CloseRequested` as event, not auto-destroy                    | Application may want to prompt "save changes?" or hide instead of destroy                                                                                | Auto-destroy on close (inflexible, old design)                                                                                                   |
-| Single `DeviceHandle` for all windows                          | Industry standard (Filament, Diligent, Vulkan best practice); maximizes resource sharing                                                                 | Device-per-window (wasteful, no resource sharing, higher VRAM)                                                                                   |
-| `kChunkSize = 16` (no hard capacity limit)                     | ChunkedSlotMap allocates 16-slot chunks; typical CAD apps fit in 1 chunk (no heap churn). Grows dynamically for atypical workloads (256+ windows tested) | Per-window heap alloc (fragmentation, cache-unfriendly), fixed-size array (hard limit, wasteful if unused)                                       |
-| `DestroyWindow` rejects windows with attached surfaces         | Prevents GPU resource leaks and use-after-free of swapchain images referencing destroyed OS windows. Debug assert + release error code.                  | Auto-detach in DestroyWindow (violates separation, hides GPU lifecycle from caller), silent UB (unacceptable)                                    |
-| `DetachSurfaces` uses per-surface `FrameManager::WaitAll()`    | §5.3.1 guarantees swapchain images are never cross-referenced; per-surface timeline wait is sufficient and avoids stalling unrelated windows             | Device-wide `WaitIdle` (stalls all windows unnecessarily), no wait (undefined behavior)                                                          |
-| `RenderSurfaceConfig` with `PresentMode` + `SurfaceColorSpace` | Explicit per-window control over VSync/VRR/HDR at attach time; maps directly to `VkPresentModeKHR` / `DXGI_SWAP_EFFECT` / `VkColorSpaceKHR`              | Global present mode (inflexible — CAD main viewport wants Mailbox while tool windows want Fifo), no HDR support (unacceptable for 2026 displays) |
-| `SetPresentMode` / `SetColorSpace` as runtime APIs             | Enables in-app settings toggle (VSync on/off, HDR on/off) without full detach-reattach cycle. Internally waits per-surface then recreates swapchain      | Detach + reattach only (heavier, loses surface state), immutable config (no runtime toggle)                                                      |
+| Decision                                                       | Rationale                                                                                                                                                              | Alternatives Considered                                                                                                                          |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Forest of N-ary trees                                          | Matches Win32 owner-window and Qt QObject tree models; natural for CAD multi-panel apps                                                                                | Flat list (too simple), DAG (overcomplicated, no use case)                                                                                       |
+| Manual cascade orchestration                                   | Preserves three-concern separation; easy to test each manager independently                                                                                            | Auto cascade in WindowManager (violates separation), callback-based (hidden control flow)                                                        |
+| Generation-counted handles                                     | Prevents ABA/use-after-free; consistent with RHI handle design                                                                                                         | Raw pointers (unsafe), `std::shared_ptr` (overhead, ref-counting in hot path)                                                                    |
+| `SurfaceManager` as separate class                             | Decouples GPU lifecycle from OS window lifecycle; enables backend switching without touching windows                                                                   | Embed in `WindowManager` (coupling), embed in `RenderGraph` (wrong level)                                                                        |
+| Post-order destruction                                         | GPU surfaces must be destroyed before OS windows; leaves-first ensures children's GPU work is drained before parent                                                    | Pre-order (would destroy parent surface while children still rendering), arbitrary order (unsafe)                                                |
+| `CloseRequested` as event, not auto-destroy                    | Application may want to prompt "save changes?" or hide instead of destroy                                                                                              | Auto-destroy on close (inflexible, old design)                                                                                                   |
+| Single `DeviceHandle` for all windows                          | Industry standard (Filament, Diligent, Vulkan best practice); maximizes resource sharing                                                                               | Device-per-window (wasteful, no resource sharing, higher VRAM)                                                                                   |
+| `kChunkSize = 16` (no hard capacity limit)                     | ChunkedSlotMap allocates 16-slot chunks; typical CAD apps fit in 1 chunk (no heap churn). Grows dynamically for atypical workloads (256+ windows tested)               | Per-window heap alloc (fragmentation, cache-unfriendly), fixed-size array (hard limit, wasteful if unused)                                       |
+| `DestroyWindow` rejects windows with attached surfaces         | Prevents GPU resource leaks and use-after-free of swapchain images referencing destroyed OS windows. Debug assert + release error code.                                | Auto-detach in DestroyWindow (violates separation, hides GPU lifecycle from caller), silent UB (unacceptable)                                    |
+| `DetachSurfaces` uses per-surface `FrameManager::WaitAll()`    | §5.3.1 guarantees swapchain images are never cross-referenced; per-surface timeline wait is sufficient and avoids stalling unrelated windows                           | Device-wide `WaitIdle` (stalls all windows unnecessarily), no wait (undefined behavior)                                                          |
+| `RenderSurfaceConfig` with `PresentMode` + `SurfaceColorSpace` | Explicit per-window control over VSync/VRR/HDR at attach time; maps directly to `VkPresentModeKHR` / `DXGI_SWAP_EFFECT` / `VkColorSpaceKHR`                            | Global present mode (inflexible — CAD main viewport wants Mailbox while tool windows want Fifo), no HDR support (unacceptable for 2026 displays) |
+| `SetPresentMode` / `SetColorSpace` as runtime APIs             | Enables in-app settings toggle (VSync on/off, HDR on/off) without full detach-reattach cycle. Internally waits per-surface then recreates swapchain                    | Detach + reattach only (heavier, loses surface state), immutable config (no runtime toggle)                                                      |
+| Emscripten: single `GlfwWindowBackend` with `#ifdef`           | Maximizes code sharing between desktop and web — only canvas-selector setup, flags mapping, and `IsMinimized` differ. Avoids maintaining two separate backend classes. | Separate `EmscriptenWindowBackend` class (duplication), `#ifdef` in WindowManager (violates separation)                                          |
+| Canvas selector from `WindowDesc::title` or explicit field     | Pragmatic default: most apps have one canvas named after the window title. Explicit `canvasSelector` covers multi-canvas scenarios without breaking the desktop API.   | Always require explicit selector (breaks single-window simplicity), auto-create DOM elements (too invasive, breaks host page layout)             |

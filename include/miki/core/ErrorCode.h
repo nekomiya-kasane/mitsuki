@@ -35,6 +35,7 @@ namespace miki::core {
         IoError = 0x0006,
         Timeout = 0x0007,
         ResourceExhausted = 0x0008,
+        PreconditionViolated = 0x0009,
 
         // --- Core Rendering (0x1000 - 0x1FFF) ---
         PipelineCreationFailed = 0x1000,
@@ -97,6 +98,7 @@ namespace miki::core {
             case ErrorCode::IoError: return "IoError";
             case ErrorCode::Timeout: return "Timeout";
             case ErrorCode::ResourceExhausted: return "ResourceExhausted";
+            case ErrorCode::PreconditionViolated: return "PreconditionViolated";
             case ErrorCode::PipelineCreationFailed: return "PipelineCreationFailed";
             case ErrorCode::ShaderCompilationFailed: return "ShaderCompilationFailed";
             case ErrorCode::RenderPassInvalid: return "RenderPassInvalid";

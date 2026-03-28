@@ -1256,13 +1256,18 @@ The raw swapchain API lives on the device. Higher-level abstractions (`RenderSur
 
 ```cpp
 struct SwapchainDesc {
-    NativeSurfaceHandle surface;       // Platform-specific (HWND, wl_surface, etc.)
+    NativeWindowHandle  surface;           // std::variant<Win32Window, X11Window, ...>
     uint32_t            width, height;
-    Format              preferredFormat;  // BGRA8_SRGB typical
-    PresentMode         presentMode;     // Immediate, Mailbox, Fifo, FifoRelaxed
-    uint32_t            imageCount;      // 2-3
-    bool                hdr;             // HDR10 / scRGB
+    Format              preferredFormat;    // BGRA8_SRGB typical
+    PresentMode         presentMode;       // Immediate, Mailbox, Fifo, FifoRelaxed
+    SurfaceColorSpace   colorSpace;        // SRGB / HDR10_ST2084 / scRGBLinear
+    uint32_t            imageCount;        // 2-3
+    const char*         debugName;
 };
+
+> **Note 1**: `surface` uses `NativeWindowHandle` (typed variant), not `void*`. Backends call `std::get<Win32Window>(desc.surface)` etc. to extract the platform-specific fields (e.g., HWND + HINSTANCE for `vkCreateWin32SurfaceKHR`). This is type-safe and provides all platform info needed by each backend.
+>
+> **Note 2**: `SurfaceColorSpace` replaces the previous `bool hdr`. Backends need the precise color space to set `VkSwapchainCreateInfoKHR::imageColorSpace` (Vulkan) or `IDXGISwapChain3::SetColorSpace1` (D3D12). The enum is shared with the high-level `RenderSurfaceConfig` (see `specs/01-window-manager.md` §5.1).
 
 auto CreateSwapchain(const SwapchainDesc&) -> Result<SwapchainHandle>;
 void DestroySwapchain(SwapchainHandle);
