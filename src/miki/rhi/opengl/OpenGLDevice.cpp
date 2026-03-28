@@ -1,0 +1,431 @@
+/** @file OpenGLDevice.cpp
+ *  @brief OpenGL 4.3+ (Tier 4) backend — glad2 MX context init, capability population,
+ *         sync primitives (glFenceSync), submit (immediate), memory stats.
+ */
+
+#include "miki/rhi/backend/OpenGLDevice.h"
+
+#include "miki/debug/StructuredLogger.h"
+
+#include <cstring>
+
+namespace miki::rhi {
+
+    // =========================================================================
+    // Init / Destroy
+    // =========================================================================
+
+    auto OpenGLDevice::Init(const OpenGLDeviceDesc& desc) -> RhiResult<void> {
+        gl_ = new GladGLContext{};
+        ownsContext_ = true;
+
+        glfwWindow_ = desc.glfwWindow;
+
+        // glad2 MX: load GL function pointers via gladLoaderLoadGLContext (uses platform loader)
+        // The GL context must already be current on this thread before calling.
+        int version = gladLoaderLoadGLContext(gl_);
+        if (version == 0) {
+            delete gl_;
+            gl_ = nullptr;
+            return std::unexpected(RhiError::DeviceLost);
+        }
+        glMajor_ = GLAD_VERSION_MAJOR(version);
+        glMinor_ = GLAD_VERSION_MINOR(version);
+
+        if (glMajor_ < 4 || (glMajor_ == 4 && glMinor_ < 3)) {
+            delete gl_;
+            gl_ = nullptr;
+            return std::unexpected(RhiError::FeatureNotSupported);
+        }
+
+        hasDSA_ = (glMajor_ > 4 || (glMajor_ == 4 && glMinor_ >= 5)) || gl_->ARB_direct_state_access;
+
+        // Enable debug output if validation requested
+        if (desc.enableValidation && gl_->KHR_debug) {
+            gl_->Enable(GL_DEBUG_OUTPUT);
+            gl_->Enable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+        }
+
+        // Create push constant emulation UBO (128 bytes at binding 0)
+        if (hasDSA_) {
+            gl_->CreateBuffers(1, &pushConstantUBO_);
+            gl_->NamedBufferStorage(pushConstantUBO_, 128, nullptr, GL_DYNAMIC_STORAGE_BIT | GL_MAP_WRITE_BIT);
+        } else {
+            gl_->GenBuffers(1, &pushConstantUBO_);
+            gl_->BindBuffer(GL_UNIFORM_BUFFER, pushConstantUBO_);
+            gl_->BufferStorage(GL_UNIFORM_BUFFER, 128, nullptr, GL_DYNAMIC_STORAGE_BIT | GL_MAP_WRITE_BIT);
+            gl_->BindBuffer(GL_UNIFORM_BUFFER, 0);
+        }
+        gl_->BindBufferBase(GL_UNIFORM_BUFFER, 0, pushConstantUBO_);
+
+        PopulateCapabilities();
+
+        MIKI_LOG_INFO(
+            ::miki::debug::LogCategory::Rhi, "[OpenGL] Device initialized: {} (GL {}.{})", capabilities_.deviceName,
+            glMajor_, glMinor_
+        );
+
+        return {};
+    }
+
+    OpenGLDevice::~OpenGLDevice() {
+        if (gl_) {
+            WaitIdleImpl();
+
+            if (pushConstantUBO_) {
+                gl_->DeleteBuffers(1, &pushConstantUBO_);
+                pushConstantUBO_ = 0;
+            }
+
+            if (ownsContext_) {
+                delete gl_;
+            }
+            gl_ = nullptr;
+        }
+    }
+
+    // =========================================================================
+    // Capability population
+    // =========================================================================
+
+    void OpenGLDevice::PopulateCapabilities() {
+        capabilities_.tier = CapabilityTier::Tier4_OpenGL;
+        capabilities_.backendType = BackendType::OpenGL43;
+
+        const char* renderer = reinterpret_cast<const char*>(gl_->GetString(GL_RENDERER));
+        capabilities_.deviceName = renderer ? renderer : "Unknown OpenGL Device";
+
+        const char* vendor = reinterpret_cast<const char*>(gl_->GetString(GL_VENDOR));
+        (void)vendor;
+
+        // OpenGL has single queue, no async compute, no ray tracing
+        capabilities_.hasTimelineSemaphore = false;
+        capabilities_.hasAsyncCompute = false;
+        capabilities_.hasMultiDrawIndirect = true;        // GL 4.3 core
+        capabilities_.hasMultiDrawIndirectCount = false;  // Requires GL_ARB_indirect_parameters
+        capabilities_.hasBindless = false;                // GL_ARB_bindless_texture — not guaranteed
+        capabilities_.hasSubgroupOps = false;
+        capabilities_.hasMeshShader = false;
+        capabilities_.hasTaskShader = false;
+        capabilities_.hasRayQuery = false;
+        capabilities_.hasRayTracingPipeline = false;
+        capabilities_.hasAccelerationStructure = false;
+        capabilities_.hasVariableRateShading = false;
+        capabilities_.hasSparseBinding = false;
+        capabilities_.hasWorkGraphs = false;
+        capabilities_.hasCooperativeMatrix = false;
+        capabilities_.hasHardwareDecompression = false;
+        capabilities_.hasResizableBAR = false;
+
+        // Descriptor model
+        capabilities_.descriptorModel = DescriptorModel::DirectBind;
+
+        // Limits from GL
+        GLint maxTexSize = 0;
+        gl_->GetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexSize);
+        capabilities_.maxTextureSize2D = static_cast<uint32_t>(maxTexSize);
+
+        GLint maxCubeSize = 0;
+        gl_->GetIntegerv(GL_MAX_CUBE_MAP_TEXTURE_SIZE, &maxCubeSize);
+        capabilities_.maxTextureSizeCube = static_cast<uint32_t>(maxCubeSize);
+
+        GLint maxColorAttach = 0;
+        gl_->GetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &maxColorAttach);
+        capabilities_.maxColorAttachments = static_cast<uint32_t>(maxColorAttach);
+
+        GLint maxViewports = 0;
+        gl_->GetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
+        capabilities_.maxViewports = static_cast<uint32_t>(maxViewports);
+
+        capabilities_.maxPushConstantSize = 128;  // Emulated via UBO
+        capabilities_.maxBoundDescriptorSets = 4;
+        capabilities_.maxDrawIndirectCount = UINT32_MAX;
+
+        GLint maxSSBOSize = 0;
+        gl_->GetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &maxSSBOSize);
+        capabilities_.maxStorageBufferSize = static_cast<uint64_t>(maxSSBOSize);
+
+        GLint maxFBWidth = 0, maxFBHeight = 0;
+        gl_->GetIntegerv(GL_MAX_FRAMEBUFFER_WIDTH, &maxFBWidth);
+        gl_->GetIntegerv(GL_MAX_FRAMEBUFFER_HEIGHT, &maxFBHeight);
+        capabilities_.maxFramebufferWidth = static_cast<uint32_t>(maxFBWidth);
+        capabilities_.maxFramebufferHeight = static_cast<uint32_t>(maxFBHeight);
+
+        GLint maxWorkGroupCount[3]{};
+        gl_->GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &maxWorkGroupCount[0]);
+        gl_->GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 1, &maxWorkGroupCount[1]);
+        gl_->GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 2, &maxWorkGroupCount[2]);
+        capabilities_.maxComputeWorkGroupCount = {
+            static_cast<uint32_t>(maxWorkGroupCount[0]),
+            static_cast<uint32_t>(maxWorkGroupCount[1]),
+            static_cast<uint32_t>(maxWorkGroupCount[2]),
+        };
+
+        GLint maxWorkGroupSize[3]{};
+        gl_->GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxWorkGroupSize[0]);
+        gl_->GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &maxWorkGroupSize[1]);
+        gl_->GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &maxWorkGroupSize[2]);
+        capabilities_.maxComputeWorkGroupSize = {
+            static_cast<uint32_t>(maxWorkGroupSize[0]),
+            static_cast<uint32_t>(maxWorkGroupSize[1]),
+            static_cast<uint32_t>(maxWorkGroupSize[2]),
+        };
+
+        capabilities_.subgroupSize = 0;   // Not exposed on GL
+        capabilities_.hasFloat64 = true;  // GL 4.0 core
+
+        // Memory — GL doesn't expose memory budgets; best-effort via extensions
+        capabilities_.hasMemoryBudgetQuery = false;
+        capabilities_.deviceLocalMemoryBytes = 0;
+        capabilities_.hostVisibleMemoryBytes = 0;
+
+        // Check NV/ATI memory info extensions
+        if (gl_->GetString(GL_EXTENSIONS)) {
+            // GL_NVX_gpu_memory_info
+            constexpr GLenum GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX = 0x9048;
+            GLint totalMemKB = 0;
+            gl_->GetIntegerv(GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX, &totalMemKB);
+            if (gl_->GetError() == GL_NO_ERROR && totalMemKB > 0) {
+                capabilities_.deviceLocalMemoryBytes = static_cast<uint64_t>(totalMemKB) * 1024;
+                capabilities_.hasMemoryBudgetQuery = true;
+            }
+        }
+
+        // Always-on features
+        capabilities_.enabledFeatures.Add(DeviceFeature::Present);
+        capabilities_.enabledFeatures.Add(DeviceFeature::DynamicRendering);
+    }
+
+    // =========================================================================
+    // Sync primitives — glFenceSync based
+    // =========================================================================
+
+    auto OpenGLDevice::CreateFenceImpl(bool signaled) -> RhiResult<FenceHandle> {
+        auto [handle, data] = fences_.Allocate();
+        if (!data) {
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        data->sync = nullptr;
+        data->signaled = signaled;
+        return handle;
+    }
+
+    void OpenGLDevice::DestroyFenceImpl(FenceHandle h) {
+        auto* data = fences_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        if (data->sync) {
+            gl_->DeleteSync(data->sync);
+        }
+        fences_.Free(h);
+    }
+
+    void OpenGLDevice::WaitFenceImpl(FenceHandle h, uint64_t timeout) {
+        auto* data = fences_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        if (data->signaled) {
+            return;
+        }
+        if (data->sync) {
+            gl_->ClientWaitSync(data->sync, GL_SYNC_FLUSH_COMMANDS_BIT, timeout);
+            data->signaled = true;
+        }
+    }
+
+    void OpenGLDevice::ResetFenceImpl(FenceHandle h) {
+        auto* data = fences_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        if (data->sync) {
+            gl_->DeleteSync(data->sync);
+            data->sync = nullptr;
+        }
+        data->signaled = false;
+    }
+
+    auto OpenGLDevice::GetFenceStatusImpl(FenceHandle h) -> bool {
+        auto* data = fences_.Lookup(h);
+        if (!data) {
+            return false;
+        }
+        if (data->signaled) {
+            return true;
+        }
+        if (data->sync) {
+            GLint status = GL_UNSIGNALED;
+            GLsizei length = 0;
+            gl_->GetSynciv(data->sync, GL_SYNC_STATUS, sizeof(status), &length, &status);
+            if (status == GL_SIGNALED) {
+                data->signaled = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    auto OpenGLDevice::CreateSemaphoreImpl(const SemaphoreDesc& desc) -> RhiResult<SemaphoreHandle> {
+        auto [handle, data] = semaphores_.Allocate();
+        if (!data) {
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        data->sync = nullptr;
+        data->value = desc.initialValue;
+        data->type = desc.type;
+        return handle;
+    }
+
+    void OpenGLDevice::DestroySemaphoreImpl(SemaphoreHandle h) {
+        auto* data = semaphores_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        if (data->sync) {
+            gl_->DeleteSync(data->sync);
+        }
+        semaphores_.Free(h);
+    }
+
+    void OpenGLDevice::SignalSemaphoreImpl(SemaphoreHandle h, uint64_t value) {
+        auto* data = semaphores_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        if (data->sync) {
+            gl_->DeleteSync(data->sync);
+        }
+        data->sync = gl_->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        data->value = value;
+    }
+
+    void OpenGLDevice::WaitSemaphoreImpl(SemaphoreHandle h, uint64_t /*value*/, uint64_t timeout) {
+        auto* data = semaphores_.Lookup(h);
+        if (!data || !data->sync) {
+            return;
+        }
+        gl_->ClientWaitSync(data->sync, GL_SYNC_FLUSH_COMMANDS_BIT, timeout);
+    }
+
+    auto OpenGLDevice::GetSemaphoreValueImpl(SemaphoreHandle h) -> uint64_t {
+        auto* data = semaphores_.Lookup(h);
+        if (!data) {
+            return 0;
+        }
+        return data->value;
+    }
+
+    void OpenGLDevice::WaitIdleImpl() {
+        if (gl_) {
+            gl_->Finish();
+        }
+    }
+
+    // =========================================================================
+    // Submit — OpenGL is immediate mode, commands already executed
+    // =========================================================================
+
+    void OpenGLDevice::SubmitImpl(QueueType /*queue*/, const SubmitDesc& desc) {
+        // OpenGL commands are immediate — no deferred submission.
+        // Signal fence after commands are flushed.
+        if (desc.signalFence.IsValid()) {
+            auto* fenceData = fences_.Lookup(desc.signalFence);
+            if (fenceData) {
+                if (fenceData->sync) {
+                    gl_->DeleteSync(fenceData->sync);
+                }
+                fenceData->sync = gl_->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                fenceData->signaled = false;
+            }
+        }
+
+        // Signal semaphores
+        for (auto& s : desc.signalSemaphores) {
+            auto* semData = semaphores_.Lookup(s.semaphore);
+            if (semData) {
+                if (semData->sync) {
+                    gl_->DeleteSync(semData->sync);
+                }
+                semData->sync = gl_->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                semData->value = s.value;
+            }
+        }
+
+        gl_->Flush();
+    }
+
+    // =========================================================================
+    // Memory stats
+    // =========================================================================
+
+    auto OpenGLDevice::GetMemoryStatsImpl() const -> MemoryStats {
+        MemoryStats result{};
+        result.totalAllocationCount = totalAllocationCount_;
+        result.totalAllocatedBytes = totalAllocatedBytes_;
+        result.totalUsedBytes = totalAllocatedBytes_;
+        result.heapCount = capabilities_.hasMemoryBudgetQuery ? 1 : 0;
+        return result;
+    }
+
+    auto OpenGLDevice::GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t {
+        if (out.empty() || !capabilities_.hasMemoryBudgetQuery) {
+            return 0;
+        }
+
+        // GL_NVX_gpu_memory_info
+        constexpr GLenum GL_GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX = 0x9049;
+        constexpr GLenum GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX = 0x9048;
+
+        GLint totalKB = 0, availKB = 0;
+        gl_->GetIntegerv(GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX, &totalKB);
+        gl_->GetIntegerv(GL_GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX, &availKB);
+
+        if (gl_->GetError() != GL_NO_ERROR) {
+            return 0;
+        }
+
+        out[0].heapIndex = 0;
+        out[0].budgetBytes = static_cast<uint64_t>(totalKB) * 1024;
+        out[0].usageBytes = static_cast<uint64_t>(totalKB - availKB) * 1024;
+        out[0].isDeviceLocal = true;
+        return 1;
+    }
+
+    // =========================================================================
+    // T4 unsupported features — sparse binding
+    // =========================================================================
+
+    auto OpenGLDevice::GetSparsePageSizeImpl() const -> SparsePageSize {
+        return {};  // Not available on T4
+    }
+
+    void OpenGLDevice::SubmitSparseBindsImpl(
+        QueueType, const SparseBindDesc&, std::span<const SemaphoreSubmitInfo>, std::span<const SemaphoreSubmitInfo>
+    ) {
+        // Not available on T4
+    }
+
+    // =========================================================================
+    // T4 unsupported features — acceleration structures
+    // =========================================================================
+
+    auto OpenGLDevice::GetBLASBuildSizesImpl(const BLASDesc&) -> AccelStructBuildSizes {
+        return {};
+    }
+    auto OpenGLDevice::GetTLASBuildSizesImpl(const TLASDesc&) -> AccelStructBuildSizes {
+        return {};
+    }
+
+    auto OpenGLDevice::CreateBLASImpl(const BLASDesc&) -> RhiResult<AccelStructHandle> {
+        return std::unexpected(RhiError::FeatureNotSupported);
+    }
+
+    auto OpenGLDevice::CreateTLASImpl(const TLASDesc&) -> RhiResult<AccelStructHandle> {
+        return std::unexpected(RhiError::FeatureNotSupported);
+    }
+
+    void OpenGLDevice::DestroyAccelStructImpl(AccelStructHandle) {}
+
+}  // namespace miki::rhi

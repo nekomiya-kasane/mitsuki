@@ -82,6 +82,18 @@
       }
     },
     {
+      "name": "debug-webgpu",
+      "inherits": "debug",
+      "displayName": "Debug + WebGPU (win-x64-clang)",
+      "binaryDir": "${sourceDir}/build/debug-webgpu",
+      "cacheVariables": {
+        "MIKI_BUILD_VULKAN": "OFF",
+        "MIKI_BUILD_D3D12": "OFF",
+        "MIKI_BUILD_OPENGL": "OFF",
+        "MIKI_BUILD_WEBGPU": "ON"
+      }
+    },
+    {
       "name": "asan",
       "inherits": "debug",
       "displayName": "Debug + ASAN (win-x64-clang)",
@@ -159,6 +171,10 @@
     {
       "name": "asan",
       "configurePreset": "asan"
+    },
+    {
+      "name": "debug-webgpu",
+      "configurePreset": "debug-webgpu"
     }
   ],
   "testPresets": [

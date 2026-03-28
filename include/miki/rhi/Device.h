@@ -70,6 +70,7 @@ namespace miki::rhi {
         [[nodiscard]] auto CreateTextureView(const TextureViewDesc& desc) -> RhiResult<TextureViewHandle> {
             return Self().CreateTextureViewImpl(desc);
         }
+        void DestroyTextureView(TextureViewHandle h) { Self().DestroyTextureViewImpl(h); }
         void DestroyTexture(TextureHandle h) { Self().DestroyTextureImpl(h); }
 
         [[nodiscard]] auto CreateSampler(const SamplerDesc& desc) -> RhiResult<SamplerHandle> {

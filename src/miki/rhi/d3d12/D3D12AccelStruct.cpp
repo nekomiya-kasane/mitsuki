@@ -59,7 +59,11 @@ namespace miki::rhi {
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
         device_->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
 
-        return {info.ResultDataMaxSizeInBytes, info.ScratchDataSizeInBytes, info.UpdateScratchDataSizeInBytes};
+        return {
+            .accelerationStructureSize = info.ResultDataMaxSizeInBytes,
+            .buildScratchSize = info.ScratchDataSizeInBytes,
+            .updateScratchSize = info.UpdateScratchDataSizeInBytes
+        };
     }
 
     auto D3D12Device::GetTLASBuildSizesImpl(const TLASDesc& desc) -> AccelStructBuildSizes {
@@ -83,7 +87,11 @@ namespace miki::rhi {
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
         device_->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
 
-        return {info.ResultDataMaxSizeInBytes, info.ScratchDataSizeInBytes, info.UpdateScratchDataSizeInBytes};
+        return {
+            .accelerationStructureSize = info.ResultDataMaxSizeInBytes,
+            .buildScratchSize = info.ScratchDataSizeInBytes,
+            .updateScratchSize = info.UpdateScratchDataSizeInBytes
+        };
     }
 
     auto D3D12Device::CreateBLASImpl(const BLASDesc& desc) -> RhiResult<AccelStructHandle> {

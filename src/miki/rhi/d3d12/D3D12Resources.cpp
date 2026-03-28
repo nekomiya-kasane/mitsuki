@@ -474,6 +474,14 @@ namespace miki::rhi {
         return handle;
     }
 
+    void D3D12Device::DestroyTextureViewImpl(TextureViewHandle h) {
+        auto* data = textureViews_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        textureViews_.Free(h);
+    }
+
     // =========================================================================
     // Sampler
     // =========================================================================

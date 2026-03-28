@@ -21,7 +21,10 @@ set(MIKI_DEMO_BACKEND "glfw" CACHE STRING "Demo windowing backend: glfw | neko")
 set_property(CACHE MIKI_DEMO_BACKEND PROPERTY STRINGS "glfw" "neko")
 
 # Testing
-option(MIKI_BUILD_TESTS  "Build unit and integration tests"    ON)
+option(MIKI_BUILD_TESTS    "Build unit and integration tests"    ON)
+
+# Examples / demos
+option(MIKI_BUILD_EXAMPLES "Build example applications"          ON)
 
 # CI mode (stricter warnings)
 option(MIKI_CI           "Enable CI mode (warnings as errors)" OFF)

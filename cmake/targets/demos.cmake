@@ -34,6 +34,32 @@ if(TARGET miki_debug AND EXISTS "${CMAKE_SOURCE_DIR}/demos/debug/logger_demo.cpp
 endif()
 
 # ---------------------------------------------------------------------------
+# RHI Triangle Demo — renders a color triangle on WebGPU or OpenGL backend
+# ---------------------------------------------------------------------------
+if(EXISTS "${CMAKE_SOURCE_DIR}/demos/rhi/rhi_triangle_demo.cpp")
+    set(_rhi_triangle_deps "")
+    if(TARGET miki_webgpu)
+        list(APPEND _rhi_triangle_deps miki_webgpu)
+    endif()
+    if(TARGET miki_opengl)
+        list(APPEND _rhi_triangle_deps miki_opengl)
+    endif()
+
+    if(_rhi_triangle_deps)
+        add_executable(rhi_triangle_demo demos/rhi/rhi_triangle_demo.cpp)
+        target_link_libraries(rhi_triangle_demo PRIVATE ${_rhi_triangle_deps} miki_rhi miki_debug glfw)
+        miki_setup_executable(rhi_triangle_demo)
+
+        if(EMSCRIPTEN)
+            set_target_properties(rhi_triangle_demo PROPERTIES
+                SUFFIX ".html"
+                LINK_FLAGS "--shell-file ${CMAKE_SOURCE_DIR}/demos/shell/miki_shell.html"
+            )
+        endif()
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Third-party demos (always built if present)
 # ---------------------------------------------------------------------------
 if(EXISTS "${CMAKE_SOURCE_DIR}/demos/thirdparty/CMakeLists.txt")

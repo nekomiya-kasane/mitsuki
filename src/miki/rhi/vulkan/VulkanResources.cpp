@@ -486,6 +486,18 @@ namespace miki::rhi {
         return handle;
     }
 
+    void VulkanDevice::DestroyTextureViewImpl(TextureViewHandle h) {
+        auto* data = textureViews_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        if (data->view != VK_NULL_HANDLE) {
+            vkDestroyImageView(device_, data->view, nullptr);
+            data->view = VK_NULL_HANDLE;
+        }
+        textureViews_.Free(h);
+    }
+
     // =========================================================================
     // Sampler
     // =========================================================================
