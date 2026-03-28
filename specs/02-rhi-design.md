@@ -901,6 +901,45 @@ void CmdInsertDebugLabel(const char* name, const float color[4]);
 
 // --- Acceleration Structure (T1 only, see §10 for types) ---
 // CmdBuildBLAS, CmdBuildTLAS, CmdUpdateBLAS are defined in §10.
+
+// --- Hardware Decompression (T1 only) ---
+// Requires GpuCapabilityProfile.hasHardwareDecompression.
+// Falls back to compute shader or CPU decode (not RHI scope) on unsupported hardware.
+enum class CompressionFormat : uint8_t {
+    GDeflate,       // NVIDIA RTX 40+ / RDNA3+ hardware decode
+    // Future: LZ4_HW, Zstd_HW
+};
+
+struct DecompressBufferDesc {
+    BufferHandle     srcBuffer;       // Compressed source
+    uint64_t         srcOffset;
+    uint64_t         srcSize;
+    BufferHandle     dstBuffer;       // Decompressed destination
+    uint64_t         dstOffset;
+    uint64_t         dstSize;         // Expected decompressed size
+    CompressionFormat format;
+};
+
+void CmdDecompressBuffer(const DecompressBufferDesc&);
+
+// --- Work Graphs (D3D12 T1 only, future) ---
+// Requires GpuCapabilityProfile.hasWorkGraphs (SM 6.8+).
+// Vulkan equivalent TBD (no extension as of 2026-Q1).
+struct WorkGraphDesc {
+    PipelineHandle   workGraphPipeline;   // Created via CreateWorkGraphPipeline (future)
+    BufferHandle     backingMemory;       // GPU-managed scratch for node records
+    uint64_t         backingMemoryOffset;
+    uint64_t         backingMemorySize;
+};
+
+struct DispatchGraphDesc {
+    WorkGraphDesc    workGraph;
+    BufferHandle     inputRecords;        // Initial node input records
+    uint64_t         inputRecordsOffset;
+    uint32_t         numRecords;          // Number of input records
+};
+
+void CmdDispatchGraph(const DispatchGraphDesc&);  // D3D12: ID3D12GraphicsCommandList10::DispatchGraph
 ```
 
 ### 7.3 Backend Mapping for Dynamic Rendering
@@ -1262,6 +1301,7 @@ struct SwapchainDesc {
     PresentMode         presentMode;       // Immediate, Mailbox, Fifo, FifoRelaxed
     SurfaceColorSpace   colorSpace;        // SRGB / HDR10_ST2084 / scRGBLinear
     uint32_t            imageCount;        // 2-3
+    bool                allowTearing;      // VRR: DXGI_PRESENT_ALLOW_TEARING / VK_PRESENT_MODE_FIFO_RELAXED
     const char*         debugName;
 };
 
@@ -1324,6 +1364,98 @@ struct ShaderModuleDesc {
 
 auto CreateShaderModule(const ShaderModuleDesc&) -> Result<ShaderModuleHandle>;
 ```
+
+### 12.1 Slang Integration Protocol
+
+miki uses **Slang** as the single shader source language. The RHI accepts pre-compiled blobs; Slang compilation is external to the RHI but follows a well-defined integration protocol.
+
+**Consumption modes**:
+
+| Mode                          | Description                                                 | Use Case                |
+| ----------------------------- | ----------------------------------------------------------- | ----------------------- |
+| **Source-compiled** (default) | Slang source → IR at build time or runtime                  | Development, hot-reload |
+| **Hybrid**                    | Prebuilt IR blobs for CI fast path, source fallback for dev | CI pipelines, shipping  |
+
+**Slang → Backend IR mapping**:
+
+| Backend             | Slang Output   | Entry Point Convention |
+| ------------------- | -------------- | ---------------------- |
+| Vulkan 1.4 / Compat | SPIR-V 1.6     | `main` (Slang default) |
+| D3D12               | DXIL (SM 6.5+) | `main`                 |
+| WebGPU              | WGSL           | `main`                 |
+| OpenGL              | GLSL 4.30      | `main`                 |
+
+**Push constant rewrite protocol**:
+
+1. **Slang layer**: Rewrites `[vk::push_constant]` declarations to target-appropriate form (WGSL `var<uniform>`, GLSL UBO)
+2. **RHI layer**: Runtime protection — validates push constant size ≤ `maxPushConstantSize`, asserts no overflow
+
+### 12.2 Shader Cache Architecture (Dual-Layer)
+
+miki employs a **dual-layer caching strategy** to minimize shader compilation latency:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Shader Cache Architecture                   │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 1: Per-Module IR Cache (Slang → SPIR-V/DXIL/WGSL)        │
+│    - Key: SHA-256(source + defines + target + Slang version)    │
+│    - Value: Compiled IR blob                                     │
+│    - Granularity: Per-module (not per-file)                      │
+│    - Invalidation: Source change, define change, Slang upgrade   │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 2: Pipeline Cache (PSO blobs)                             │
+│    - Key: SHA-256(IR blobs + pipeline state + driver version)    │
+│    - Value: Native PSO blob (VkPipelineCache / ID3D12PipelineLibrary) │
+│    - Granularity: Per-pipeline                                   │
+│    - Invalidation: IR change, state change, driver upgrade       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Layer 1: Per-Module Incremental IR Cache**
+
+```cpp
+struct ShaderModuleCacheKey {
+    std::array<uint8_t, 32> sourceHash;      // SHA-256 of Slang source
+    std::array<uint8_t, 32> definesHash;     // SHA-256 of preprocessor defines
+    ShaderTarget            target;          // SPIRV, DXIL, WGSL, GLSL
+    uint32_t                slangVersion;    // Slang compiler version
+};
+
+struct ShaderModuleCacheEntry {
+    std::vector<uint8_t>    irBlob;          // Compiled IR
+    uint64_t                timestamp;       // For LRU eviction
+};
+
+class ShaderModuleCache {
+public:
+    auto Lookup(const ShaderModuleCacheKey&) -> std::optional<ShaderModuleCacheEntry>;
+    void Insert(const ShaderModuleCacheKey&, ShaderModuleCacheEntry);
+    void Invalidate(const ShaderModuleCacheKey&);
+    void PersistToDisk(const std::filesystem::path&);
+    void LoadFromDisk(const std::filesystem::path&);
+};
+```
+
+**Layer 2: Pipeline Cache (RHI-level)**
+
+The RHI exposes `PipelineCacheHandle` (§8.4) which wraps:
+
+- Vulkan: `VkPipelineCache`
+- D3D12: `ID3D12PipelineLibrary1`
+- Others: In-memory map (no native cache)
+
+**Hot-reload granularity**: Per-module. When a Slang module changes:
+
+1. Invalidate Layer 1 cache entry for that module
+2. Recompile module → new IR blob
+3. Invalidate all Layer 2 pipeline cache entries that reference the changed module
+4. Rebuild affected pipelines (fast if other modules unchanged)
+
+**WASM/Emscripten strategy**:
+
+- **Shipping**: Offline-only — all shaders precompiled to WGSL, no runtime Slang
+- **Dev/Debug**: Optional runtime Slang-in-WASM for hot-reload (large binary, slow compile)
 
 ---
 

@@ -42,6 +42,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include(cmake/targets/miki_core.cmake)
 include(cmake/targets/miki_rhi.cmake)
 include(cmake/targets/miki_vulkan.cmake)
+include(cmake/targets/miki_d3d12.cmake)
 include(cmake/targets/miki_glfw_backend.cmake)
 include(cmake/targets/miki_debug.cmake)
 

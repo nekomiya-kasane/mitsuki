@@ -79,6 +79,30 @@ namespace miki::rhi {
     using CommandBufferHandle = Handle<struct CommandBufferTag>;
 
     // =========================================================================
+    // Pool capacities — sized for 10B triangle CAD/CAE workloads
+    // Shared by all backends (Vulkan, D3D12, WebGPU, OpenGL)
+    // =========================================================================
+
+    inline constexpr size_t kMaxBuffers = 65536;
+    inline constexpr size_t kMaxTextures = 16384;
+    inline constexpr size_t kMaxTextureViews = 32768;
+    inline constexpr size_t kMaxSamplers = 2048;
+    inline constexpr size_t kMaxShaderModules = 4096;
+    inline constexpr size_t kMaxFences = 256;
+    inline constexpr size_t kMaxSemaphores = 512;
+    inline constexpr size_t kMaxPipelines = 8192;
+    inline constexpr size_t kMaxPipelineLayouts = 4096;
+    inline constexpr size_t kMaxDescriptorLayouts = 4096;
+    inline constexpr size_t kMaxDescriptorSets = 32768;
+    inline constexpr size_t kMaxPipelineCaches = 16;
+    inline constexpr size_t kMaxPipelineLibraryParts = 4096;
+    inline constexpr size_t kMaxQueryPools = 128;
+    inline constexpr size_t kMaxAccelStructs = 8192;
+    inline constexpr size_t kMaxSwapchains = 16;
+    inline constexpr size_t kMaxCommandBuffers = 512;
+    inline constexpr size_t kMaxDeviceMemory = 1024;
+
+    // =========================================================================
     // HandlePool — fixed-capacity slot array with free-list
     // =========================================================================
 

@@ -1,16 +1,427 @@
 /** @file D3D12Device.h
  *  @brief Direct3D 12 (Tier 1) backend device.
+ *
+ *  Conditionally included by AllBackends.h only when MIKI_BUILD_D3D12=1.
+ *  Uses Agility SDK via DirectX-Headers, D3D12MA for memory management.
+ *  Enhanced Barriers (ID3D12Device10) when available, legacy fallback otherwise.
+ *  ID3D12Fence is inherently timeline — used for both fence and semaphore semantics.
+ *
+ *  Resource storage uses typed HandlePool (O(1) alloc/free/lookup, generation-safe).
  *  Namespace: miki::rhi
  */
 #pragma once
 
 #include "miki/rhi/backend/BackendStub.h"
 
+#ifndef NOMINMAX
+#    define NOMINMAX
+#endif
+
+#include <directx/d3d12.h>
+#include <directx/d3dx12.h>
+#include <dxgi1_6.h>
+#include <wrl/client.h>
+
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+
+// D3D12MA forward declaration — full include only in .cpp files
+namespace D3D12MA {
+    class Allocator;
+    class Allocation;
+}  // namespace D3D12MA
+
 namespace miki::rhi {
+
+    // =========================================================================
+    // Queue families
+    // =========================================================================
+
+    struct D3D12Queues {
+        ComPtr<ID3D12CommandQueue> graphics;
+        ComPtr<ID3D12CommandQueue> compute;
+        ComPtr<ID3D12CommandQueue> copy;
+    };
+
+    // =========================================================================
+    // Per-resource backend payloads (stored in HandlePool slots)
+    // =========================================================================
+
+    struct D3D12BufferData {
+        ComPtr<ID3D12Resource> resource;
+        D3D12MA::Allocation* allocation = nullptr;
+        void* mappedPtr = nullptr;
+        uint64_t size = 0;
+        D3D12_GPU_VIRTUAL_ADDRESS gpuAddress = 0;
+        BufferUsage usage{};
+    };
+
+    struct D3D12TextureData {
+        ComPtr<ID3D12Resource> resource;
+        D3D12MA::Allocation* allocation = nullptr;
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+        uint32_t width = 0, height = 0, depth = 0;
+        uint32_t mipLevels = 1;
+        uint32_t arrayLayers = 1;
+        bool ownsResource = true;  // false for swapchain images
+    };
+
+    struct D3D12TextureViewData {
+        D3D12_CPU_DESCRIPTOR_HANDLE srvHandle{};
+        D3D12_CPU_DESCRIPTOR_HANDLE uavHandle{};
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle{};
+        TextureHandle parentTexture;
+        bool hasSrv = false;
+        bool hasUav = false;
+        bool hasRtv = false;
+        bool hasDsv = false;
+    };
+
+    struct D3D12SamplerData {
+        D3D12_CPU_DESCRIPTOR_HANDLE handle{};
+    };
+
+    struct D3D12ShaderModuleData {
+        std::vector<uint8_t> bytecode;  // DXIL blob
+        ShaderStage stage = ShaderStage::Vertex;
+    };
+
+    struct D3D12FenceData {
+        ComPtr<ID3D12Fence> fence;
+        uint64_t value = 0;
+        HANDLE event = nullptr;  // CPU wait event
+    };
+
+    struct D3D12SemaphoreData {
+        ComPtr<ID3D12Fence> fence;  // D3D12 fences are inherently timeline
+        uint64_t value = 0;
+        SemaphoreType type = SemaphoreType::Binary;
+    };
+
+    struct D3D12PipelineData {
+        ComPtr<ID3D12PipelineState> pso;
+        ComPtr<ID3D12RootSignature> rootSignature;
+        bool isCompute = false;
+    };
+
+    struct D3D12PipelineLayoutData {
+        ComPtr<ID3D12RootSignature> rootSignature;
+        uint32_t pushConstantRootIndex = UINT32_MAX;
+        uint32_t pushConstantSize = 0;
+    };
+
+    struct D3D12DescriptorLayoutData {
+        std::vector<D3D12_DESCRIPTOR_RANGE1> ranges;
+        std::vector<D3D12_ROOT_PARAMETER1> rootParams;
+        uint32_t totalDescriptors = 0;
+    };
+
+    struct D3D12DescriptorSetData {
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle{};
+        uint32_t descriptorCount = 0;
+        uint32_t heapOffset = 0;  // Offset in the shader-visible descriptor heap
+    };
+
+    struct D3D12PipelineCacheData {
+        ComPtr<ID3D12PipelineLibrary1> library;
+        std::vector<uint8_t> blob;
+    };
+
+    struct D3D12PipelineLibraryPartData {
+        ComPtr<ID3D12PipelineState> pso;
+        PipelineLibraryPart partType = PipelineLibraryPart::VertexInput;
+    };
+
+    struct D3D12QueryPoolData {
+        ComPtr<ID3D12QueryHeap> heap;
+        ComPtr<ID3D12Resource> readbackBuffer;
+        uint32_t count = 0;
+        QueryType type = QueryType::Timestamp;
+    };
+
+    struct D3D12AccelStructData {
+        ComPtr<ID3D12Resource> resource;
+        D3D12MA::Allocation* allocation = nullptr;
+        D3D12_GPU_VIRTUAL_ADDRESS gpuAddress = 0;
+        bool isTLAS = false;
+    };
+
+    struct D3D12SwapchainData {
+        ComPtr<IDXGISwapChain4> swapchain;
+        std::vector<ComPtr<ID3D12Resource>> backBuffers;
+        std::vector<TextureHandle> textureHandles;
+        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtvHandles;
+        DXGI_FORMAT format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        uint32_t width = 0, height = 0;
+        uint32_t currentBackBufferIndex = 0;
+        HWND hwnd = nullptr;
+    };
+
+    struct D3D12CommandBufferData {
+        ComPtr<ID3D12CommandAllocator> allocator;
+        ComPtr<ID3D12GraphicsCommandList7> list;
+        QueueType queueType = QueueType::Graphics;
+        bool isSecondary = false;
+    };
+
+    struct D3D12DeviceMemoryData {
+        ComPtr<ID3D12Heap> heap;
+        uint64_t size = 0;
+    };
+
+    // =========================================================================
+    // Descriptor heap management
+    // =========================================================================
+
+    struct D3D12DescriptorHeapAllocator {
+        ComPtr<ID3D12DescriptorHeap> heap;
+        uint32_t capacity = 0;
+        uint32_t allocatedCount = 0;
+        uint32_t descriptorSize = 0;
+
+        auto Allocate(uint32_t count) -> uint32_t {
+            if (allocatedCount + count > capacity) {
+                return UINT32_MAX;
+            }
+            uint32_t offset = allocatedCount;
+            allocatedCount += count;
+            return offset;
+        }
+
+        auto GetCpuHandle(uint32_t offset) const -> D3D12_CPU_DESCRIPTOR_HANDLE {
+            D3D12_CPU_DESCRIPTOR_HANDLE h = heap->GetCPUDescriptorHandleForHeapStart();
+            h.ptr += static_cast<SIZE_T>(offset) * descriptorSize;
+            return h;
+        }
+
+        auto GetGpuHandle(uint32_t offset) const -> D3D12_GPU_DESCRIPTOR_HANDLE {
+            D3D12_GPU_DESCRIPTOR_HANDLE h = heap->GetGPUDescriptorHandleForHeapStart();
+            h.ptr += static_cast<UINT64>(offset) * descriptorSize;
+            return h;
+        }
+    };
+
+    // =========================================================================
+    // D3D12Device — Tier 1 backend
+    // =========================================================================
+
+    struct D3D12DeviceDesc {
+        bool enableValidation = true;
+        bool enableGpuCapture = false;
+        uint32_t adapterIndex = 0;
+    };
 
     class D3D12Device : public DeviceBase<D3D12Device> {
        public:
-        MIKI_DEVICE_STUB_IMPL(D3D12Device) { return BackendType::D3D12; }
+        D3D12Device() = default;
+        ~D3D12Device();
+
+        D3D12Device(const D3D12Device&) = delete;
+        auto operator=(const D3D12Device&) -> D3D12Device& = delete;
+        D3D12Device(D3D12Device&&) = delete;
+        auto operator=(D3D12Device&&) -> D3D12Device& = delete;
+
+        [[nodiscard]] auto Init(const D3D12DeviceDesc& desc = {}) -> RhiResult<void>;
+
+        // -- Native accessors --
+        [[nodiscard]] auto GetD3D12Device() const noexcept -> ID3D12Device10* { return device_.Get(); }
+        [[nodiscard]] auto GetGraphicsQueue() const noexcept -> ID3D12CommandQueue* { return queues_.graphics.Get(); }
+        [[nodiscard]] auto GetDXGIFactory() const noexcept -> IDXGIFactory6* { return factory_.Get(); }
+
+        // -- Capability --
+        auto GetBackendTypeImpl() const -> BackendType { return BackendType::D3D12; }
+        auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
+
+        // -- Swapchain (D3D12Swapchain.cpp) --
+        auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
+        void DestroySwapchainImpl(SwapchainHandle h);
+        auto ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void>;
+        auto AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence) -> RhiResult<uint32_t>;
+        auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
+        void PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores);
+
+        // -- Sync (D3D12Device.cpp) --
+        auto CreateFenceImpl(bool signaled) -> RhiResult<FenceHandle>;
+        void DestroyFenceImpl(FenceHandle h);
+        void WaitFenceImpl(FenceHandle h, uint64_t timeout);
+        void ResetFenceImpl(FenceHandle h);
+        auto GetFenceStatusImpl(FenceHandle h) -> bool;
+
+        auto CreateSemaphoreImpl(const SemaphoreDesc& desc) -> RhiResult<SemaphoreHandle>;
+        void DestroySemaphoreImpl(SemaphoreHandle h);
+        void SignalSemaphoreImpl(SemaphoreHandle h, uint64_t value);
+        void WaitSemaphoreImpl(SemaphoreHandle h, uint64_t value, uint64_t timeout);
+        auto GetSemaphoreValueImpl(SemaphoreHandle h) -> uint64_t;
+
+        void WaitIdleImpl();
+        void SubmitImpl(QueueType queue, const SubmitDesc& desc);
+
+        // -- Resources (D3D12Resources.cpp) --
+        auto CreateBufferImpl(const BufferDesc& desc) -> RhiResult<BufferHandle>;
+        void DestroyBufferImpl(BufferHandle h);
+        auto MapBufferImpl(BufferHandle h) -> RhiResult<void*>;
+        void UnmapBufferImpl(BufferHandle h);
+        auto GetBufferDeviceAddressImpl(BufferHandle h) -> uint64_t;
+
+        auto CreateTextureImpl(const TextureDesc& desc) -> RhiResult<TextureHandle>;
+        auto CreateTextureViewImpl(const TextureViewDesc& desc) -> RhiResult<TextureViewHandle>;
+        void DestroyTextureImpl(TextureHandle h);
+
+        auto CreateSamplerImpl(const SamplerDesc& desc) -> RhiResult<SamplerHandle>;
+        void DestroySamplerImpl(SamplerHandle h);
+
+        // -- Memory aliasing (D3D12Resources.cpp) --
+        auto CreateMemoryHeapImpl(const MemoryHeapDesc& desc) -> RhiResult<DeviceMemoryHandle>;
+        void DestroyMemoryHeapImpl(DeviceMemoryHandle h);
+        void AliasBufferMemoryImpl(BufferHandle buf, DeviceMemoryHandle heap, uint64_t offset);
+        void AliasTextureMemoryImpl(TextureHandle tex, DeviceMemoryHandle heap, uint64_t offset);
+        auto GetBufferMemoryRequirementsImpl(BufferHandle h) -> MemoryRequirements;
+        auto GetTextureMemoryRequirementsImpl(TextureHandle h) -> MemoryRequirements;
+
+        // -- Sparse binding (D3D12Resources.cpp) --
+        auto GetSparsePageSizeImpl() const -> SparsePageSize;
+        void SubmitSparseBindsImpl(
+            QueueType queue, const SparseBindDesc& binds, std::span<const SemaphoreSubmitInfo> wait,
+            std::span<const SemaphoreSubmitInfo> signal
+        );
+
+        // -- Shader (D3D12Resources.cpp) --
+        auto CreateShaderModuleImpl(const ShaderModuleDesc& desc) -> RhiResult<ShaderModuleHandle>;
+        void DestroyShaderModuleImpl(ShaderModuleHandle h);
+
+        // -- Descriptors (D3D12Descriptors.cpp) --
+        auto CreateDescriptorLayoutImpl(const DescriptorLayoutDesc& desc) -> RhiResult<DescriptorLayoutHandle>;
+        void DestroyDescriptorLayoutImpl(DescriptorLayoutHandle h);
+        auto CreatePipelineLayoutImpl(const PipelineLayoutDesc& desc) -> RhiResult<PipelineLayoutHandle>;
+        void DestroyPipelineLayoutImpl(PipelineLayoutHandle h);
+        auto CreateDescriptorSetImpl(const DescriptorSetDesc& desc) -> RhiResult<DescriptorSetHandle>;
+        void UpdateDescriptorSetImpl(DescriptorSetHandle h, std::span<const DescriptorWrite> writes);
+        void DestroyDescriptorSetImpl(DescriptorSetHandle h);
+
+        // -- Pipelines (D3D12Pipelines.cpp) --
+        auto CreateGraphicsPipelineImpl(const GraphicsPipelineDesc& desc) -> RhiResult<PipelineHandle>;
+        auto CreateComputePipelineImpl(const ComputePipelineDesc& desc) -> RhiResult<PipelineHandle>;
+        auto CreateRayTracingPipelineImpl(const RayTracingPipelineDesc& desc) -> RhiResult<PipelineHandle>;
+        void DestroyPipelineImpl(PipelineHandle h);
+
+        auto CreatePipelineCacheImpl(std::span<const uint8_t> initialData) -> RhiResult<PipelineCacheHandle>;
+        auto GetPipelineCacheDataImpl(PipelineCacheHandle h) -> std::vector<uint8_t>;
+        void DestroyPipelineCacheImpl(PipelineCacheHandle h);
+
+        auto CreatePipelineLibraryPartImpl(const PipelineLibraryPartDesc& desc) -> RhiResult<PipelineLibraryPartHandle>;
+        auto LinkGraphicsPipelineImpl(const LinkedPipelineDesc& desc) -> RhiResult<PipelineHandle>;
+
+        // -- Command buffers (D3D12CommandBuffer.cpp) --
+        auto CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle>;
+        void DestroyCommandBufferImpl(CommandBufferHandle h);
+
+        // -- Query (D3D12Query.cpp) --
+        auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;
+        void DestroyQueryPoolImpl(QueryPoolHandle h);
+        auto GetQueryResultsImpl(QueryPoolHandle h, uint32_t first, uint32_t count, std::span<uint64_t> results)
+            -> RhiResult<void>;
+        auto GetTimestampPeriodImpl() -> double;
+
+        // -- Acceleration structure (D3D12AccelStruct.cpp) --
+        auto GetBLASBuildSizesImpl(const BLASDesc& desc) -> AccelStructBuildSizes;
+        auto GetTLASBuildSizesImpl(const TLASDesc& desc) -> AccelStructBuildSizes;
+        auto CreateBLASImpl(const BLASDesc& desc) -> RhiResult<AccelStructHandle>;
+        auto CreateTLASImpl(const TLASDesc& desc) -> RhiResult<AccelStructHandle>;
+        void DestroyAccelStructImpl(AccelStructHandle h);
+
+        // -- Memory stats --
+        auto GetMemoryStatsImpl() const -> MemoryStats;
+        auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t;
+
+        // -- HandlePool accessors (for D3D12CommandBuffer cross-file access) --
+        auto GetBufferPool() -> HandlePool<D3D12BufferData, BufferTag, kMaxBuffers>& { return buffers_; }
+        auto GetTexturePool() -> HandlePool<D3D12TextureData, TextureTag, kMaxTextures>& { return textures_; }
+        auto GetTextureViewPool() -> HandlePool<D3D12TextureViewData, TextureViewTag, kMaxTextureViews>& {
+            return textureViews_;
+        }
+        auto GetSamplerPool() -> HandlePool<D3D12SamplerData, SamplerTag, kMaxSamplers>& { return samplers_; }
+        auto GetPipelinePool() -> HandlePool<D3D12PipelineData, PipelineTag, kMaxPipelines>& { return pipelines_; }
+        auto GetPipelineLayoutPool() -> HandlePool<D3D12PipelineLayoutData, PipelineLayoutTag, kMaxPipelineLayouts>& {
+            return pipelineLayouts_;
+        }
+        auto GetDescriptorSetPool() -> HandlePool<D3D12DescriptorSetData, DescriptorSetTag, kMaxDescriptorSets>& {
+            return descriptorSets_;
+        }
+        auto GetFencePool() -> HandlePool<D3D12FenceData, FenceTag, kMaxFences>& { return fences_; }
+        auto GetSemaphorePool() -> HandlePool<D3D12SemaphoreData, SemaphoreTag, kMaxSemaphores>& { return semaphores_; }
+        auto GetQueryPoolPool() -> HandlePool<D3D12QueryPoolData, QueryPoolTag, kMaxQueryPools>& { return queryPools_; }
+        auto GetAccelStructPool() -> HandlePool<D3D12AccelStructData, AccelStructTag, kMaxAccelStructs>& {
+            return accelStructs_;
+        }
+        auto GetCommandBufferPool() -> HandlePool<D3D12CommandBufferData, CommandBufferTag, kMaxCommandBuffers>& {
+            return commandBuffers_;
+        }
+        auto GetShaderModulePool() -> HandlePool<D3D12ShaderModuleData, ShaderModuleTag, kMaxShaderModules>& {
+            return shaderModules_;
+        }
+        auto GetShaderVisibleHeap() -> D3D12DescriptorHeapAllocator& { return shaderVisibleCbvSrvUav_; }
+        auto GetShaderVisibleSamplerHeap() -> D3D12DescriptorHeapAllocator& { return shaderVisibleSampler_; }
+
+       private:
+        // -- DXGI / D3D12 core objects --
+        ComPtr<IDXGIFactory6> factory_;
+        ComPtr<IDXGIAdapter4> adapter_;
+        ComPtr<ID3D12Device10> device_;
+        ComPtr<ID3D12Debug6> debugController_;
+        D3D12MA::Allocator* allocator_ = nullptr;
+
+        // -- Queues --
+        D3D12Queues queues_;
+
+        // -- Internal fence for frame synchronization --
+        ComPtr<ID3D12Fence> frameFence_;
+        uint64_t frameFenceValue_ = 0;
+        HANDLE frameFenceEvent_ = nullptr;
+
+        // -- Capabilities --
+        GpuCapabilityProfile capabilities_;
+        bool hasEnhancedBarriers_ = false;
+        D3D_FEATURE_LEVEL featureLevel_ = D3D_FEATURE_LEVEL_12_0;
+
+        // -- Descriptor heaps --
+        D3D12DescriptorHeapAllocator rtvHeap_;                 // Render target views (CPU-only)
+        D3D12DescriptorHeapAllocator dsvHeap_;                 // Depth-stencil views (CPU-only)
+        D3D12DescriptorHeapAllocator shaderVisibleCbvSrvUav_;  // Shader-visible CBV/SRV/UAV
+        D3D12DescriptorHeapAllocator shaderVisibleSampler_;    // Shader-visible samplers
+        D3D12DescriptorHeapAllocator stagingCbvSrvUav_;        // CPU-only staging for copies
+        D3D12DescriptorHeapAllocator stagingSampler_;          // CPU-only staging for sampler copies
+
+        // -- Resource pools (same capacities as Vulkan backend) --
+        HandlePool<D3D12BufferData, BufferTag, kMaxBuffers> buffers_;
+        HandlePool<D3D12TextureData, TextureTag, kMaxTextures> textures_;
+        HandlePool<D3D12TextureViewData, TextureViewTag, kMaxTextureViews> textureViews_;
+        HandlePool<D3D12SamplerData, SamplerTag, kMaxSamplers> samplers_;
+        HandlePool<D3D12ShaderModuleData, ShaderModuleTag, kMaxShaderModules> shaderModules_;
+        HandlePool<D3D12FenceData, FenceTag, kMaxFences> fences_;
+        HandlePool<D3D12SemaphoreData, SemaphoreTag, kMaxSemaphores> semaphores_;
+        HandlePool<D3D12PipelineData, PipelineTag, kMaxPipelines> pipelines_;
+        HandlePool<D3D12PipelineLayoutData, PipelineLayoutTag, kMaxPipelineLayouts> pipelineLayouts_;
+        HandlePool<D3D12DescriptorLayoutData, DescriptorLayoutTag, kMaxDescriptorLayouts> descriptorLayouts_;
+        HandlePool<D3D12DescriptorSetData, DescriptorSetTag, kMaxDescriptorSets> descriptorSets_;
+        HandlePool<D3D12PipelineCacheData, PipelineCacheTag, kMaxPipelineCaches> pipelineCaches_;
+        HandlePool<D3D12PipelineLibraryPartData, PipelineLibraryPartTag, kMaxPipelineLibraryParts>
+            pipelineLibraryParts_;
+        HandlePool<D3D12QueryPoolData, QueryPoolTag, kMaxQueryPools> queryPools_;
+        HandlePool<D3D12AccelStructData, AccelStructTag, kMaxAccelStructs> accelStructs_;
+        HandlePool<D3D12SwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
+        HandlePool<D3D12CommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
+        HandlePool<D3D12DeviceMemoryData, DeviceMemoryTag, kMaxDeviceMemory> deviceMemory_;
+
+        // -- Init helpers --
+        auto CreateFactory(bool enableValidation) -> RhiResult<void>;
+        auto SelectAdapter(uint32_t adapterIndex) -> RhiResult<void>;
+        auto CreateDevice() -> RhiResult<void>;
+        auto CreateAllocator() -> RhiResult<void>;
+        auto CreateQueues() -> RhiResult<void>;
+        auto CreateDescriptorHeaps() -> RhiResult<void>;
+        void PopulateCapabilities();
     };
 
 }  // namespace miki::rhi

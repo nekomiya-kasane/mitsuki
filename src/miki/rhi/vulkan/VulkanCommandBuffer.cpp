@@ -967,4 +967,13 @@ namespace miki::rhi {
         // Deferred: requires runtime extension check
     }
 
+    // =========================================================================
+    // Work Graphs (not supported on Vulkan)
+    // =========================================================================
+
+    void VulkanCommandBuffer::CmdDispatchGraphImpl(const DispatchGraphDesc& /*desc*/) {
+        // Work graphs are D3D12-only (SM 6.8). No Vulkan equivalent as of 2026-Q1.
+        // No-op on Vulkan backend.
+    }
+
 }  // namespace miki::rhi

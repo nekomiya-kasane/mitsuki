@@ -166,4 +166,25 @@ namespace miki::rhi {
         uint32_t viewMask = 0;  ///< Multiview (XR)
     };
 
+    // =========================================================================
+    // Work Graphs (D3D12 T1 only, future)
+    // =========================================================================
+
+    /// Work graph descriptor for CmdDispatchGraph.
+    /// Requires GpuCapabilityProfile.hasWorkGraphs (SM 6.8+).
+    struct WorkGraphDesc {
+        PipelineHandle workGraphPipeline;  ///< Created via CreateWorkGraphPipeline (future)
+        BufferHandle backingMemory;        ///< GPU-managed scratch for node records
+        uint64_t backingMemoryOffset = 0;
+        uint64_t backingMemorySize = 0;
+    };
+
+    /// Dispatch graph descriptor for CmdDispatchGraph.
+    struct DispatchGraphDesc {
+        WorkGraphDesc workGraph;
+        BufferHandle inputRecords;  ///< Initial node input records
+        uint64_t inputRecordsOffset = 0;
+        uint32_t numRecords = 0;  ///< Number of input records
+    };
+
 }  // namespace miki::rhi

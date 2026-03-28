@@ -206,6 +206,9 @@ namespace miki::rhi {
         // --- Decompression (T1 only, future) ---
         void CmdDecompressBuffer(const DecompressBufferDesc& desc) { self().CmdDecompressBufferImpl(desc); }
 
+        // --- Work Graphs (D3D12 T1 only, future) ---
+        void CmdDispatchGraph(const DispatchGraphDesc& desc) { self().CmdDispatchGraphImpl(desc); }
+
        private:
         [[nodiscard]] auto self() noexcept -> Impl& { return static_cast<Impl&>(*this); }
         [[nodiscard]] auto self() const noexcept -> const Impl& { return static_cast<const Impl&>(*this); }

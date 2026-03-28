@@ -45,6 +45,7 @@ namespace miki::rhi {
         PresentMode presentMode = PresentMode::Fifo;
         SurfaceColorSpace colorSpace = SurfaceColorSpace::SRGB;
         uint32_t imageCount = 2;
+        bool allowTearing = false;  ///< Enable VRR tearing (DXGI_PRESENT_ALLOW_TEARING / VK_PRESENT_MODE_FIFO_RELAXED)
         const char* debugName = nullptr;
     };
 

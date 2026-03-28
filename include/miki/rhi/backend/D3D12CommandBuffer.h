@@ -1,32 +1,32 @@
-/** @file VulkanCommandBuffer.h
- *  @brief Vulkan 1.4 backend command buffer — CRTP implementation.
+/** @file D3D12CommandBuffer.h
+ *  @brief D3D12 (Tier 1) backend command buffer — CRTP implementation.
  *
- *  VulkanCommandBuffer inherits CommandBufferBase<VulkanCommandBuffer> and
- *  implements all *Impl methods using direct Vulkan API calls.
- *  All commands are recorded into a VkCommandBuffer with zero overhead.
+ *  D3D12CommandBuffer inherits CommandBufferBase<D3D12CommandBuffer> and
+ *  implements all *Impl methods using direct D3D12 API calls.
+ *  Uses ID3D12GraphicsCommandList7 for Enhanced Barriers + mesh shaders.
  *
- *  This header is only included when MIKI_BUILD_VULKAN=1.
+ *  This header is only included when MIKI_BUILD_D3D12=1.
  *  Namespace: miki::rhi
  */
 #pragma once
 
 #include "miki/rhi/CommandBuffer.h"
-#include "miki/rhi/backend/VulkanDevice.h"
+#include "miki/rhi/backend/D3D12Device.h"
 
 namespace miki::rhi {
 
-    class VulkanCommandBuffer : public CommandBufferBase<VulkanCommandBuffer> {
+    class D3D12CommandBuffer : public CommandBufferBase<D3D12CommandBuffer> {
        public:
-        VulkanCommandBuffer() = default;
+        D3D12CommandBuffer() = default;
 
-        void Init(VulkanDevice* device, VkCommandBuffer cmd, VkCommandPool pool, QueueType queueType) {
+        void Init(D3D12Device* device, ID3D12GraphicsCommandList7* cmd, ID3D12CommandAllocator* alloc, QueueType qt) {
             device_ = device;
             cmd_ = cmd;
-            pool_ = pool;
-            queueType_ = queueType;
+            allocator_ = alloc;
+            queueType_ = qt;
         }
 
-        [[nodiscard]] auto GetVkCommandBuffer() const noexcept -> VkCommandBuffer { return cmd_; }
+        [[nodiscard]] auto GetCommandList() const noexcept -> ID3D12GraphicsCommandList7* { return cmd_; }
 
         // --- Lifecycle ---
         void BeginImpl();
@@ -121,16 +121,17 @@ namespace miki::rhi {
         // --- Decompression ---
         void CmdDecompressBufferImpl(const DecompressBufferDesc& desc);
 
-        // --- Work Graphs (not supported on Vulkan, no-op) ---
+        // --- Work Graphs (D3D12 SM 6.8+) ---
         void CmdDispatchGraphImpl(const DispatchGraphDesc& desc);
 
        private:
-        VulkanDevice* device_ = nullptr;
-        VkCommandBuffer cmd_ = VK_NULL_HANDLE;
-        VkCommandPool pool_ = VK_NULL_HANDLE;
+        D3D12Device* device_ = nullptr;
+        ID3D12GraphicsCommandList7* cmd_ = nullptr;
+        ID3D12CommandAllocator* allocator_ = nullptr;
         QueueType queueType_ = QueueType::Graphics;
-        VkPipelineLayout currentPipelineLayout_ = VK_NULL_HANDLE;
-        VkPipelineBindPoint currentBindPoint_ = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        ID3D12RootSignature* currentRootSignature_ = nullptr;
+        bool currentIsCompute_ = false;
+        uint32_t currentPushConstantRootIndex_ = UINT32_MAX;
     };
 
 }  // namespace miki::rhi
