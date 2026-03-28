@@ -4,8 +4,9 @@
 
 #include "miki/rhi/backend/VulkanDevice.h"
 
+#include "miki/debug/StructuredLogger.h"
+
 #include <algorithm>
-#include <iostream>
 #include <limits>
 
 namespace miki::rhi {
@@ -175,18 +176,20 @@ namespace miki::rhi {
             textureHandles.push_back(TextureHandle{static_cast<uint64_t>(i + 1)});
         }
 
-        // Store in map
-        auto id = AllocHandle();
-        swapchains_[id] = VulkanSwapchainData{
-            .swapchain = swapchain,
-            .surface = surface,
-            .images = std::move(images),
-            .textureHandles = std::move(textureHandles),
-            .format = createInfo.imageFormat,
-            .extent = extent,
-        };
+        auto [handle, data] = swapchains_.Allocate();
+        if (!data) {
+            vkDestroySwapchainKHR(device_, swapchain, nullptr);
+            vkDestroySurfaceKHR(instance_, surface, nullptr);
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        data->swapchain = swapchain;
+        data->surface = surface;
+        data->images = std::move(images);
+        data->textureHandles = std::move(textureHandles);
+        data->format = createInfo.imageFormat;
+        data->extent = extent;
 
-        return SwapchainHandle{id};
+        return handle;
     }
 
     // =========================================================================
@@ -194,15 +197,15 @@ namespace miki::rhi {
     // =========================================================================
 
     void VulkanDevice::DestroySwapchainImpl(SwapchainHandle h) {
-        auto it = swapchains_.find(h.value);
-        if (it == swapchains_.end()) {
+        auto* data = swapchains_.Lookup(h);
+        if (!data) {
             return;
         }
 
         vkDeviceWaitIdle(device_);
-        vkDestroySwapchainKHR(device_, it->second.swapchain, nullptr);
-        vkDestroySurfaceKHR(instance_, it->second.surface, nullptr);
-        swapchains_.erase(it);
+        vkDestroySwapchainKHR(device_, data->swapchain, nullptr);
+        vkDestroySurfaceKHR(instance_, data->surface, nullptr);
+        swapchains_.Free(h);
     }
 
     // =========================================================================
@@ -210,17 +213,15 @@ namespace miki::rhi {
     // =========================================================================
 
     auto VulkanDevice::ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void> {
-        auto it = swapchains_.find(h.value);
-        if (it == swapchains_.end()) {
-            return std::unexpected(RhiError::DeviceLost);
+        auto* data = swapchains_.Lookup(h);
+        if (!data) {
+            return std::unexpected(RhiError::InvalidHandle);
         }
-
-        auto& data = it->second;
         vkDeviceWaitIdle(device_);
 
         // Query updated capabilities
         VkSurfaceCapabilitiesKHR capabilities;
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, data.surface, &capabilities);
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, data->surface, &capabilities);
 
         VkExtent2D extent;
         if (capabilities.currentExtent.width != UINT32_MAX) {
@@ -232,9 +233,9 @@ namespace miki::rhi {
 
         VkSwapchainCreateInfoKHR createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        createInfo.surface = data.surface;
-        createInfo.minImageCount = static_cast<uint32_t>(data.images.size());
-        createInfo.imageFormat = data.format;
+        createInfo.surface = data->surface;
+        createInfo.minImageCount = static_cast<uint32_t>(data->images.size());
+        createInfo.imageFormat = data->format;
         createInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;  // Preserved from original
         createInfo.imageExtent = extent;
         createInfo.imageArrayLayers = 1;
@@ -244,31 +245,29 @@ namespace miki::rhi {
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;  // Preserved from original
         createInfo.clipped = VK_TRUE;
-        createInfo.oldSwapchain = data.swapchain;
+        createInfo.oldSwapchain = data->swapchain;
 
-        VkSwapchainKHR newSwapchain;
+        VkSwapchainKHR newSwapchain = VK_NULL_HANDLE;
         VkResult result = vkCreateSwapchainKHR(device_, &createInfo, nullptr, &newSwapchain);
 
-        // Destroy old swapchain (must happen after create with oldSwapchain)
-        vkDestroySwapchainKHR(device_, data.swapchain, nullptr);
+        vkDestroySwapchainKHR(device_, data->swapchain, nullptr);
 
         if (result != VK_SUCCESS) {
-            data.swapchain = VK_NULL_HANDLE;
+            data->swapchain = VK_NULL_HANDLE;
             return std::unexpected(RhiError::DeviceLost);
         }
 
-        data.swapchain = newSwapchain;
-        data.extent = extent;
+        data->swapchain = newSwapchain;
+        data->extent = extent;
 
-        // Re-query images
         uint32_t imageCount = 0;
         vkGetSwapchainImagesKHR(device_, newSwapchain, &imageCount, nullptr);
-        data.images.resize(imageCount);
-        vkGetSwapchainImagesKHR(device_, newSwapchain, &imageCount, data.images.data());
+        data->images.resize(imageCount);
+        vkGetSwapchainImagesKHR(device_, newSwapchain, &imageCount, data->images.data());
 
-        data.textureHandles.resize(imageCount);
+        data->textureHandles.resize(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
-            data.textureHandles[i] = TextureHandle{static_cast<uint64_t>(i + 1)};
+            data->textureHandles[i] = TextureHandle{static_cast<uint64_t>(i + 1)};
         }
 
         return {};
@@ -280,34 +279,33 @@ namespace miki::rhi {
 
     auto VulkanDevice::AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence)
         -> RhiResult<uint32_t> {
-        auto scIt = swapchains_.find(h.value);
-        if (scIt == swapchains_.end()) {
-            return std::unexpected(RhiError::DeviceLost);
+        auto* scData = swapchains_.Lookup(h);
+        if (!scData) {
+            return std::unexpected(RhiError::InvalidHandle);
         }
 
         VkSemaphore vkSem = VK_NULL_HANDLE;
         if (signal.IsValid()) {
-            auto semIt = semaphores_.find(signal.value);
-            if (semIt != semaphores_.end()) {
-                vkSem = semIt->second;
+            auto* semData = semaphores_.Lookup(signal);
+            if (semData) {
+                vkSem = semData->semaphore;
             }
         }
 
         VkFence vkFence = VK_NULL_HANDLE;
         if (fence.IsValid()) {
-            auto fenceIt = fences_.find(fence.value);
-            if (fenceIt != fences_.end()) {
-                vkFence = fenceIt->second;
+            auto* fenceData = fences_.Lookup(fence);
+            if (fenceData) {
+                vkFence = fenceData->fence;
             }
         }
 
         uint32_t imageIndex = 0;
         VkResult result = vkAcquireNextImageKHR(
-            device_, scIt->second.swapchain, std::numeric_limits<uint64_t>::max(), vkSem, vkFence, &imageIndex
+            device_, scData->swapchain, std::numeric_limits<uint64_t>::max(), vkSem, vkFence, &imageIndex
         );
 
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            // Caller should handle resize via RenderSurface::Resize
             if (result == VK_ERROR_OUT_OF_DATE_KHR) {
                 return std::unexpected(RhiError::DeviceLost);
             }
@@ -316,6 +314,7 @@ namespace miki::rhi {
             return std::unexpected(RhiError::DeviceLost);
         }
 
+        scData->lastAcquiredIndex = imageIndex;
         return imageIndex;
     }
 
@@ -324,11 +323,11 @@ namespace miki::rhi {
     // =========================================================================
 
     auto VulkanDevice::GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle {
-        auto it = swapchains_.find(h.value);
-        if (it == swapchains_.end() || imageIndex >= it->second.textureHandles.size()) {
+        auto* data = swapchains_.Lookup(h);
+        if (!data || imageIndex >= data->textureHandles.size()) {
             return {};
         }
-        return it->second.textureHandles[imageIndex];
+        return data->textureHandles[imageIndex];
     }
 
     // =========================================================================
@@ -336,43 +335,35 @@ namespace miki::rhi {
     // =========================================================================
 
     void VulkanDevice::PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores) {
-        auto scIt = swapchains_.find(h.value);
-        if (scIt == swapchains_.end()) {
+        auto* scData = swapchains_.Lookup(h);
+        if (!scData) {
             return;
         }
 
-        // Resolve wait semaphores
         std::vector<VkSemaphore> vkWaitSems;
         vkWaitSems.reserve(waitSemaphores.size());
         for (auto& sem : waitSemaphores) {
             if (sem.IsValid()) {
-                auto semIt = semaphores_.find(sem.value);
-                if (semIt != semaphores_.end()) {
-                    vkWaitSems.push_back(semIt->second);
+                auto* semData = semaphores_.Lookup(sem);
+                if (semData) {
+                    vkWaitSems.push_back(semData->semaphore);
                 }
             }
         }
 
-        // We need the current image index. Since AcquireNextImage returned it,
-        // the caller is responsible for tracking it. For Present, we need it passed in.
-        // However, our API passes SwapchainHandle — we need to track the last acquired index.
-        // For now, use imageIndex 0 as placeholder — this will be properly wired
-        // when FrameManager tracks the acquired index per-swapchain.
-        // TODO(Phase-Backend): Track last acquired image index in VulkanSwapchainData.
-        uint32_t imageIndex = 0;
+        uint32_t imageIndex = scData->lastAcquiredIndex;
 
         VkPresentInfoKHR presentInfo{};
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         presentInfo.waitSemaphoreCount = static_cast<uint32_t>(vkWaitSems.size());
         presentInfo.pWaitSemaphores = vkWaitSems.data();
         presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = &scIt->second.swapchain;
+        presentInfo.pSwapchains = &scData->swapchain;
         presentInfo.pImageIndices = &imageIndex;
 
         VkResult result = vkQueuePresentKHR(presentQueue_, &presentInfo);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            // Swapchain needs recreation — caller handles via resize
-            std::cerr << "[Vulkan] Present: swapchain out of date or suboptimal\n";
+            MIKI_LOG_WARN(::miki::debug::LogCategory::Rhi, "[Vulkan] Present: swapchain out of date or suboptimal");
         }
     }
 

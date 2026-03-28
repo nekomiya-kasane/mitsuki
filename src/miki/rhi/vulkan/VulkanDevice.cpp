@@ -1,12 +1,18 @@
 /** @file VulkanDevice.cpp
- *  @brief Vulkan 1.4 backend — instance, device, queue init + sync primitives.
+ *  @brief Vulkan 1.4 backend — instance, device, queue init, VMA, timeline semaphores,
+ *         capability population, sync primitives, submit.
  */
 
 #include "miki/rhi/backend/VulkanDevice.h"
 
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#include <vk_mem_alloc.h>
+
+#include "miki/debug/StructuredLogger.h"
+
 #include <algorithm>
 #include <cstring>
-#include <iostream>
 #include <vector>
 
 namespace miki::rhi {
@@ -15,15 +21,24 @@ namespace miki::rhi {
     // Debug messenger callback
     // =========================================================================
 
-    static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
-        VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT /*type*/,
-        const VkDebugUtilsMessengerCallbackDataEXT* callbackData, void* /*userData*/
-    ) {
-        if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-            std::cerr << "[Vulkan] " << callbackData->pMessage << "\n";
+    namespace {
+        VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
+            VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT /*type*/,
+            const VkDebugUtilsMessengerCallbackDataEXT* callbackData, void* /*userData*/
+        ) {
+            using enum ::miki::debug::LogCategory;
+            if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+                MIKI_LOG_ERROR(Rhi, "[Vulkan] {}", callbackData->pMessage);
+            } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+                MIKI_LOG_WARN(Rhi, "[Vulkan] {}", callbackData->pMessage);
+            } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+                MIKI_LOG_INFO(Rhi, "[Vulkan] {}", callbackData->pMessage);
+            } else {
+                MIKI_LOG_TRACE(Rhi, "[Vulkan] {}", callbackData->pMessage);
+            }
+            return VK_FALSE;
         }
-        return VK_FALSE;
-    }
+    }  // namespace
 
     // =========================================================================
     // Instance creation
@@ -38,7 +53,6 @@ namespace miki::rhi {
         appInfo.engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
         appInfo.apiVersion = VK_API_VERSION_1_4;
 
-        // Required extensions
         std::vector<const char*> extensions = {
             VK_KHR_SURFACE_EXTENSION_NAME,
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -78,7 +92,6 @@ namespace miki::rhi {
 
         volkLoadInstance(instance_);
 
-        // Setup debug messenger
         if (desc.enableDebugMessenger) {
             VkDebugUtilsMessengerCreateInfoEXT messengerInfo{};
             messengerInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -111,7 +124,6 @@ namespace miki::rhi {
         std::vector<VkPhysicalDevice> devices(deviceCount);
         vkEnumeratePhysicalDevices(instance_, &deviceCount, devices.data());
 
-        // Prefer discrete GPU, then integrated
         VkPhysicalDevice bestDevice = VK_NULL_HANDLE;
         int bestScore = -1;
 
@@ -126,7 +138,6 @@ namespace miki::rhi {
                 score = 100;
             }
 
-            // Check Vulkan 1.4 support
             if (VK_API_VERSION_MAJOR(props.apiVersion) >= 1 && VK_API_VERSION_MINOR(props.apiVersion) >= 4) {
                 score += 500;
             }
@@ -142,7 +153,6 @@ namespace miki::rhi {
         }
         physicalDevice_ = bestDevice;
 
-        // Find queue families
         uint32_t queueFamilyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &queueFamilyCount, nullptr);
         std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
@@ -153,7 +163,7 @@ namespace miki::rhi {
 
             if ((flags & VK_QUEUE_GRAPHICS_BIT) && queueFamilies_.graphics == UINT32_MAX) {
                 queueFamilies_.graphics = i;
-                queueFamilies_.present = i;  // Graphics queue typically supports present
+                queueFamilies_.present = i;
             }
             if ((flags & VK_QUEUE_COMPUTE_BIT) && !(flags & VK_QUEUE_GRAPHICS_BIT)
                 && queueFamilies_.compute == UINT32_MAX) {
@@ -165,7 +175,6 @@ namespace miki::rhi {
             }
         }
 
-        // Fallback: compute/transfer to graphics if not found
         if (queueFamilies_.compute == UINT32_MAX) {
             queueFamilies_.compute = queueFamilies_.graphics;
         }
@@ -185,7 +194,6 @@ namespace miki::rhi {
     // =========================================================================
 
     auto VulkanDevice::CreateLogicalDevice() -> RhiResult<void> {
-        // Collect unique queue family indices
         std::vector<uint32_t> uniqueFamilies = {queueFamilies_.graphics};
         auto addUnique = [&](uint32_t idx) {
             if (idx != UINT32_MAX && std::ranges::find(uniqueFamilies, idx) == uniqueFamilies.end()) {
@@ -208,27 +216,41 @@ namespace miki::rhi {
             queueCreateInfos.push_back(queueInfo);
         }
 
-        // Enable required device extensions
         std::vector<const char*> deviceExtensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
 
-        // Vulkan 1.4 features (timeline semaphores, dynamic rendering are core)
+        // Vulkan 1.4 core features
         VkPhysicalDeviceVulkan12Features features12{};
         features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         features12.timelineSemaphore = VK_TRUE;
         features12.bufferDeviceAddress = VK_TRUE;
         features12.descriptorIndexing = VK_TRUE;
+        features12.runtimeDescriptorArray = VK_TRUE;
+        features12.descriptorBindingPartiallyBound = VK_TRUE;
+        features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+        features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
 
         VkPhysicalDeviceVulkan13Features features13{};
         features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         features13.pNext = &features12;
         features13.dynamicRendering = VK_TRUE;
         features13.synchronization2 = VK_TRUE;
+        features13.maintenance4 = VK_TRUE;
 
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.pNext = &features13;
+        features2.features.fillModeNonSolid = VK_TRUE;
+        features2.features.wideLines = VK_TRUE;
+        features2.features.samplerAnisotropy = VK_TRUE;
+        features2.features.multiDrawIndirect = VK_TRUE;
+        features2.features.drawIndirectFirstInstance = VK_TRUE;
+        features2.features.depthClamp = VK_TRUE;
+        features2.features.depthBiasClamp = VK_TRUE;
+        features2.features.shaderFloat64 = VK_TRUE;
+        features2.features.shaderInt64 = VK_TRUE;
 
         VkDeviceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -245,7 +267,6 @@ namespace miki::rhi {
 
         volkLoadDevice(device_);
 
-        // Retrieve queues
         vkGetDeviceQueue(device_, queueFamilies_.graphics, 0, &graphicsQueue_);
         vkGetDeviceQueue(device_, queueFamilies_.present, 0, &presentQueue_);
         if (queueFamilies_.compute != queueFamilies_.graphics) {
@@ -260,6 +281,278 @@ namespace miki::rhi {
         }
 
         return {};
+    }
+
+    // =========================================================================
+    // VMA allocator creation
+    // =========================================================================
+
+    auto VulkanDevice::CreateVmaAllocator() -> RhiResult<void> {
+        // Manually fill VMA function table from volk-loaded function pointers.
+        // VMA_STATIC_VULKAN_FUNCTIONS=0 and VMA_DYNAMIC_VULKAN_FUNCTIONS=0
+        // require us to provide every function pointer explicitly.
+        VmaVulkanFunctions vmaFunctions{};
+        vmaFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+        vmaFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+        vmaFunctions.vkGetPhysicalDeviceProperties = vkGetPhysicalDeviceProperties;
+        vmaFunctions.vkGetPhysicalDeviceMemoryProperties = vkGetPhysicalDeviceMemoryProperties;
+        vmaFunctions.vkAllocateMemory = vkAllocateMemory;
+        vmaFunctions.vkFreeMemory = vkFreeMemory;
+        vmaFunctions.vkMapMemory = vkMapMemory;
+        vmaFunctions.vkUnmapMemory = vkUnmapMemory;
+        vmaFunctions.vkFlushMappedMemoryRanges = vkFlushMappedMemoryRanges;
+        vmaFunctions.vkInvalidateMappedMemoryRanges = vkInvalidateMappedMemoryRanges;
+        vmaFunctions.vkBindBufferMemory = vkBindBufferMemory;
+        vmaFunctions.vkBindImageMemory = vkBindImageMemory;
+        vmaFunctions.vkGetBufferMemoryRequirements = vkGetBufferMemoryRequirements;
+        vmaFunctions.vkGetImageMemoryRequirements = vkGetImageMemoryRequirements;
+        vmaFunctions.vkCreateBuffer = vkCreateBuffer;
+        vmaFunctions.vkDestroyBuffer = vkDestroyBuffer;
+        vmaFunctions.vkCreateImage = vkCreateImage;
+        vmaFunctions.vkDestroyImage = vkDestroyImage;
+        vmaFunctions.vkCmdCopyBuffer = vkCmdCopyBuffer;
+        vmaFunctions.vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2;
+        vmaFunctions.vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2;
+        vmaFunctions.vkBindBufferMemory2KHR = vkBindBufferMemory2;
+        vmaFunctions.vkBindImageMemory2KHR = vkBindImageMemory2;
+        vmaFunctions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
+        vmaFunctions.vkGetDeviceBufferMemoryRequirements = vkGetDeviceBufferMemoryRequirements;
+        vmaFunctions.vkGetDeviceImageMemoryRequirements = vkGetDeviceImageMemoryRequirements;
+
+        VmaAllocatorCreateInfo allocatorInfo{};
+        allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        allocatorInfo.physicalDevice = physicalDevice_;
+        allocatorInfo.device = device_;
+        allocatorInfo.instance = instance_;
+        allocatorInfo.pVulkanFunctions = &vmaFunctions;
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_4;
+
+        VkResult r = vmaCreateAllocator(&allocatorInfo, &allocator_);
+        if (r != VK_SUCCESS) {
+            return std::unexpected(RhiError::OutOfHostMemory);
+        }
+        return {};
+    }
+
+    // =========================================================================
+    // Timeline semaphore creation (specs/03-sync.md §3.2)
+    // =========================================================================
+
+    auto VulkanDevice::CreateTimelineSemaphores() -> RhiResult<void> {
+        auto createTimeline = [&](VkSemaphore& outSem) -> VkResult {
+            VkSemaphoreTypeCreateInfo typeInfo{};
+            typeInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+            typeInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            typeInfo.initialValue = 0;
+
+            VkSemaphoreCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            info.pNext = &typeInfo;
+
+            return vkCreateSemaphore(device_, &info, nullptr, &outSem);
+        };
+
+        if (createTimeline(graphicsTimeline_) != VK_SUCCESS) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
+        if (createTimeline(computeTimeline_) != VK_SUCCESS) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
+        if (createTimeline(transferTimeline_) != VK_SUCCESS) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
+
+        graphicsTimelineValue_ = 0;
+        computeTimelineValue_ = 0;
+        transferTimelineValue_ = 0;
+        return {};
+    }
+
+    // =========================================================================
+    // Capability population
+    // =========================================================================
+
+    void VulkanDevice::PopulateCapabilities() {
+        capabilities_.tier = CapabilityTier::Tier1_Vulkan;
+        capabilities_.backendType = BackendType::Vulkan14;
+
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+
+        capabilities_.deviceName = props.deviceName;
+        capabilities_.driverVersion = std::to_string(VK_API_VERSION_MAJOR(props.driverVersion)) + "."
+                                      + std::to_string(VK_API_VERSION_MINOR(props.driverVersion)) + "."
+                                      + std::to_string(VK_API_VERSION_PATCH(props.driverVersion));
+        capabilities_.vendorId = props.vendorID;
+        capabilities_.deviceId = props.deviceID;
+
+        // Limits
+        capabilities_.maxTextureSize2D = props.limits.maxImageDimension2D;
+        capabilities_.maxTextureSizeCube = props.limits.maxImageDimensionCube;
+        capabilities_.maxFramebufferWidth = props.limits.maxFramebufferWidth;
+        capabilities_.maxFramebufferHeight = props.limits.maxFramebufferHeight;
+        capabilities_.maxViewports = props.limits.maxViewports;
+        capabilities_.maxClipDistances = props.limits.maxClipDistances;
+        capabilities_.maxColorAttachments = props.limits.maxColorAttachments;
+        capabilities_.maxPushConstantSize = props.limits.maxPushConstantsSize;
+        capabilities_.maxBoundDescriptorSets = props.limits.maxBoundDescriptorSets;
+        capabilities_.maxDrawIndirectCount = props.limits.maxDrawIndirectCount;
+        capabilities_.subgroupSize = props.limits.maxComputeWorkGroupSize[0];  // approximate
+
+        capabilities_.maxComputeWorkGroupCount = {
+            props.limits.maxComputeWorkGroupCount[0],
+            props.limits.maxComputeWorkGroupCount[1],
+            props.limits.maxComputeWorkGroupCount[2],
+        };
+        capabilities_.maxComputeWorkGroupSize = {
+            props.limits.maxComputeWorkGroupSize[0],
+            props.limits.maxComputeWorkGroupSize[1],
+            props.limits.maxComputeWorkGroupSize[2],
+        };
+
+        // Vulkan 1.1 subgroup properties
+        VkPhysicalDeviceSubgroupProperties subgroupProps{};
+        subgroupProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        VkPhysicalDeviceProperties2 props2{};
+        props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        props2.pNext = &subgroupProps;
+        vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
+        capabilities_.subgroupSize = subgroupProps.subgroupSize;
+
+        // Memory info
+        VkPhysicalDeviceMemoryProperties memProps{};
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memProps);
+        for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i) {
+            if (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                capabilities_.deviceLocalMemoryBytes += memProps.memoryHeaps[i].size;
+            } else {
+                capabilities_.hostVisibleMemoryBytes += memProps.memoryHeaps[i].size;
+            }
+        }
+
+        // Features enabled at device creation (we know they are true because we requested them)
+        capabilities_.hasTimelineSemaphore = true;
+        capabilities_.hasAsyncCompute = (queueFamilies_.compute != queueFamilies_.graphics);
+        capabilities_.hasMultiDrawIndirect = true;
+        capabilities_.hasMultiDrawIndirectCount = true;
+        capabilities_.hasSubgroupOps = true;
+        capabilities_.hasFloat64 = true;
+        capabilities_.hasBindless = true;
+        capabilities_.hasPushDescriptors = false;  // probed separately if extension available
+        capabilities_.maxStorageBufferSize = UINT64_MAX;
+
+        // Descriptor model: probe ONCE at init, store result immutably.
+        // These extensions are device-level properties — no runtime re-probing needed.
+        uint32_t extCount = 0;
+        vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
+        std::vector<VkExtensionProperties> availableExts(extCount);
+        vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, availableExts.data());
+
+        auto hasExt = [&](const char* name) -> bool {
+            return std::ranges::any_of(availableExts, [name](const VkExtensionProperties& e) {
+                return std::strcmp(e.extensionName, name) == 0;
+            });
+        };
+
+        // Descriptor path: probe once, immutable after Init (see arch decision #3)
+        if (hasExt("VK_EXT_descriptor_heap")) {
+            capabilities_.descriptorModel = DescriptorModel::DescriptorHeap;
+        } else if (hasExt(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME)) {
+            capabilities_.descriptorModel = DescriptorModel::DescriptorBuffer;
+            capabilities_.enabledFeatures.Add(DeviceFeature::DescriptorBuffer);
+        } else {
+            capabilities_.descriptorModel = DescriptorModel::DescriptorSet;
+        }
+
+        // Mesh shader
+        if (hasExt(VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
+            capabilities_.hasMeshShader = true;
+            capabilities_.hasTaskShader = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::MeshShader);
+
+            VkPhysicalDeviceMeshShaderPropertiesEXT meshProps{};
+            meshProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
+            VkPhysicalDeviceProperties2 meshProps2{};
+            meshProps2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            meshProps2.pNext = &meshProps;
+            vkGetPhysicalDeviceProperties2(physicalDevice_, &meshProps2);
+
+            capabilities_.maxMeshWorkGroupSize = {
+                meshProps.maxMeshWorkGroupSize[0],
+                meshProps.maxMeshWorkGroupSize[1],
+                meshProps.maxMeshWorkGroupSize[2],
+            };
+            capabilities_.maxMeshWorkGroupInvocations = meshProps.maxMeshWorkGroupInvocations;
+            capabilities_.maxTaskWorkGroupSize = {
+                meshProps.maxTaskWorkGroupSize[0],
+                meshProps.maxTaskWorkGroupSize[1],
+                meshProps.maxTaskWorkGroupSize[2],
+            };
+            capabilities_.maxTaskWorkGroupInvocations = meshProps.maxTaskWorkGroupInvocations;
+            capabilities_.maxMeshOutputVertices = meshProps.maxMeshOutputVertices;
+            capabilities_.maxMeshOutputPrimitives = meshProps.maxMeshOutputPrimitives;
+            capabilities_.maxTaskPayloadSize = meshProps.maxTaskPayloadSize;
+            capabilities_.maxMeshSharedMemorySize = meshProps.maxMeshSharedMemorySize;
+            capabilities_.maxMeshPayloadAndSharedMemorySize = meshProps.maxMeshPayloadAndSharedMemorySize;
+        }
+
+        // Ray tracing
+        if (hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
+            capabilities_.hasAccelerationStructure = true;
+        }
+        if (hasExt(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
+            capabilities_.hasRayQuery = true;
+        }
+        if (hasExt(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
+            capabilities_.hasRayTracingPipeline = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::RayTracingPipeline);
+        }
+
+        // Variable rate shading
+        if (hasExt(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)) {
+            capabilities_.hasVariableRateShading = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::VariableRateShading);
+        }
+
+        // Sparse binding
+        VkPhysicalDeviceFeatures deviceFeatures{};
+        vkGetPhysicalDeviceFeatures(physicalDevice_, &deviceFeatures);
+        capabilities_.hasSparseBinding = (deviceFeatures.sparseBinding == VK_TRUE);
+        if (capabilities_.hasSparseBinding) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::SparseBinding);
+        }
+
+        // ReBAR detection: check if any DEVICE_LOCAL heap is also HOST_VISIBLE
+        for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
+            auto flags = memProps.memoryTypes[i].propertyFlags;
+            if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+                auto heapSize = memProps.memoryHeaps[memProps.memoryTypes[i].heapIndex].size;
+                constexpr uint64_t kRebarThreshold = 256ULL * 1024 * 1024;
+                if (heapSize >= kRebarThreshold) {
+                    capabilities_.hasResizableBAR = true;
+                    break;
+                }
+            }
+        }
+
+        // Always-on features for T1 Vulkan
+        capabilities_.enabledFeatures.Add(DeviceFeature::Present);
+        capabilities_.enabledFeatures.Add(DeviceFeature::TimelineSemaphore);
+        capabilities_.enabledFeatures.Add(DeviceFeature::DynamicRendering);
+        if (capabilities_.hasAsyncCompute) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::AsyncCompute);
+        }
+
+        // Memory budget query
+        if (hasExt(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
+            capabilities_.hasMemoryBudgetQuery = true;
+        }
+
+        // Push descriptors
+        if (hasExt(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)) {
+            capabilities_.hasPushDescriptors = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::PushDescriptors);
+        }
     }
 
     // =========================================================================
@@ -287,27 +580,54 @@ namespace miki::rhi {
             return r3;
         }
 
+        auto r4 = CreateVmaAllocator();
+        if (!r4) {
+            return r4;
+        }
+
+        auto r5 = CreateTimelineSemaphores();
+        if (!r5) {
+            return r5;
+        }
+
+        PopulateCapabilities();
+
         return {};
     }
 
     VulkanDevice::~VulkanDevice() {
         if (device_) {
             vkDeviceWaitIdle(device_);
+        }
 
-            // Destroy all tracked sync objects
-            for (auto& [id, fence] : fences_) {
-                vkDestroyFence(device_, fence, nullptr);
-            }
-            for (auto& [id, sem] : semaphores_) {
-                vkDestroySemaphore(device_, sem, nullptr);
-            }
-            // Destroy all tracked swapchains
-            for (auto& [id, sc] : swapchains_) {
-                vkDestroySwapchainKHR(device_, sc.swapchain, nullptr);
-                vkDestroySurfaceKHR(instance_, sc.surface, nullptr);
-            }
+        // Timeline semaphores (device-global, not in HandlePool)
+        if (graphicsTimeline_) {
+            vkDestroySemaphore(device_, graphicsTimeline_, nullptr);
+        }
+        if (computeTimeline_) {
+            vkDestroySemaphore(device_, computeTimeline_, nullptr);
+        }
+        if (transferTimeline_) {
+            vkDestroySemaphore(device_, transferTimeline_, nullptr);
+        }
 
+        // Descriptor pools
+        if (activeDescriptorPool_) {
+            vkDestroyDescriptorPool(device_, activeDescriptorPool_, nullptr);
+        }
+        for (auto pool : retiredDescriptorPools_) {
+            vkDestroyDescriptorPool(device_, pool, nullptr);
+        }
+
+        // VMA allocator
+        if (allocator_) {
+            vmaDestroyAllocator(allocator_);
+            allocator_ = nullptr;
+        }
+
+        if (device_) {
             vkDestroyDevice(device_, nullptr);
+            device_ = VK_NULL_HANDLE;
         }
         if (debugMessenger_ && instance_) {
             if (vkDestroyDebugUtilsMessengerEXT) {
@@ -316,11 +636,12 @@ namespace miki::rhi {
         }
         if (instance_) {
             vkDestroyInstance(instance_, nullptr);
+            instance_ = VK_NULL_HANDLE;
         }
     }
 
     // =========================================================================
-    // Sync primitives
+    // Sync primitives — HandlePool-based
     // =========================================================================
 
     auto VulkanDevice::CreateFenceImpl(bool signaled) -> RhiResult<FenceHandle> {
@@ -330,43 +651,47 @@ namespace miki::rhi {
             info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         }
 
-        VkFence fence;
+        VkFence fence = VK_NULL_HANDLE;
         VkResult r = vkCreateFence(device_, &info, nullptr, &fence);
         if (r != VK_SUCCESS) {
             return std::unexpected(RhiError::OutOfDeviceMemory);
         }
 
-        auto id = AllocHandle();
-        fences_[id] = fence;
-        return FenceHandle{id};
+        auto [handle, data] = fences_.Allocate();
+        if (!data) {
+            vkDestroyFence(device_, fence, nullptr);
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        data->fence = fence;
+        return handle;
     }
 
     void VulkanDevice::DestroyFenceImpl(FenceHandle h) {
-        auto it = fences_.find(h.IsValid() ? h.value : 0);
-        if (it != fences_.end()) {
-            vkDestroyFence(device_, it->second, nullptr);
-            fences_.erase(it);
+        auto* data = fences_.Lookup(h);
+        if (data) {
+            vkDestroyFence(device_, data->fence, nullptr);
+            fences_.Free(h);
         }
     }
 
     void VulkanDevice::WaitFenceImpl(FenceHandle h, uint64_t timeout) {
-        auto it = fences_.find(h.value);
-        if (it != fences_.end()) {
-            vkWaitForFences(device_, 1, &it->second, VK_TRUE, timeout);
+        auto* data = fences_.Lookup(h);
+        if (data) {
+            vkWaitForFences(device_, 1, &data->fence, VK_TRUE, timeout);
         }
     }
 
     void VulkanDevice::ResetFenceImpl(FenceHandle h) {
-        auto it = fences_.find(h.value);
-        if (it != fences_.end()) {
-            vkResetFences(device_, 1, &it->second);
+        auto* data = fences_.Lookup(h);
+        if (data) {
+            vkResetFences(device_, 1, &data->fence);
         }
     }
 
     auto VulkanDevice::GetFenceStatusImpl(FenceHandle h) -> bool {
-        auto it = fences_.find(h.value);
-        if (it != fences_.end()) {
-            return vkGetFenceStatus(device_, it->second) == VK_SUCCESS;
+        auto* data = fences_.Lookup(h);
+        if (data) {
+            return vkGetFenceStatus(device_, data->fence) == VK_SUCCESS;
         }
         return false;
     }
@@ -382,59 +707,64 @@ namespace miki::rhi {
         info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         info.pNext = &typeInfo;
 
-        VkSemaphore sem;
+        VkSemaphore sem = VK_NULL_HANDLE;
         VkResult r = vkCreateSemaphore(device_, &info, nullptr, &sem);
         if (r != VK_SUCCESS) {
             return std::unexpected(RhiError::OutOfDeviceMemory);
         }
 
-        auto id = AllocHandle();
-        semaphores_[id] = sem;
-        return SemaphoreHandle{id};
+        auto [handle, data] = semaphores_.Allocate();
+        if (!data) {
+            vkDestroySemaphore(device_, sem, nullptr);
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        data->semaphore = sem;
+        data->type = desc.type;
+        return handle;
     }
 
     void VulkanDevice::DestroySemaphoreImpl(SemaphoreHandle h) {
-        auto it = semaphores_.find(h.value);
-        if (it != semaphores_.end()) {
-            vkDestroySemaphore(device_, it->second, nullptr);
-            semaphores_.erase(it);
+        auto* data = semaphores_.Lookup(h);
+        if (data) {
+            vkDestroySemaphore(device_, data->semaphore, nullptr);
+            semaphores_.Free(h);
         }
     }
 
     void VulkanDevice::SignalSemaphoreImpl(SemaphoreHandle h, uint64_t value) {
-        auto it = semaphores_.find(h.value);
-        if (it == semaphores_.end()) {
+        auto* data = semaphores_.Lookup(h);
+        if (!data) {
             return;
         }
 
         VkSemaphoreSignalInfo signalInfo{};
         signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
-        signalInfo.semaphore = it->second;
+        signalInfo.semaphore = data->semaphore;
         signalInfo.value = value;
         vkSignalSemaphore(device_, &signalInfo);
     }
 
     void VulkanDevice::WaitSemaphoreImpl(SemaphoreHandle h, uint64_t value, uint64_t timeout) {
-        auto it = semaphores_.find(h.value);
-        if (it == semaphores_.end()) {
+        auto* data = semaphores_.Lookup(h);
+        if (!data) {
             return;
         }
 
         VkSemaphoreWaitInfo waitInfo{};
         waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
         waitInfo.semaphoreCount = 1;
-        waitInfo.pSemaphores = &it->second;
+        waitInfo.pSemaphores = &data->semaphore;
         waitInfo.pValues = &value;
         vkWaitSemaphores(device_, &waitInfo, timeout);
     }
 
     auto VulkanDevice::GetSemaphoreValueImpl(SemaphoreHandle h) -> uint64_t {
-        auto it = semaphores_.find(h.value);
-        if (it == semaphores_.end()) {
+        auto* data = semaphores_.Lookup(h);
+        if (!data) {
             return 0;
         }
         uint64_t value = 0;
-        vkGetSemaphoreCounterValue(device_, it->second, &value);
+        vkGetSemaphoreCounterValue(device_, data->semaphore, &value);
         return value;
     }
 
@@ -444,10 +774,122 @@ namespace miki::rhi {
         }
     }
 
-    void VulkanDevice::SubmitImpl(QueueType queue, const SubmitDesc& /*desc*/) {
-        // TODO(Phase-Backend): Full submit implementation with semaphore/fence marshalling.
-        // For now, this is a placeholder that will be filled when command buffers are implemented.
-        (void)queue;
+    void VulkanDevice::SubmitImpl(QueueType queue, const SubmitDesc& desc) {
+        // Select target queue
+        VkQueue targetQueue = graphicsQueue_;
+        if (queue == QueueType::Compute) {
+            targetQueue = computeQueue_;
+        } else if (queue == QueueType::Transfer) {
+            targetQueue = transferQueue_;
+        }
+
+        // Marshal command buffers
+        std::vector<VkCommandBufferSubmitInfo> cmdInfos;
+        cmdInfos.reserve(desc.commandBuffers.size());
+        for (auto h : desc.commandBuffers) {
+            auto* data = commandBuffers_.Lookup(h);
+            if (!data) {
+                continue;
+            }
+            VkCommandBufferSubmitInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+            info.commandBuffer = data->buffer;
+            cmdInfos.push_back(info);
+        }
+
+        // Marshal wait semaphores
+        std::vector<VkSemaphoreSubmitInfo> waitInfos;
+        waitInfos.reserve(desc.waitSemaphores.size());
+        for (auto& w : desc.waitSemaphores) {
+            auto* semData = semaphores_.Lookup(w.semaphore);
+            if (!semData) {
+                continue;
+            }
+            VkSemaphoreSubmitInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            info.semaphore = semData->semaphore;
+            info.value = w.value;
+            info.stageMask = static_cast<VkPipelineStageFlags2>(w.stageMask);
+            waitInfos.push_back(info);
+        }
+
+        // Marshal signal semaphores
+        std::vector<VkSemaphoreSubmitInfo> signalInfos;
+        signalInfos.reserve(desc.signalSemaphores.size());
+        for (auto& s : desc.signalSemaphores) {
+            auto* semData = semaphores_.Lookup(s.semaphore);
+            if (!semData) {
+                continue;
+            }
+            VkSemaphoreSubmitInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            info.semaphore = semData->semaphore;
+            info.value = s.value;
+            info.stageMask = static_cast<VkPipelineStageFlags2>(s.stageMask);
+            signalInfos.push_back(info);
+        }
+
+        // Resolve signal fence
+        VkFence vkFence = VK_NULL_HANDLE;
+        if (desc.signalFence.IsValid()) {
+            auto* fenceData = fences_.Lookup(desc.signalFence);
+            if (fenceData) {
+                vkFence = fenceData->fence;
+            }
+        }
+
+        VkSubmitInfo2 submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+        submitInfo.waitSemaphoreInfoCount = static_cast<uint32_t>(waitInfos.size());
+        submitInfo.pWaitSemaphoreInfos = waitInfos.data();
+        submitInfo.commandBufferInfoCount = static_cast<uint32_t>(cmdInfos.size());
+        submitInfo.pCommandBufferInfos = cmdInfos.data();
+        submitInfo.signalSemaphoreInfoCount = static_cast<uint32_t>(signalInfos.size());
+        submitInfo.pSignalSemaphoreInfos = signalInfos.data();
+
+        vkQueueSubmit2(targetQueue, 1, &submitInfo, vkFence);
+    }
+
+    // =========================================================================
+    // Memory stats
+    // =========================================================================
+
+    auto VulkanDevice::GetMemoryStatsImpl() const -> MemoryStats {
+        if (!allocator_) {
+            return {};
+        }
+        VmaTotalStatistics stats{};
+        vmaCalculateStatistics(allocator_, &stats);
+        MemoryStats result{};
+        result.totalAllocationCount = static_cast<uint32_t>(stats.total.statistics.allocationCount);
+        result.totalAllocatedBytes = stats.total.statistics.allocationBytes;
+        result.totalUsedBytes = stats.total.statistics.allocationBytes;
+        VkPhysicalDeviceMemoryProperties memProps{};
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memProps);
+        result.heapCount = memProps.memoryHeapCount;
+        return result;
+    }
+
+    auto VulkanDevice::GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t {
+        if (!allocator_) {
+            return 0;
+        }
+        constexpr uint32_t kMaxHeaps = 16;  // VK_MAX_MEMORY_HEAPS
+        VmaBudget budgets[kMaxHeaps]{};
+        vmaGetHeapBudgets(allocator_, budgets);
+
+        VkPhysicalDeviceMemoryProperties memProps{};
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memProps);
+
+        uint32_t outSize = static_cast<uint32_t>(out.size());
+        uint32_t count = (outSize < memProps.memoryHeapCount) ? outSize : memProps.memoryHeapCount;
+        for (uint32_t i = 0; i < count; ++i) {
+            out[i].heapIndex = i;
+            out[i].budgetBytes = budgets[i].budget;
+            out[i].usageBytes = budgets[i].usage;
+            out[i].isDeviceLocal = (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+        }
+        return count;
     }
 
 }  // namespace miki::rhi
