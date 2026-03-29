@@ -6,7 +6,7 @@ if(NOT EXISTS "${CMAKE_SOURCE_DIR}/src/miki/debug/StructuredLogger.cpp")
     return()
 endif()
 
-add_library(miki_debug STATIC
+add_library(miki_debug OBJECT
     src/miki/debug/StructuredLogger.cpp
     src/miki/debug/CrashHandler.cpp
     src/miki/debug/CpuProfiler.cpp

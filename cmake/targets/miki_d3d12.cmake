@@ -6,7 +6,7 @@ if(NOT MIKI_BUILD_D3D12 OR NOT WIN32)
     return()
 endif()
 
-add_library(miki_d3d12 STATIC
+add_library(miki_d3d12 OBJECT
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/d3d12/D3D12Device.cpp
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/d3d12/D3D12Swapchain.cpp
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/d3d12/D3D12Resources.cpp

@@ -6,7 +6,7 @@ if(NOT MIKI_BUILD_VULKAN)
     return()
 endif()
 
-add_library(miki_vulkan STATIC
+add_library(miki_vulkan OBJECT
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/vulkan/VulkanDevice.cpp
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/vulkan/VulkanSwapchain.cpp
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/vulkan/VulkanResources.cpp

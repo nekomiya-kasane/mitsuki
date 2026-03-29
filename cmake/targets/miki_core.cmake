@@ -23,7 +23,7 @@ set(MIKI_CORE_HEADERS
     include/miki/core/Types.h
 )
 
-add_library(miki_core STATIC ${MIKI_CORE_SOURCES} ${MIKI_CORE_HEADERS})
+add_library(miki_core OBJECT ${MIKI_CORE_SOURCES} ${MIKI_CORE_HEADERS})
 miki_setup_library(miki_core)
 
 if(EMSCRIPTEN)

@@ -16,6 +16,9 @@ else()
     option(MIKI_BUILD_WEBGPU "Build WebGPU Tier3 backend (Dawn)"   ON)
 endif()
 
+# Platform backends
+option(MIKI_BUILD_GLFW_BACKEND "Build GLFW window backend"       ON)
+
 # Demo backend
 set(MIKI_DEMO_BACKEND "glfw" CACHE STRING "Demo windowing backend: glfw | neko")
 set_property(CACHE MIKI_DEMO_BACKEND PROPERTY STRINGS "glfw" "neko")

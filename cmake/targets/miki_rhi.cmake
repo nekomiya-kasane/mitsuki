@@ -22,7 +22,7 @@ set(MIKI_RHI_SOURCES
     src/miki/frame/DeferredDestructor.cpp
 )
 
-add_library(miki_rhi STATIC ${MIKI_RHI_SOURCES})
+add_library(miki_rhi OBJECT ${MIKI_RHI_SOURCES})
 target_link_libraries(miki_rhi PUBLIC miki_core)
 miki_setup_library(miki_rhi)
 

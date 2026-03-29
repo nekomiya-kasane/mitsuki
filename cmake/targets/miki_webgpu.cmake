@@ -6,7 +6,7 @@ if(NOT MIKI_BUILD_WEBGPU)
     return()
 endif()
 
-add_library(miki_webgpu STATIC
+add_library(miki_webgpu OBJECT
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/webgpu/WebGPUDevice.cpp
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/webgpu/WebGPUSwapchain.cpp
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/webgpu/WebGPUResources.cpp

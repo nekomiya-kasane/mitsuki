@@ -15,7 +15,7 @@ if(NOT TARGET miki_core)
     return()
 endif()
 
-add_library(miki_glfw_backend STATIC
+add_library(miki_glfw_backend OBJECT
     src/miki/platform/glfw/GlfwWindowBackend.cpp
     src/miki/platform/glfw/GlfwEventSimulator.cpp
 )

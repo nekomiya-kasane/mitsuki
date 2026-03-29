@@ -6,7 +6,7 @@ if(NOT MIKI_BUILD_OPENGL)
     return()
 endif()
 
-add_library(miki_opengl STATIC
+add_library(miki_opengl OBJECT
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/opengl/OpenGLDevice.cpp
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/opengl/OpenGLSwapchain.cpp
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/opengl/OpenGLResources.cpp

@@ -32,7 +32,7 @@ set(MIKI_SHADER_SOURCES
     src/miki/shader/ShaderWatcher.cpp
 )
 
-add_library(miki_shader STATIC ${MIKI_SHADER_SOURCES})
+add_library(miki_shader OBJECT ${MIKI_SHADER_SOURCES})
 target_link_libraries(miki_shader
     PUBLIC  miki_core
     PUBLIC  miki_rhi
