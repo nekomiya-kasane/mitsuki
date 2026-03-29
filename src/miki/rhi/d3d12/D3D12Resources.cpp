@@ -20,7 +20,6 @@
 #include <D3D12MemAlloc.h>
 
 #include <cassert>
-#include <cstring>
 
 namespace miki::rhi {
 
@@ -129,6 +128,9 @@ namespace miki::rhi {
             }
             if (has(TextureUsage::DepthStencil)) {
                 flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+                if (!has(TextureUsage::Sampled)) {
+                    flags |= D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+                }
             }
             if (has(TextureUsage::Storage)) {
                 flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
@@ -241,7 +243,7 @@ namespace miki::rhi {
 
         if (desc.debugName) {
             wchar_t wname[256]{};
-            mbstowcs(wname, desc.debugName, 255);
+            MultiByteToWideChar(CP_UTF8, 0, desc.debugName, -1, wname, 256);
             data->resource->SetName(wname);
         }
 
@@ -301,6 +303,10 @@ namespace miki::rhi {
     // =========================================================================
 
     auto D3D12Device::CreateTextureImpl(const TextureDesc& desc) -> RhiResult<TextureHandle> {
+        if (desc.memory == MemoryLocation::CpuToGpu || desc.memory == MemoryLocation::GpuToCpu) {
+            return std::unexpected(RhiError::InvalidParameter);
+        }
+
         DXGI_FORMAT dxgiFormat = ToDxgiFormat(desc.format);
         bool isDepth = IsDepthFormat(dxgiFormat);
 
@@ -322,7 +328,8 @@ namespace miki::rhi {
         D3D12MA::ALLOCATION_DESC allocDesc{};
         allocDesc.HeapType = ToD3D12HeapType(desc.memory);
         if (desc.transient) {
-            allocDesc.Flags |= D3D12MA::ALLOCATION_FLAG_CAN_ALIAS;
+            allocDesc.Flags
+                = static_cast<D3D12MA::ALLOCATION_FLAGS>(allocDesc.Flags | D3D12MA::ALLOCATION_FLAG_CAN_ALIAS);
         }
 
         D3D12_CLEAR_VALUE* pClearValue = nullptr;
@@ -365,7 +372,7 @@ namespace miki::rhi {
 
         if (desc.debugName) {
             wchar_t wname[256]{};
-            mbstowcs(wname, desc.debugName, 255);
+            MultiByteToWideChar(CP_UTF8, 0, desc.debugName, -1, wname, 256);
             data->resource->SetName(wname);
         }
 

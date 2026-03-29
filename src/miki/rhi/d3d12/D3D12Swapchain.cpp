@@ -315,6 +315,62 @@ namespace miki::rhi {
         }
     }
 
+    // =========================================================================
+    // Surface capability query
+    // =========================================================================
+
+    auto D3D12Device::GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
+        (void)window;
+        RenderSurfaceCapabilities caps;
+
+        // DXGI flip model supports a limited set of formats
+        caps.supportedFormats = {Format::BGRA8_UNORM, Format::RGBA8_UNORM, Format::RGBA16_FLOAT, Format::RGB10A2_UNORM};
+        caps.supportedPresentModes = {PresentMode::Fifo, PresentMode::Immediate};
+
+        // Check tearing support (VRR / Mailbox-like)
+        if (factory_) {
+            BOOL tearingSupported = FALSE;
+            HRESULT hr = factory_->CheckFeatureSupport(
+                DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearingSupported, sizeof(tearingSupported)
+            );
+            if (SUCCEEDED(hr) && tearingSupported) {
+                caps.supportedPresentModes.push_back(PresentMode::Mailbox);
+            }
+        }
+
+        caps.supportedColorSpaces = {SurfaceColorSpace::SRGB};
+
+        // Check HDR support via DXGI output
+        if (factory_) {
+            ComPtr<IDXGIAdapter1> adapter;
+            if (SUCCEEDED(factory_->EnumAdapters1(0, &adapter))) {
+                ComPtr<IDXGIOutput> output;
+                if (SUCCEEDED(adapter->EnumOutputs(0, &output))) {
+                    ComPtr<IDXGIOutput6> output6;
+                    if (SUCCEEDED(output.As(&output6))) {
+                        DXGI_OUTPUT_DESC1 desc1{};
+                        if (SUCCEEDED(output6->GetDesc1(&desc1))) {
+                            if (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
+                                caps.supportedColorSpaces.push_back(SurfaceColorSpace::HDR10_ST2084);
+                            }
+                            if (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
+                                || desc1.MaxLuminance > 0.0f) {
+                                caps.supportedColorSpaces.push_back(SurfaceColorSpace::scRGBLinear);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        caps.minExtent = {1, 1};
+        caps.maxExtent = {16384, 16384};
+        caps.minImageCount = 2;
+        caps.maxImageCount = 16;
+
+        return caps;
+    }
+
 }  // namespace miki::rhi
 
 #if defined(__clang__)

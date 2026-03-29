@@ -794,7 +794,7 @@ namespace miki::rhi {
     void D3D12CommandBuffer::CmdBeginDebugLabelImpl(const char* name, const float /*color*/[4]) {
         if (name) {
             wchar_t wname[256]{};
-            mbstowcs(wname, name, 255);
+            MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, 256);
             // ID3D12GraphicsCommandList1::BeginEvent (metadata=0 for string markers)
             cmd_->BeginEvent(0, wname, static_cast<UINT>((wcslen(wname) + 1) * sizeof(wchar_t)));
         }
@@ -807,7 +807,7 @@ namespace miki::rhi {
     void D3D12CommandBuffer::CmdInsertDebugLabelImpl(const char* name, const float /*color*/[4]) {
         if (name) {
             wchar_t wname[256]{};
-            mbstowcs(wname, name, 255);
+            MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, 256);
             cmd_->SetMarker(0, wname, static_cast<UINT>((wcslen(wname) + 1) * sizeof(wchar_t)));
         }
     }

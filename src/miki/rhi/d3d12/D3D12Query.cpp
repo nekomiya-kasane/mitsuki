@@ -5,6 +5,10 @@
 
 #include "miki/rhi/backend/D3D12Device.h"
 
+#include "miki/rhi/backend/D3D12CommandBuffer.h"
+
+#include <algorithm>
+
 #if defined(__clang__)
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wlanguage-extension-token"
@@ -70,7 +74,7 @@ namespace miki::rhi {
 
         if (desc.debugName) {
             wchar_t wname[256]{};
-            mbstowcs(wname, desc.debugName, 255);
+            MultiByteToWideChar(CP_UTF8, 0, desc.debugName, -1, wname, 256);
             data->heap->SetName(wname);
         }
 
@@ -164,6 +168,41 @@ namespace miki::rhi {
             return;
         }
         commandBuffers_.Free(h);
+    }
+
+    // =========================================================================
+    // Command list acquisition (unified factory)
+    // =========================================================================
+
+    auto D3D12Device::AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition> {
+        CommandBufferDesc desc{.type = queue, .secondary = false};
+        auto bufResult = CreateCommandBufferImpl(desc);
+        if (!bufResult) {
+            return std::unexpected(bufResult.error());
+        }
+
+        auto bufHandle = *bufResult;
+        auto* data = commandBuffers_.Lookup(bufHandle);
+        if (!data) {
+            return std::unexpected(RhiError::InvalidHandle);
+        }
+
+        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<D3D12CommandBuffer>());
+        cmdBuf->Init(this, data->list.Get(), data->allocator.Get(), queue);
+
+        CommandListHandle listHandle(cmdBuf.get(), BackendType::D3D12);
+        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+    }
+
+    void D3D12Device::ReleaseCommandListImpl(const CommandListAcquisition& acq) {
+        void* raw = acq.listHandle.GetRawPtr();
+        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
+            return p.get() == raw;
+        });
+        if (it != commandListArena_.end()) {
+            commandListArena_.erase(it);
+        }
+        DestroyCommandBufferImpl(acq.bufferHandle);
     }
 
 }  // namespace miki::rhi
