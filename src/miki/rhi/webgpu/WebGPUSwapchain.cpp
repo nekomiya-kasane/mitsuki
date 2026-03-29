@@ -326,4 +326,22 @@ namespace miki::rhi {
         data->currentTexture = nullptr;
     }
 
+    // =========================================================================
+    // Surface capability query
+    // =========================================================================
+
+    auto WebGPUDevice::GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
+        (void)window;
+        RenderSurfaceCapabilities caps;
+        // Dawn/WebGPU preferred surface format is BGRA8Unorm
+        caps.supportedFormats = {Format::BGRA8_UNORM, Format::RGBA8_UNORM};
+        caps.supportedPresentModes = {PresentMode::Fifo, PresentMode::Mailbox};
+        caps.supportedColorSpaces = {SurfaceColorSpace::SRGB};
+        caps.minExtent = {1, 1};
+        caps.maxExtent = {16384, 16384};
+        caps.minImageCount = 2;
+        caps.maxImageCount = 3;
+        return caps;
+    }
+
 }  // namespace miki::rhi

@@ -3,8 +3,11 @@
  */
 
 #include "miki/rhi/backend/WebGPUDevice.h"
+
+#include "miki/rhi/backend/WebGPUCommandBuffer.h"
 #include "miki/debug/StructuredLogger.h"
 
+#include <algorithm>
 #include <dawn/webgpu.h>
 
 namespace miki::rhi {
@@ -181,6 +184,36 @@ namespace miki::rhi {
         // wgpuAdapterGetLimits doesn't expose timestamp period directly,
         // but Dawn's timestamp counter is in nanoseconds (period = 1.0)
         return 1.0;
+    }
+
+    // =========================================================================
+    // Command buffer creation/destruction (continued)
+    // =========================================================================
+
+    auto WebGPUDevice::AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition> {
+        CommandBufferDesc desc{.type = queue, .secondary = false};
+        auto bufResult = CreateCommandBufferImpl(desc);
+        if (!bufResult) {
+            return std::unexpected(bufResult.error());
+        }
+
+        auto bufHandle = *bufResult;
+        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<WebGPUCommandBuffer>());
+        cmdBuf->Init(this, bufHandle);
+
+        CommandListHandle listHandle(cmdBuf.get(), BackendType::WebGPU);
+        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+    }
+
+    void WebGPUDevice::ReleaseCommandListImpl(const CommandListAcquisition& acq) {
+        void* raw = acq.listHandle.GetRawPtr();
+        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
+            return p.get() == raw;
+        });
+        if (it != commandListArena_.end()) {
+            commandListArena_.erase(it);
+        }
+        DestroyCommandBufferImpl(acq.bufferHandle);
     }
 
 }  // namespace miki::rhi
