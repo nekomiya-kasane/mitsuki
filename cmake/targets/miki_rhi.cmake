@@ -23,6 +23,7 @@ set(MIKI_RHI_SOURCES
     src/miki/frame/DeferredDestructor.cpp
     src/miki/frame/SyncScheduler.cpp
     src/miki/frame/AsyncTaskManager.cpp
+    src/miki/frame/FrameOrchestrator.cpp
 )
 
 add_library(miki_rhi OBJECT ${MIKI_RHI_SOURCES})
