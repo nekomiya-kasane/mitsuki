@@ -26,9 +26,8 @@ namespace miki::frame {
 
         void PruneCompleted() {
             std::erase_if(activeTasks, [&](const TaskEntry& t) {
-                uint64_t gpuValue = device.Dispatch(
-                    [&](auto& dev) { return dev.GetSemaphoreValue(t.completionPoint.semaphore); }
-                );
+                uint64_t gpuValue
+                    = device.Dispatch([&](auto& dev) { return dev.GetSemaphoreValue(t.completionPoint.semaphore); });
                 return gpuValue >= t.completionPoint.value;
             });
         }
@@ -65,7 +64,8 @@ namespace miki::frame {
 
         // Build signal info
         rhi::SemaphoreSubmitInfo signalInfo{
-            .semaphore = computeSem, .value = signalValue, .stageMask = rhi::PipelineStage::ComputeShader};
+            .semaphore = computeSem, .value = signalValue, .stageMask = rhi::PipelineStage::ComputeShader
+        };
 
         // Submit to compute queue
         rhi::SubmitDesc submitDesc{
@@ -78,30 +78,31 @@ namespace miki::frame {
 
         // Track the task
         AsyncTaskHandle handle{.id = impl_->nextTaskId++};
-        impl_->activeTasks.push_back({.handle = handle, .completionPoint = {.semaphore = computeSem, .value = signalValue}});
+        impl_->activeTasks.push_back(
+            {.handle = handle, .completionPoint = {.semaphore = computeSem, .value = signalValue}}
+        );
 
         return handle;
     }
 
     auto AsyncTaskManager::IsComplete(AsyncTaskHandle iTask) const noexcept -> bool {
         assert(impl_ && "AsyncTaskManager used after move");
-        auto it = std::ranges::find_if(
-            impl_->activeTasks, [&](const Impl::TaskEntry& t) { return t.handle.id == iTask.id; }
-        );
+        auto it = std::ranges::find_if(impl_->activeTasks, [&](const Impl::TaskEntry& t) {
+            return t.handle.id == iTask.id;
+        });
         if (it == impl_->activeTasks.end()) {
             return true;  // Unknown task = already completed and pruned
         }
-        uint64_t gpuValue = impl_->device.Dispatch(
-            [&](auto& dev) { return dev.GetSemaphoreValue(it->completionPoint.semaphore); }
-        );
+        uint64_t gpuValue
+            = impl_->device.Dispatch([&](auto& dev) { return dev.GetSemaphoreValue(it->completionPoint.semaphore); });
         return gpuValue >= it->completionPoint.value;
     }
 
     auto AsyncTaskManager::GetCompletionPoint(AsyncTaskHandle iTask) const noexcept -> TimelineSyncPoint {
         assert(impl_ && "AsyncTaskManager used after move");
-        auto it = std::ranges::find_if(
-            impl_->activeTasks, [&](const Impl::TaskEntry& t) { return t.handle.id == iTask.id; }
-        );
+        auto it = std::ranges::find_if(impl_->activeTasks, [&](const Impl::TaskEntry& t) {
+            return t.handle.id == iTask.id;
+        });
         if (it == impl_->activeTasks.end()) {
             return {};
         }
@@ -110,9 +111,9 @@ namespace miki::frame {
 
     auto AsyncTaskManager::WaitForCompletion(AsyncTaskHandle iTask, uint64_t iTimeoutNs) -> core::Result<void> {
         assert(impl_ && "AsyncTaskManager used after move");
-        auto it = std::ranges::find_if(
-            impl_->activeTasks, [&](const Impl::TaskEntry& t) { return t.handle.id == iTask.id; }
-        );
+        auto it = std::ranges::find_if(impl_->activeTasks, [&](const Impl::TaskEntry& t) {
+            return t.handle.id == iTask.id;
+        });
         if (it == impl_->activeTasks.end()) {
             return {};  // Already completed
         }
@@ -122,12 +123,48 @@ namespace miki::frame {
         return {};
     }
 
+    auto AsyncTaskManager::SubmitBatched(
+        std::span<const rhi::CommandBufferHandle> iBatches, std::span<const rhi::SemaphoreSubmitInfo> iWaits
+    ) -> core::Result<AsyncTaskHandle> {
+        assert(impl_ && "AsyncTaskManager used after move");
+        if (iBatches.empty()) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
+        }
+
+        auto computeSem = impl_->scheduler->GetSemaphore(rhi::QueueType::Compute);
+        uint64_t lastSignalValue = 0;
+
+        for (size_t i = 0; i < iBatches.size(); ++i) {
+            uint64_t signalValue = impl_->scheduler->AllocateSignal(rhi::QueueType::Compute);
+            rhi::SemaphoreSubmitInfo signalInfo{
+                .semaphore = computeSem, .value = signalValue, .stageMask = rhi::PipelineStage::ComputeShader
+            };
+
+            rhi::SubmitDesc submitDesc{
+                .commandBuffers = std::span<const rhi::CommandBufferHandle>(&iBatches[i], 1),
+                .waitSemaphores = (i == 0) ? iWaits : std::span<const rhi::SemaphoreSubmitInfo>{},
+                .signalSemaphores = std::span<const rhi::SemaphoreSubmitInfo>(&signalInfo, 1),
+            };
+            impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Compute, submitDesc); });
+            impl_->scheduler->CommitSubmit(rhi::QueueType::Compute);
+            lastSignalValue = signalValue;
+        }
+
+        AsyncTaskHandle handle{.id = impl_->nextTaskId++};
+        impl_->activeTasks.push_back(
+            {.handle = handle, .completionPoint = {.semaphore = computeSem, .value = lastSignalValue}}
+        );
+        return handle;
+    }
+
     auto AsyncTaskManager::ActiveTaskCount() const noexcept -> uint32_t {
         return impl_ ? static_cast<uint32_t>(impl_->activeTasks.size()) : 0;
     }
 
     auto AsyncTaskManager::Shutdown() -> void {
-        if (!impl_) return;
+        if (!impl_) {
+            return;
+        }
         // Wait for all active tasks
         for (auto& task : impl_->activeTasks) {
             impl_->device.Dispatch([&](auto& dev) {

@@ -89,6 +89,8 @@ namespace miki::rhi {
         // =====================================================================
         bool hasAsyncCompute = false;
         bool hasTimelineSemaphore = false;
+        bool hasGlobalPriority = false;        ///< VK_EXT_global_priority / D3D12 queue priority
+        uint32_t computeQueueFamilyCount = 0;  ///< Number of distinct compute queue families (Vulkan)
         std::array<uint32_t, 3> maxComputeWorkGroupCount = {65535, 65535, 65535};
         std::array<uint32_t, 3> maxComputeWorkGroupSize = {1024, 1024, 64};
 

@@ -73,6 +73,16 @@ namespace miki::frame {
         /// Use sparingly — only for shutdown or mandatory sync.
         auto WaitForCompletion(AsyncTaskHandle iTask, uint64_t iTimeoutNs = UINT64_MAX) -> core::Result<void>;
 
+        /// @brief Submit a long-running compute task split into sub-batches.
+        /// Each sub-batch gets its own timeline signal. Ensures no single dispatch
+        /// blocks frame-sync compute work (GTAO) for more than ~2ms.
+        /// @param iBatches  Pre-split command buffers (each <= 2ms GPU time).
+        /// @param iWaits    Optional cross-queue waits (applied to first batch only).
+        /// @return Handle for polling completion of the LAST batch.
+        [[nodiscard]] auto SubmitBatched(
+            std::span<const rhi::CommandBufferHandle> iBatches, std::span<const rhi::SemaphoreSubmitInfo> iWaits = {}
+        ) -> core::Result<AsyncTaskHandle>;
+
         /// @brief Get the number of currently in-flight tasks.
         [[nodiscard]] auto ActiveTaskCount() const noexcept -> uint32_t;
 
