@@ -394,6 +394,12 @@ namespace miki::rhi {
         auto CreateVmaAllocator() -> RhiResult<void>;
         auto CreateTimelineSemaphores() -> RhiResult<void>;
         void PopulateCapabilities();
+        void PopulateCapabilities_Tier1(
+            const VkPhysicalDeviceFeatures& deviceFeatures, const std::vector<VkExtensionProperties>& availableExts
+        );
+        void PopulateCapabilities_Tier2(
+            const VkPhysicalDeviceFeatures& deviceFeatures, const std::vector<VkExtensionProperties>& availableExts
+        );
         void PopulateFormatSupport();
     };
 
