@@ -22,15 +22,14 @@
 #    include <GLFW/glfw3native.h>
 #endif
 
-#include <atomic>
-
 namespace miki::platform {
 
     // ---------------------------------------------------------------------------
-    // GLFW ref-counted init
+    // GLFW ref-counted init + global gamepad backend pointer
     // ---------------------------------------------------------------------------
 
     static std::atomic<int> sGlfwRefCount{0};
+    static GlfwWindowBackend* sGamepadOwner = nullptr;  // Only one backend owns joystick callbacks
 
     auto GlfwWindowBackend::InitGlfw() -> bool {
         if (sGlfwRefCount.fetch_add(1) == 0) {
@@ -49,9 +48,28 @@ namespace miki::platform {
     GlfwWindowBackend::GlfwWindowBackend(miki::rhi::BackendType iBackendType, bool iVisible)
         : backendType_(iBackendType), visible_(iVisible) {
         InitGlfw();
+
+        // Register as gamepad owner (first backend wins)
+        if (!sGamepadOwner) {
+            sGamepadOwner = this;
+            glfwSetJoystickCallback(JoystickCallback);
+            // Detect already-connected joysticks
+            for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST && jid < neko::platform::kMaxGamepads; ++jid) {
+                if (glfwJoystickPresent(jid)) {
+                    auto& slot = gamepadSlots_[static_cast<uint8_t>(jid)];
+                    slot.connected = true;
+                    slot.isGamepad = (glfwJoystickIsGamepad(jid) == GLFW_TRUE);
+                }
+            }
+        }
     }
 
     GlfwWindowBackend::~GlfwWindowBackend() {
+        if (sGamepadOwner == this) {
+            glfwSetJoystickCallback(nullptr);
+            sGamepadOwner = nullptr;
+        }
+
         for (auto& [token, data] : windowData_) {
             auto* window = static_cast<GLFWwindow*>(token);
             glfwSetWindowUserPointer(window, nullptr);
@@ -176,11 +194,18 @@ namespace miki::platform {
         HWND hwnd = glfwGetWin32Window(window);
         return miki::rhi::NativeWindowHandle{miki::rhi::Win32Window{.hwnd = static_cast<void*>(hwnd)}};
 #elif defined(__linux__)
-        // TODO: X11/Wayland native handle extraction
-        return std::unexpected(miki::core::ErrorCode::NotSupported);
+        if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+            struct wl_surface* surface = glfwGetWaylandWindow(window);
+            struct wl_display* display = glfwGetWaylandDisplay();
+            return miki::rhi::NativeWindowHandle{miki::rhi::WaylandWindow{.surface = surface, .display = display}};
+        } else {
+            Window x11Window = glfwGetX11Window(window);
+            Display* x11Display = glfwGetX11Display();
+            return miki::rhi::NativeWindowHandle{miki::rhi::X11Window{.window = x11Window, .display = x11Display}};
+        }
 #elif defined(__APPLE__)
-        // TODO: Cocoa native handle extraction
-        return std::unexpected(miki::core::ErrorCode::NotSupported);
+        id metalLayer = glfwGetCocoaWindow(window);
+        return miki::rhi::NativeWindowHandle{miki::rhi::CocoaWindow{.nsWindow = metalLayer}};
 #else
         return std::unexpected(miki::core::ErrorCode::NotSupported);
 #endif
@@ -216,7 +241,7 @@ namespace miki::platform {
     auto GlfwWindowBackend::PollEvents(std::vector<miki::platform::WindowEvent>& ioEvents) -> void {
         pendingEvents_.clear();
         glfwPollEvents();  // triggers all callbacks, which fill pendingEvents_
-        ioEvents.insert(ioEvents.end(), pendingEvents_.begin(), pendingEvents_.end());
+        ioEvents.append_range(pendingEvents_);
     }
 
     // ---------------------------------------------------------------------------
@@ -245,7 +270,7 @@ namespace miki::platform {
         }
         int w = 0, h = 0;
         glfwGetFramebufferSize(window, &w, &h);
-        return {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+        return {.width = static_cast<uint32_t>(w), .height = static_cast<uint32_t>(h)};
     }
 
     auto GlfwWindowBackend::IsMinimized(void* iNativeToken) -> bool {
@@ -561,6 +586,9 @@ namespace miki::platform {
             case GLFW_MOUSE_BUTTON_MIDDLE: return neko::platform::MouseBtn::Middle;
             case GLFW_MOUSE_BUTTON_4: return neko::platform::MouseBtn::X1;
             case GLFW_MOUSE_BUTTON_5: return neko::platform::MouseBtn::X2;
+            case GLFW_MOUSE_BUTTON_6: return neko::platform::MouseBtn::X3;
+            case GLFW_MOUSE_BUTTON_7: return neko::platform::MouseBtn::X4;
+            case GLFW_MOUSE_BUTTON_8: return neko::platform::MouseBtn::X5;
             default: return neko::platform::MouseBtn::Left;
         }
     }
@@ -698,6 +726,152 @@ namespace miki::platform {
         }
         // Maximize itself doesn't get a special event — it's detected via Resize.
         // The WindowManager tracks maximized state internally via MaximizeWindow().
+    }
+
+    // ===========================================================================
+    // Gamepad / Joystick
+    // ===========================================================================
+
+    auto GlfwWindowBackend::JoystickCallback(int jid, int event) -> void {
+        if (!sGamepadOwner || jid < 0 || jid >= neko::platform::kMaxGamepads) {
+            return;
+        }
+        auto id = static_cast<uint8_t>(jid);
+        auto& slot = sGamepadOwner->gamepadSlots_[id];
+
+        if (event == GLFW_CONNECTED) {
+            slot.connected = true;
+            slot.isGamepad = (glfwJoystickIsGamepad(jid) == GLFW_TRUE);
+            slot.prevState = {};
+            const char* name = slot.isGamepad ? glfwGetGamepadName(jid) : glfwGetJoystickName(jid);
+            sGamepadOwner->pendingGamepadEvents_.push_back(
+                {id, neko::platform::GamepadConnected{.name = name ? name : "", .isGamepad = slot.isGamepad}}
+            );
+        } else if (event == GLFW_DISCONNECTED) {
+            slot.connected = false;
+            slot.isGamepad = false;
+            slot.prevState = {};
+            sGamepadOwner->pendingGamepadEvents_.push_back({id, neko::platform::GamepadDisconnected{}});
+        }
+    }
+
+    auto GlfwWindowBackend::PollGamepadEvents(std::vector<neko::platform::GamepadEvent>& ioEvents) -> void {
+        // Flush connection/disconnection events from callback
+        ioEvents.append_range(pendingGamepadEvents_);
+        pendingGamepadEvents_.clear();
+
+        // Diff-poll each connected gamepad for button/axis changes
+        for (uint8_t id = 0; id < neko::platform::kMaxGamepads; ++id) {
+            auto& slot = gamepadSlots_[id];
+            if (!slot.connected) {
+                continue;
+            }
+
+            neko::platform::GamepadState current = {};
+
+            if (slot.isGamepad) {
+                // Use GLFW gamepad mapping (SDL layout)
+                GLFWgamepadstate gs = {};
+                if (glfwGetGamepadState(static_cast<int>(id), &gs) != GLFW_TRUE) {
+                    continue;
+                }
+                for (uint8_t b = 0; b < neko::platform::kMaxGamepadButtons && b <= GLFW_GAMEPAD_BUTTON_LAST; ++b) {
+                    current.buttons[b] = (gs.buttons[b] == GLFW_PRESS);
+                }
+                for (uint8_t a = 0; a < neko::platform::kMaxGamepadAxes && a <= GLFW_GAMEPAD_AXIS_LAST; ++a) {
+                    current.axes[a] = gs.axes[a];
+                }
+            } else {
+                // Raw joystick — map axes/buttons directly
+                int axisCount = 0;
+                const float* axes = glfwGetJoystickAxes(static_cast<int>(id), &axisCount);
+                for (int a = 0; a < axisCount && a < neko::platform::kMaxGamepadAxes; ++a) {
+                    current.axes[static_cast<uint8_t>(a)] = axes[a];
+                }
+                int btnCount = 0;
+                const unsigned char* btns = glfwGetJoystickButtons(static_cast<int>(id), &btnCount);
+                for (int b = 0; b < btnCount && b < neko::platform::kMaxGamepadButtons; ++b) {
+                    current.buttons[static_cast<uint8_t>(b)] = (btns[b] == GLFW_PRESS);
+                }
+            }
+
+            // Emit button change events
+            for (uint8_t b = 0; b < neko::platform::kMaxGamepadButtons; ++b) {
+                if (current.buttons[b] != slot.prevState.buttons[b]) {
+                    ioEvents.push_back(
+                        {id, neko::platform::GamepadButtonEvent{
+                                 .button = static_cast<neko::platform::GamepadButton>(b),
+                                 .action
+                                 = current.buttons[b] ? neko::platform::Action::Press : neko::platform::Action::Release,
+                             }}
+                    );
+                }
+            }
+
+            // Emit axis change events (with deadzone filtering)
+            for (uint8_t a = 0; a < neko::platform::kMaxGamepadAxes; ++a) {
+                float delta = current.axes[a] - slot.prevState.axes[a];
+                if (delta > kAxisDeadzone || delta < -kAxisDeadzone) {
+                    ioEvents.push_back(
+                        {id, neko::platform::GamepadAxisEvent{
+                                 .axis = static_cast<neko::platform::GamepadAxis>(a),
+                                 .value = current.axes[a],
+                             }}
+                    );
+                }
+            }
+
+            slot.prevState = current;
+        }
+    }
+
+    auto GlfwWindowBackend::GetGamepadState(uint8_t iGamepadId, neko::platform::GamepadState& oState) const -> bool {
+        if (iGamepadId >= neko::platform::kMaxGamepads || !gamepadSlots_[iGamepadId].connected) {
+            return false;
+        }
+
+        if (gamepadSlots_[iGamepadId].isGamepad) {
+            GLFWgamepadstate gs = {};
+            if (glfwGetGamepadState(static_cast<int>(iGamepadId), &gs) != GLFW_TRUE) {
+                return false;
+            }
+            for (uint8_t b = 0; b < neko::platform::kMaxGamepadButtons && b <= GLFW_GAMEPAD_BUTTON_LAST; ++b) {
+                oState.buttons[b] = (gs.buttons[b] == GLFW_PRESS);
+            }
+            for (uint8_t a = 0; a < neko::platform::kMaxGamepadAxes && a <= GLFW_GAMEPAD_AXIS_LAST; ++a) {
+                oState.axes[a] = gs.axes[a];
+            }
+        } else {
+            int axisCount = 0;
+            const float* axes = glfwGetJoystickAxes(static_cast<int>(iGamepadId), &axisCount);
+            oState.axes = {};
+            for (int a = 0; a < axisCount && a < neko::platform::kMaxGamepadAxes; ++a) {
+                oState.axes[static_cast<uint8_t>(a)] = axes[a];
+            }
+            int btnCount = 0;
+            const unsigned char* btns = glfwGetJoystickButtons(static_cast<int>(iGamepadId), &btnCount);
+            oState.buttons = {};
+            for (int b = 0; b < btnCount && b < neko::platform::kMaxGamepadButtons; ++b) {
+                oState.buttons[static_cast<uint8_t>(b)] = (btns[b] == GLFW_PRESS);
+            }
+        }
+        return true;
+    }
+
+    auto GlfwWindowBackend::IsGamepadConnected(uint8_t iGamepadId) const -> bool {
+        if (iGamepadId >= neko::platform::kMaxGamepads) {
+            return false;
+        }
+        return gamepadSlots_[iGamepadId].connected;
+    }
+
+    auto GlfwWindowBackend::GetGamepadName(uint8_t iGamepadId) const -> std::string_view {
+        if (iGamepadId >= neko::platform::kMaxGamepads || !gamepadSlots_[iGamepadId].connected) {
+            return {};
+        }
+        const char* name = gamepadSlots_[iGamepadId].isGamepad ? glfwGetGamepadName(static_cast<int>(iGamepadId))
+                                                               : glfwGetJoystickName(static_cast<int>(iGamepadId));
+        return name ? std::string_view{name} : std::string_view{};
     }
 
 }  // namespace miki::platform

@@ -173,6 +173,41 @@ namespace miki::platform {
             (void)iNativeToken;
             (void)iHandle;
         }
+
+        // -- Gamepad / Joystick support ------------------------------------
+
+        /** @brief Poll gamepad connection and input events since last call.
+         *  @param ioEvents Buffer to append GamepadEvent entries to.
+         *
+         *  Default implementation is a no-op (backend has no gamepad support).
+         */
+        virtual auto PollGamepadEvents(std::vector<neko::platform::GamepadEvent>& ioEvents) -> void { (void)ioEvents; }
+
+        /** @brief Query the current state of a connected gamepad.
+         *  @param iGamepadId  Gamepad slot [0, kMaxGamepads).
+         *  @param oState      Filled with current axes/buttons if connected.
+         *  @return true if gamepad is connected and state was filled.
+         */
+        [[nodiscard]] virtual auto GetGamepadState(uint8_t iGamepadId, neko::platform::GamepadState& oState) const
+            -> bool {
+            (void)iGamepadId;
+            (void)oState;
+            return false;
+        }
+
+        /** @brief Check if a gamepad slot is currently connected. */
+        [[nodiscard]] virtual auto IsGamepadConnected(uint8_t iGamepadId) const -> bool {
+            (void)iGamepadId;
+            return false;
+        }
+
+        /** @brief Get the human-readable name of a connected gamepad.
+         *  @return Name string, or empty if not connected.
+         */
+        [[nodiscard]] virtual auto GetGamepadName(uint8_t iGamepadId) const -> std::string_view {
+            (void)iGamepadId;
+            return {};
+        }
     };
 
     // ===========================================================================
@@ -294,6 +329,24 @@ namespace miki::platform {
 
         /** @brief Check if ALL root windows have been closed. */
         [[nodiscard]] auto ShouldClose() const -> bool;
+
+        // -- Gamepad / Joystick -------------------------------------------
+
+        /** @brief Poll gamepad events (connect/disconnect, button, axis).
+         *  @return Span of gamepad events valid until next PollGamepadEvents call.
+         */
+        auto PollGamepadEvents() -> std::span<const neko::platform::GamepadEvent>;
+
+        /** @brief Query current state of a connected gamepad.
+         *  @return true if gamepad is connected and state was filled.
+         */
+        [[nodiscard]] auto GetGamepadState(uint8_t iGamepadId, neko::platform::GamepadState& oState) const -> bool;
+
+        /** @brief Check if a gamepad slot is connected. */
+        [[nodiscard]] auto IsGamepadConnected(uint8_t iGamepadId) const -> bool;
+
+        /** @brief Get human-readable name of a connected gamepad. */
+        [[nodiscard]] auto GetGamepadName(uint8_t iGamepadId) const -> std::string_view;
 
         /** @brief Register a callback to check if a window has an attached GPU surface.
          *         Used by DestroyWindow to assert surfaces are detached before OS destroy.

@@ -18,6 +18,7 @@
 #include "miki/platform/WindowManager.h"
 #include "miki/rhi/RhiTypes.h"
 
+#include <array>
 #include <unordered_map>
 #include <vector>
 
@@ -61,6 +62,13 @@ namespace miki::platform {
 
         auto SetWindowHandle(void* iNativeToken, miki::platform::WindowHandle iHandle) -> void override;
 
+        // -- Gamepad / Joystick --
+        auto PollGamepadEvents(std::vector<neko::platform::GamepadEvent>& ioEvents) -> void override;
+        [[nodiscard]] auto GetGamepadState(uint8_t iGamepadId, neko::platform::GamepadState& oState) const
+            -> bool override;
+        [[nodiscard]] auto IsGamepadConnected(uint8_t iGamepadId) const -> bool override;
+        [[nodiscard]] auto GetGamepadName(uint8_t iGamepadId) const -> std::string_view override;
+
         /** @brief Get the GLFWwindow* for a given native token. Used by ImGui init. */
         [[nodiscard]] static auto GetGlfwWindow(void* iNativeToken) noexcept -> GLFWwindow* {
             return static_cast<GLFWwindow*>(iNativeToken);
@@ -97,6 +105,19 @@ namespace miki::platform {
         // Accumulated events during glfwPollEvents callback storm
         std::vector<miki::platform::WindowEvent> pendingEvents_;
 
+        // -- Gamepad state tracking --
+        static constexpr float kAxisDeadzone = 0.05f;
+
+        struct GamepadSlot {
+            bool connected = false;
+            bool isGamepad = false;  // has SDL gamepad mapping
+            neko::platform::GamepadState prevState = {};
+        };
+        std::array<GamepadSlot, neko::platform::kMaxGamepads> gamepadSlots_ = {};
+
+        // Pending gamepad events from GLFW joystick callback
+        std::vector<neko::platform::GamepadEvent> pendingGamepadEvents_;
+
         // --- GLFW callback trampolines ---
         static auto KeyCallback(GLFWwindow* w, int key, int scancode, int action, int mods) -> void;
         static auto MouseButtonCallback(GLFWwindow* w, int button, int action, int mods) -> void;
@@ -108,6 +129,7 @@ namespace miki::platform {
         static auto WindowCloseCallback(GLFWwindow* w) -> void;
         static auto WindowIconifyCallback(GLFWwindow* w, int iconified) -> void;
         static auto WindowMaximizeCallback(GLFWwindow* w, int maximized) -> void;
+        static auto JoystickCallback(int jid, int event) -> void;
 
        public:
         // --- Key/mouse mapping (from GlfwBridge) ---

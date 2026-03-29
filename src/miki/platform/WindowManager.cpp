@@ -42,6 +42,7 @@ namespace miki::platform {
         std::unique_ptr<IWindowBackend> backend;
         core::ChunkedSlotMap<WindowNode, 16> nodes;
         std::vector<WindowEvent> eventBuffer;
+        std::vector<neko::platform::GamepadEvent> gamepadEventBuffer;
         HasSurfaceFn hasSurfaceCallback = nullptr;
 
         [[nodiscard]] auto ToSlot(WindowHandle wh) const -> core::SlotHandle {
@@ -521,6 +522,40 @@ namespace miki::platform {
 
     auto WindowManager::GetBackend() noexcept -> IWindowBackend* {
         return impl_ ? impl_->backend.get() : nullptr;
+    }
+
+    // ===========================================================================
+    // Gamepad / Joystick
+    // ===========================================================================
+
+    auto WindowManager::PollGamepadEvents() -> std::span<const neko::platform::GamepadEvent> {
+        if (!impl_ || !impl_->backend) {
+            return {};
+        }
+        impl_->gamepadEventBuffer.clear();
+        impl_->backend->PollGamepadEvents(impl_->gamepadEventBuffer);
+        return impl_->gamepadEventBuffer;
+    }
+
+    auto WindowManager::GetGamepadState(uint8_t iGamepadId, neko::platform::GamepadState& oState) const -> bool {
+        if (!impl_ || !impl_->backend) {
+            return false;
+        }
+        return impl_->backend->GetGamepadState(iGamepadId, oState);
+    }
+
+    auto WindowManager::IsGamepadConnected(uint8_t iGamepadId) const -> bool {
+        if (!impl_ || !impl_->backend) {
+            return false;
+        }
+        return impl_->backend->IsGamepadConnected(iGamepadId);
+    }
+
+    auto WindowManager::GetGamepadName(uint8_t iGamepadId) const -> std::string_view {
+        if (!impl_ || !impl_->backend) {
+            return {};
+        }
+        return impl_->backend->GetGamepadName(iGamepadId);
     }
 
 }  // namespace miki::platform

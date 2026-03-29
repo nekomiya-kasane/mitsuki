@@ -13,6 +13,7 @@
  */
 #pragma once
 
+// clang-format off
 #if MIKI_BUILD_VULKAN
 #    include "miki/rhi/backend/VulkanDevice.h"
 #    include "miki/rhi/backend/VulkanCompatDevice.h"
@@ -28,4 +29,9 @@
 
 #if MIKI_BUILD_WEBGPU
 #    include "miki/rhi/backend/WebGPUDevice.h"
+#endif
+// clang-format on
+
+#ifdef CreateSemaphore
+#    undef CreateSemaphore
 #endif

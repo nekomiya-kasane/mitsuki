@@ -5,6 +5,7 @@
 #include "miki/platform/WindowManager.h"
 #include "miki/platform/EventSimulator.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -35,10 +36,21 @@ namespace miki::test {
 
         // Injected events to be returned by PollEvents
         std::vector<miki::platform::WindowEvent> injectedEvents;
+        // Injected gamepad events
+        std::vector<neko::platform::GamepadEvent> injectedGamepadEvents;
         // Track all create/destroy calls
         std::unordered_map<void*, WindowState> windows;
         uint32_t createCount = 0;
         uint32_t destroyCount = 0;
+
+        // Mock gamepad state
+        struct MockGamepadSlot {
+            bool connected = false;
+            bool isGamepad = false;
+            std::string name;
+            neko::platform::GamepadState state = {};
+        };
+        std::array<MockGamepadSlot, neko::platform::kMaxGamepads> gamepadSlots_ = {};
 
         [[nodiscard]] auto CreateNativeWindow(
             const miki::platform::WindowDesc& iDesc, void* iParentToken, void*& oNativeToken
@@ -49,6 +61,7 @@ namespace miki::test {
             oNativeToken = token;
             bool hidden = iDesc.flags.Has(miki::platform::WindowFlags::Hidden);
             windows[token] = WindowState{
+                .handle = miki::rhi::NativeWindowHandle{miki::rhi::Win32Window{.hwnd = token}},
                 .parentToken = iParentToken,
                 .width = iDesc.width,
                 .height = iDesc.height,
@@ -79,9 +92,9 @@ namespace miki::test {
                 return {};
             }
             if (it->second.minimized) {
-                return {0, 0};
+                return {.width = 0, .height = 0};
             }
-            return {it->second.width, it->second.height};
+            return {.width = it->second.width, .height = it->second.height};
         }
 
         [[nodiscard]] auto IsMinimized(void* iNativeToken) -> bool override {
@@ -192,6 +205,72 @@ namespace miki::test {
             if (it != windows.end()) {
                 it->second.closed = true;
             }
+        }
+
+        // -- Gamepad overrides --
+        auto PollGamepadEvents(std::vector<neko::platform::GamepadEvent>& ioEvents) -> void override {
+            ioEvents.insert(ioEvents.end(), injectedGamepadEvents.begin(), injectedGamepadEvents.end());
+            injectedGamepadEvents.clear();
+        }
+
+        [[nodiscard]] auto GetGamepadState(uint8_t iGamepadId, neko::platform::GamepadState& oState) const
+            -> bool override {
+            if (iGamepadId >= neko::platform::kMaxGamepads || !gamepadSlots_[iGamepadId].connected) {
+                return false;
+            }
+            oState = gamepadSlots_[iGamepadId].state;
+            return true;
+        }
+
+        [[nodiscard]] auto IsGamepadConnected(uint8_t iGamepadId) const -> bool override {
+            return iGamepadId < neko::platform::kMaxGamepads && gamepadSlots_[iGamepadId].connected;
+        }
+
+        [[nodiscard]] auto GetGamepadName(uint8_t iGamepadId) const -> std::string_view override {
+            if (iGamepadId >= neko::platform::kMaxGamepads || !gamepadSlots_[iGamepadId].connected) {
+                return {};
+            }
+            return gamepadSlots_[iGamepadId].name;
+        }
+
+        // -- Gamepad test helpers --
+        void SimulateGamepadConnect(uint8_t id, std::string_view name, bool isGamepad = true) {
+            if (id >= neko::platform::kMaxGamepads) {
+                return;
+            }
+            gamepadSlots_[id] = {.connected = true, .isGamepad = isGamepad, .name = std::string(name)};
+            injectedGamepadEvents.push_back(
+                {id, neko::platform::GamepadConnected{.name = gamepadSlots_[id].name, .isGamepad = isGamepad}}
+            );
+        }
+
+        void SimulateGamepadDisconnect(uint8_t id) {
+            if (id >= neko::platform::kMaxGamepads) {
+                return;
+            }
+            gamepadSlots_[id] = {};
+            injectedGamepadEvents.push_back({id, neko::platform::GamepadDisconnected{}});
+        }
+
+        void SimulateGamepadButton(uint8_t id, neko::platform::GamepadButton btn, bool pressed) {
+            if (id >= neko::platform::kMaxGamepads) {
+                return;
+            }
+            gamepadSlots_[id].state.buttons[static_cast<uint8_t>(btn)] = pressed;
+            injectedGamepadEvents.push_back(
+                {id, neko::platform::GamepadButtonEvent{
+                         .button = btn,
+                         .action = pressed ? neko::platform::Action::Press : neko::platform::Action::Release,
+                     }}
+            );
+        }
+
+        void SimulateGamepadAxis(uint8_t id, neko::platform::GamepadAxis axis, float value) {
+            if (id >= neko::platform::kMaxGamepads) {
+                return;
+            }
+            gamepadSlots_[id].state.axes[static_cast<uint8_t>(axis)] = value;
+            injectedGamepadEvents.push_back({id, neko::platform::GamepadAxisEvent{.axis = axis, .value = value}});
         }
 
         /** @brief Get mutable reference to injected events for EventSimulator. */

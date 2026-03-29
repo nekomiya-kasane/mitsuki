@@ -8,7 +8,9 @@
  */
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <string_view>
 #include <variant>
 
 #include "miki/core/Types.h"
@@ -26,6 +28,9 @@ namespace neko::platform {
         Middle,
         X1,
         X2,
+        X3,
+        X4,
+        X5,
     };
 
     /** @brief Key/button action. */
@@ -260,6 +265,80 @@ namespace neko::platform {
     struct ContinuousInput {
         miki::core::float3 translationVelocity = {};
         miki::core::float3 rotationVelocity = {};
+    };
+
+    // ===========================================================================
+    // Gamepad / Joystick
+    // ===========================================================================
+
+    static constexpr uint8_t kMaxGamepads = 16;
+    static constexpr uint8_t kMaxGamepadAxes = 6;
+    static constexpr uint8_t kMaxGamepadButtons = 15;
+
+    /** @brief Gamepad button identifiers (SDL/Xbox layout). */
+    enum class GamepadButton : uint8_t {
+        A,            ///< Cross (PS) / A (Xbox)
+        B,            ///< Circle (PS) / B (Xbox)
+        X,            ///< Square (PS) / X (Xbox)
+        Y,            ///< Triangle (PS) / Y (Xbox)
+        LeftBumper,   ///< L1 / LB
+        RightBumper,  ///< R1 / RB
+        Back,         ///< Select / Back / Share
+        Start,        ///< Start / Options
+        Guide,        ///< PS / Xbox button
+        LeftThumb,    ///< L3 (stick click)
+        RightThumb,   ///< R3 (stick click)
+        DPadUp,
+        DPadRight,
+        DPadDown,
+        DPadLeft,
+    };
+
+    /** @brief Gamepad axis identifiers. */
+    enum class GamepadAxis : uint8_t {
+        LeftX,         ///< Left stick horizontal  [-1, +1]
+        LeftY,         ///< Left stick vertical    [-1, +1]
+        RightX,        ///< Right stick horizontal [-1, +1]
+        RightY,        ///< Right stick vertical   [-1, +1]
+        LeftTrigger,   ///< L2 / LT  [-1, +1] (rest = -1)
+        RightTrigger,  ///< R2 / RT  [-1, +1] (rest = -1)
+    };
+
+    /** @brief Snapshot of full gamepad state (axes + buttons). */
+    struct GamepadState {
+        std::array<float, kMaxGamepadAxes> axes = {};
+        std::array<bool, kMaxGamepadButtons> buttons = {};
+    };
+
+    /** @brief A gamepad was connected. */
+    struct GamepadConnected {
+        std::string_view name;   ///< Human-readable device name (valid until next PollGamepadEvents)
+        bool isGamepad = false;  ///< true if GLFW gamepad mapping exists (vs raw joystick)
+    };
+
+    /** @brief A gamepad was disconnected. */
+    struct GamepadDisconnected {};
+
+    /** @brief A gamepad button was pressed or released. */
+    struct GamepadButtonEvent {
+        GamepadButton button = GamepadButton::A;
+        Action action = Action::Press;
+    };
+
+    /** @brief A gamepad axis value changed beyond deadzone threshold. */
+    struct GamepadAxisEvent {
+        GamepadAxis axis = GamepadAxis::LeftX;
+        float value = 0.0f;
+    };
+
+    /** @brief Gamepad event variant (not window-scoped). */
+    using GamepadEventPayload
+        = std::variant<GamepadConnected, GamepadDisconnected, GamepadButtonEvent, GamepadAxisEvent>;
+
+    /** @brief Gamepad event tagged with device ID [0, kMaxGamepads). */
+    struct GamepadEvent {
+        uint8_t gamepadId = 0;
+        GamepadEventPayload event;
     };
 
     // ===========================================================================
