@@ -9,6 +9,9 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
+
+#include "miki/core/TypeTraits.h"
 
 namespace miki::rhi {
 
@@ -31,6 +34,7 @@ namespace miki::rhi {
         Fragment = 1 << 1,
         Compute = 1 << 2,
         Task = 1 << 3,
+        Amplification = Task,
         Mesh = 1 << 4,
         RayGen = 1 << 5,
         AnyHit = 1 << 6,
@@ -42,12 +46,7 @@ namespace miki::rhi {
         All = 0x7FF,
     };
 
-    [[nodiscard]] constexpr auto operator|(ShaderStage a, ShaderStage b) noexcept -> ShaderStage {
-        return static_cast<ShaderStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-    }
-    [[nodiscard]] constexpr auto operator&(ShaderStage a, ShaderStage b) noexcept -> ShaderStage {
-        return static_cast<ShaderStage>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
-    }
+    MIKI_BITMASK_OPS(ShaderStage)
 
     // =========================================================================
     // Pipeline stages (bitmask)
@@ -75,12 +74,7 @@ namespace miki::rhi {
         ShadingRateImage = 1 << 18,
     };
 
-    [[nodiscard]] constexpr auto operator|(PipelineStage a, PipelineStage b) noexcept -> PipelineStage {
-        return static_cast<PipelineStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-    }
-    [[nodiscard]] constexpr auto operator&(PipelineStage a, PipelineStage b) noexcept -> PipelineStage {
-        return static_cast<PipelineStage>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
-    }
+    MIKI_BITMASK_OPS(PipelineStage)
 
     // =========================================================================
     // Access flags (bitmask)
@@ -110,12 +104,7 @@ namespace miki::rhi {
         ShadingRateImageRead = 1 << 19,
     };
 
-    [[nodiscard]] constexpr auto operator|(AccessFlags a, AccessFlags b) noexcept -> AccessFlags {
-        return static_cast<AccessFlags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-    }
-    [[nodiscard]] constexpr auto operator&(AccessFlags a, AccessFlags b) noexcept -> AccessFlags {
-        return static_cast<AccessFlags>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
-    }
+    MIKI_BITMASK_OPS(AccessFlags)
 
     // =========================================================================
     // Texture layout (for barriers)
@@ -152,12 +141,7 @@ namespace miki::rhi {
         SparseBinding = 1 << 10,
     };
 
-    [[nodiscard]] constexpr auto operator|(BufferUsage a, BufferUsage b) noexcept -> BufferUsage {
-        return static_cast<BufferUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-    }
-    [[nodiscard]] constexpr auto operator&(BufferUsage a, BufferUsage b) noexcept -> BufferUsage {
-        return static_cast<BufferUsage>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
-    }
+    MIKI_BITMASK_OPS(BufferUsage)
 
     // =========================================================================
     // Texture usage (bitmask)
@@ -175,12 +159,7 @@ namespace miki::rhi {
         SparseBinding = 1 << 8,
     };
 
-    [[nodiscard]] constexpr auto operator|(TextureUsage a, TextureUsage b) noexcept -> TextureUsage {
-        return static_cast<TextureUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-    }
-    [[nodiscard]] constexpr auto operator&(TextureUsage a, TextureUsage b) noexcept -> TextureUsage {
-        return static_cast<TextureUsage>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
-    }
+    MIKI_BITMASK_OPS(TextureUsage)
 
     // =========================================================================
     // Memory location
@@ -313,9 +292,7 @@ namespace miki::rhi {
         All = R | G | B | A,
     };
 
-    [[nodiscard]] constexpr auto operator|(ColorWriteMask a, ColorWriteMask b) noexcept -> ColorWriteMask {
-        return static_cast<ColorWriteMask>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
-    }
+    MIKI_BITMASK_OPS(ColorWriteMask)
 
     // =========================================================================
     // Rasterizer enums
@@ -461,10 +438,7 @@ namespace miki::rhi {
         NoDuplicateAnyHit = 1 << 1,
     };
 
-    [[nodiscard]] constexpr auto operator|(AccelStructGeometryFlags a, AccelStructGeometryFlags b) noexcept
-        -> AccelStructGeometryFlags {
-        return static_cast<AccelStructGeometryFlags>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
-    }
+    MIKI_BITMASK_OPS(AccelStructGeometryFlags)
 
     enum class AccelStructBuildFlags : uint8_t {
         None = 0,
@@ -473,10 +447,7 @@ namespace miki::rhi {
         AllowUpdate = 1 << 2,
     };
 
-    [[nodiscard]] constexpr auto operator|(AccelStructBuildFlags a, AccelStructBuildFlags b) noexcept
-        -> AccelStructBuildFlags {
-        return static_cast<AccelStructBuildFlags>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
-    }
+    MIKI_BITMASK_OPS(AccelStructBuildFlags)
 
     enum class AccelStructInstanceFlags : uint8_t {
         None = 0,
@@ -486,10 +457,7 @@ namespace miki::rhi {
         ForceNoOpaque = 1 << 3,
     };
 
-    [[nodiscard]] constexpr auto operator|(AccelStructInstanceFlags a, AccelStructInstanceFlags b) noexcept
-        -> AccelStructInstanceFlags {
-        return static_cast<AccelStructInstanceFlags>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
-    }
+    MIKI_BITMASK_OPS(AccelStructInstanceFlags)
 
     // =========================================================================
     // Pipeline library (split compilation)
@@ -517,12 +485,7 @@ namespace miki::rhi {
         All = Sampled | Storage | ColorAttachment | DepthStencil | BlendSrc | Filter,
     };
 
-    [[nodiscard]] constexpr auto operator|(FormatFeatureFlags a, FormatFeatureFlags b) noexcept -> FormatFeatureFlags {
-        return static_cast<FormatFeatureFlags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-    }
-    [[nodiscard]] constexpr auto operator&(FormatFeatureFlags a, FormatFeatureFlags b) noexcept -> FormatFeatureFlags {
-        return static_cast<FormatFeatureFlags>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
-    }
+    MIKI_BITMASK_OPS(FormatFeatureFlags)
 
     // =========================================================================
     // Compression format (future: CmdDecompressBuffer)

@@ -156,4 +156,23 @@ namespace miki::core {
 #define MIKI_ASSERT_STRUCT_ALIGN(T, expected_align) \
     static_assert(alignof(T) == (expected_align), "Unexpected struct alignment")
 
+/// @brief Generate bitwise operators (|, &, ~, |=, &=) for a scoped bitmask enum.
+/// Returns raw enum type for non-breaking compatibility with existing code.
+#define MIKI_BITMASK_OPS(E)                                                                                           \
+    [[nodiscard]] constexpr auto operator|(E a, E b) noexcept -> E {                                                  \
+        return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) | static_cast<std::underlying_type_t<E>>(b)); \
+    }                                                                                                                 \
+    [[nodiscard]] constexpr auto operator&(E a, E b) noexcept -> E {                                                  \
+        return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) & static_cast<std::underlying_type_t<E>>(b)); \
+    }                                                                                                                 \
+    [[nodiscard]] constexpr auto operator~(E a) noexcept -> E {                                                       \
+        return static_cast<E>(~static_cast<std::underlying_type_t<E>>(a));                                            \
+    }                                                                                                                 \
+    constexpr auto operator|=(E& a, E b) noexcept -> E& {                                                             \
+        return a = a | b;                                                                                             \
+    }                                                                                                                 \
+    constexpr auto operator&=(E& a, E b) noexcept -> E& {                                                             \
+        return a = a & b;                                                                                             \
+    }
+
 }  // namespace miki::core

@@ -15,11 +15,13 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <mutex>
 #include <new>
 #include <utility>
+#include <vector>
 
 namespace miki::rhi {
 
@@ -125,26 +127,27 @@ namespace miki::rhi {
      *  Alloc/Free are mutex-protected (not hot path — O(100)/frame). Lookup is lock-free (generation check on stable
      * slot, read-only).
      *
-     *  @tparam T        The payload type stored per slot.
-     *  @tparam Tag      The handle tag type (for type-safe handles).
-     *  @tparam Capacity Maximum number of simultaneous live handles.
+     *  InitialCapacity is the starting size. The pool grows dynamically (doubles) when exhausted.
+     *  Safety: Lookup is only called after a synchronization point (frame boundary / fence wait),
+     *  so vector reallocation under the mutex does not race with readers.
+     *
+     *  @tparam T               The payload type stored per slot.
+     *  @tparam Tag             The handle tag type (for type-safe handles).
+     *  @tparam InitialCapacity Starting number of slots.
      */
-    template <typename T, typename Tag, size_t Capacity>
+    template <typename T, typename Tag, size_t InitialCapacity>
     class HandlePool {
-        static_assert(Capacity <= std::numeric_limits<uint32_t>::max(), "Capacity exceeds uint32_t index range");
+        static_assert(
+            InitialCapacity <= std::numeric_limits<uint32_t>::max(), "InitialCapacity exceeds uint32_t index range"
+        );
 
        public:
         using HandleType = Handle<Tag>;
 
-        HandlePool() {
-            for (size_t i = 0; i < Capacity; ++i) {
-                slots_[i].nextFree = static_cast<uint32_t>(i + 1);
-                slots_[i].generation = 1;  // Start at 1: Pack(1,0,0,0)!=0, so IsValid() is never false for slot 0
-                slots_[i].alive = false;
-            }
-            slots_[Capacity - 1].nextFree = kInvalidIndex;
+        HandlePool() : slots_(InitialCapacity) {
+            InitFreeList(0, InitialCapacity);
             freeListHead_ = 0;
-            freeCount_ = static_cast<uint32_t>(Capacity);
+            freeCount_ = static_cast<uint32_t>(InitialCapacity);
         }
 
         /** @brief Allocate a slot, return handle + pointer to payload.
@@ -154,7 +157,7 @@ namespace miki::rhi {
         [[nodiscard]] auto Allocate(uint8_t typeTag = 0, uint8_t backend = 0) -> std::pair<HandleType, T*> {
             std::lock_guard lock(mutex_);
             if (freeListHead_ == kInvalidIndex) {
-                return {{}, nullptr};
+                Grow();
             }
 
             uint32_t idx = freeListHead_;
@@ -162,9 +165,9 @@ namespace miki::rhi {
             freeListHead_ = slot.nextFree;
             --freeCount_;
 
-            slot.alive = true;
             auto* obj = ::new (&slot.storage) T{};  // Placement-new: construct in-place
-            auto handle = HandleType::Pack(slot.generation, idx, typeTag, backend);
+            auto handle = HandleType::Pack(slot.generation.load(std::memory_order_relaxed), idx, typeTag, backend);
+            slot.alive.store(true, std::memory_order_release);  // Publish to lock-free readers
             return {handle, obj};
         }
 
@@ -177,19 +180,20 @@ namespace miki::rhi {
             }
             std::lock_guard lock(mutex_);
             uint32_t idx = handle.GetIndex();
-            if (idx >= Capacity) {
+            if (idx >= slots_.size()) {
                 return;
             }
 
             auto& slot = slots_[idx];
-            if (!slot.alive || slot.generation != handle.GetGeneration()) {
+            if (!slot.alive.load(std::memory_order_relaxed)
+                || slot.generation.load(std::memory_order_relaxed) != handle.GetGeneration()) {
                 return;
             }
 
+            slot.alive.store(false, std::memory_order_release);
             slot.GetObject().~T();
-            slot.alive = false;
             slot.dead = false;
-            ++slot.generation;
+            slot.generation.fetch_add(1, std::memory_order_relaxed);
             slot.nextFree = freeListHead_;
             freeListHead_ = idx;
             ++freeCount_;
@@ -207,18 +211,19 @@ namespace miki::rhi {
             }
             std::lock_guard lock(mutex_);
             uint32_t idx = handle.GetIndex();
-            if (idx >= Capacity) {
+            if (idx >= slots_.size()) {
                 return kInvalidIndex;
             }
 
             auto& slot = slots_[idx];
-            if (!slot.alive || slot.generation != handle.GetGeneration()) {
+            if (!slot.alive.load(std::memory_order_relaxed)
+                || slot.generation.load(std::memory_order_relaxed) != handle.GetGeneration()) {
                 return kInvalidIndex;
             }
 
-            slot.alive = false;  // Lookup() will fail
-            slot.dead = true;    // Payload still constructed, awaiting Reclaim
-            ++slot.generation;   // Invalidate all existing handles
+            slot.alive.store(false, std::memory_order_release);       // Lookup() will fail
+            slot.dead = true;                                         // Payload still constructed, awaiting Reclaim
+            slot.generation.fetch_add(1, std::memory_order_relaxed);  // Invalidate all existing handles
             return idx;
         }
 
@@ -227,7 +232,7 @@ namespace miki::rhi {
          *  @param slotIndex  Raw index returned by MarkDead().
          */
         void Reclaim(uint32_t slotIndex) {
-            if (slotIndex >= Capacity) {
+            if (slotIndex >= slots_.size()) {
                 return;
             }
             std::lock_guard lock(mutex_);
@@ -249,7 +254,7 @@ namespace miki::rhi {
          *  @return Pointer to payload, or nullptr if slot is not in dead state.
          */
         [[nodiscard]] auto LookupDead(uint32_t slotIndex) -> T* {
-            if (slotIndex >= Capacity) {
+            if (slotIndex >= slots_.size()) {
                 return nullptr;
             }
             auto& slot = slots_[slotIndex];
@@ -260,7 +265,7 @@ namespace miki::rhi {
         }
 
         [[nodiscard]] auto LookupDead(uint32_t slotIndex) const -> const T* {
-            if (slotIndex >= Capacity) {
+            if (slotIndex >= slots_.size()) {
                 return nullptr;
             }
             const auto& slot = slots_[slotIndex];
@@ -282,11 +287,12 @@ namespace miki::rhi {
                 return nullptr;
             }
             uint32_t idx = handle.GetIndex();
-            if (idx >= Capacity) {
+            if (idx >= slots_.size()) {
                 return nullptr;
             }
             const auto& slot = slots_[idx];
-            if (!slot.alive || slot.generation != handle.GetGeneration()) {
+            if (!slot.alive.load(std::memory_order_acquire)
+                || slot.generation.load(std::memory_order_acquire) != handle.GetGeneration()) {
                 return nullptr;
             }
             return &slot.GetObject();
@@ -298,11 +304,12 @@ namespace miki::rhi {
                 return nullptr;
             }
             uint32_t idx = handle.GetIndex();
-            if (idx >= Capacity) {
+            if (idx >= slots_.size()) {
                 return nullptr;
             }
             auto& slot = slots_[idx];
-            if (!slot.alive || slot.generation != handle.GetGeneration()) {
+            if (!slot.alive.load(std::memory_order_acquire)
+                || slot.generation.load(std::memory_order_acquire) != handle.GetGeneration()) {
                 return nullptr;
             }
             return &slot.GetObject();
@@ -312,28 +319,59 @@ namespace miki::rhi {
 
         [[nodiscard]] auto FreeCount() const noexcept -> uint32_t { return freeCount_; }
         [[nodiscard]] auto LiveCount() const noexcept -> uint32_t {
-            return static_cast<uint32_t>(Capacity) - freeCount_;
+            return static_cast<uint32_t>(slots_.size()) - freeCount_;
         }
-        static constexpr auto GetCapacity() noexcept -> size_t { return Capacity; }
+        [[nodiscard]] auto GetCapacity() const noexcept -> size_t { return slots_.size(); }
+        static constexpr auto GetInitialCapacity() noexcept -> size_t { return InitialCapacity; }
 
        private:
         static constexpr uint32_t kInvalidIndex = std::numeric_limits<uint32_t>::max();
+        static constexpr size_t kMaxCapacity = uint64_t{1} << Handle<Tag>::kIndexBits;  // 4G slots max
 
         struct Slot {
             alignas(T) std::byte storage[sizeof(T)];  // Uninitialized storage
             uint32_t nextFree = kInvalidIndex;
-            uint16_t generation = 0;
-            bool alive = false;
+            std::atomic<uint16_t> generation{0};
+            std::atomic<bool> alive{false};
             bool dead = false;  // MarkDead'd but not yet Reclaim'd (payload still constructed)
+
+            Slot() = default;
+            Slot(const Slot& o)
+                : nextFree(o.nextFree)
+                , generation(o.generation.load(std::memory_order_relaxed))
+                , alive(o.alive.load(std::memory_order_relaxed))
+                , dead(o.dead) {}
+            auto operator=(const Slot&) -> Slot& = delete;
 
             auto GetObject() noexcept -> T& { return *std::launder(reinterpret_cast<T*>(storage)); }
             auto GetObject() const noexcept -> const T& { return *std::launder(reinterpret_cast<const T*>(storage)); }
         };
 
+        void InitFreeList(size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                slots_[i].nextFree = static_cast<uint32_t>(i + 1);
+                slots_[i].generation.store(1, std::memory_order_relaxed);
+                slots_[i].alive.store(false, std::memory_order_relaxed);
+            }
+            slots_[end - 1].nextFree = kInvalidIndex;
+        }
+
+        void Grow() {
+            size_t oldSize = slots_.size();
+            size_t newSize = std::min(oldSize * 2, kMaxCapacity);
+            if (newSize == oldSize) {
+                return;  // Cannot grow further
+            }
+            slots_.resize(newSize);
+            InitFreeList(oldSize, newSize);
+            freeListHead_ = static_cast<uint32_t>(oldSize);
+            freeCount_ += static_cast<uint32_t>(newSize - oldSize);
+        }
+
         mutable std::mutex mutex_;
         uint32_t freeListHead_ = 0;
         uint32_t freeCount_ = 0;
-        std::array<Slot, Capacity> slots_;
+        std::vector<Slot> slots_;
     };
 
 }  // namespace miki::rhi
