@@ -4,6 +4,10 @@
 
 #include "miki/rhi/backend/VulkanDevice.h"
 
+#include "miki/rhi/backend/VulkanCommandBuffer.h"
+
+#include <algorithm>
+
 namespace miki::rhi {
 
     namespace {
@@ -24,10 +28,10 @@ namespace miki::rhi {
         poolInfo.queryCount = desc.count;
         if (desc.type == QueryType::PipelineStatistics) {
             poolInfo.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT
-                | VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT
-                | VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT
-                | VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT
-                | VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
+                                          | VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT
+                                          | VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT
+                                          | VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT
+                                          | VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
         }
 
         VkQueryPool pool = VK_NULL_HANDLE;
@@ -59,7 +63,9 @@ namespace miki::rhi {
 
     void VulkanDevice::DestroyQueryPoolImpl(QueryPoolHandle h) {
         auto* data = queryPools_.Lookup(h);
-        if (!data) return;
+        if (!data) {
+            return;
+        }
         vkDestroyQueryPool(device_, data->pool, nullptr);
         queryPools_.Free(h);
     }
@@ -68,11 +74,12 @@ namespace miki::rhi {
         QueryPoolHandle h, uint32_t first, uint32_t count, std::span<uint64_t> results
     ) -> RhiResult<void> {
         auto* data = queryPools_.Lookup(h);
-        if (!data) return std::unexpected(RhiError::InvalidHandle);
+        if (!data) {
+            return std::unexpected(RhiError::InvalidHandle);
+        }
 
         VkResult r = vkGetQueryPoolResults(
-            device_, data->pool, first, count,
-            results.size() * sizeof(uint64_t), results.data(), sizeof(uint64_t),
+            device_, data->pool, first, count, results.size() * sizeof(uint64_t), results.data(), sizeof(uint64_t),
             VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT
         );
         if (r != VK_SUCCESS && r != VK_NOT_READY) {
@@ -93,8 +100,12 @@ namespace miki::rhi {
 
     auto VulkanDevice::CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle> {
         uint32_t queueFamily = queueFamilies_.graphics;
-        if (desc.type == QueueType::Compute) queueFamily = queueFamilies_.compute;
-        if (desc.type == QueueType::Transfer) queueFamily = queueFamilies_.transfer;
+        if (desc.type == QueueType::Compute) {
+            queueFamily = queueFamilies_.compute;
+        }
+        if (desc.type == QueueType::Transfer) {
+            queueFamily = queueFamilies_.transfer;
+        }
 
         VkCommandPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -133,10 +144,47 @@ namespace miki::rhi {
 
     void VulkanDevice::DestroyCommandBufferImpl(CommandBufferHandle h) {
         auto* data = commandBuffers_.Lookup(h);
-        if (!data) return;
+        if (!data) {
+            return;
+        }
         // Destroying the pool also frees all command buffers allocated from it
         vkDestroyCommandPool(device_, data->pool, nullptr);
         commandBuffers_.Free(h);
+    }
+
+    // =========================================================================
+    // Command list acquisition (unified factory)
+    // =========================================================================
+
+    auto VulkanDevice::AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition> {
+        CommandBufferDesc desc{.type = queue, .secondary = false};
+        auto bufResult = CreateCommandBufferImpl(desc);
+        if (!bufResult) {
+            return std::unexpected(bufResult.error());
+        }
+
+        auto bufHandle = *bufResult;
+        auto* data = commandBuffers_.Lookup(bufHandle);
+        if (!data) {
+            return std::unexpected(RhiError::InvalidHandle);
+        }
+
+        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<VulkanCommandBuffer>());
+        cmdBuf->Init(this, data->buffer, data->pool, queue);
+
+        CommandListHandle listHandle(cmdBuf.get(), tier_);
+        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+    }
+
+    void VulkanDevice::ReleaseCommandListImpl(const CommandListAcquisition& acq) {
+        void* raw = acq.listHandle.GetRawPtr();
+        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
+            return p.get() == raw;
+        });
+        if (it != commandListArena_.end()) {
+            commandListArena_.erase(it);
+        }
+        DestroyCommandBufferImpl(acq.bufferHandle);
     }
 
 }  // namespace miki::rhi

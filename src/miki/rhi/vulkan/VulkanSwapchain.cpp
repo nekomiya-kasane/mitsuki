@@ -367,4 +367,92 @@ namespace miki::rhi {
         }
     }
 
+    // =========================================================================
+    // Surface capability query
+    // =========================================================================
+
+    static auto FromVkFormat(VkFormat fmt) -> std::optional<Format> {
+        switch (fmt) {
+            case VK_FORMAT_B8G8R8A8_SRGB: return Format::BGRA8_SRGB;
+            case VK_FORMAT_B8G8R8A8_UNORM: return Format::BGRA8_UNORM;
+            case VK_FORMAT_R8G8B8A8_SRGB: return Format::RGBA8_SRGB;
+            case VK_FORMAT_R8G8B8A8_UNORM: return Format::RGBA8_UNORM;
+            case VK_FORMAT_R16G16B16A16_SFLOAT: return Format::RGBA16_FLOAT;
+            case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return Format::RGB10A2_UNORM;
+            default: return std::nullopt;
+        }
+    }
+
+    static auto FromVkPresentMode(VkPresentModeKHR mode) -> std::optional<PresentMode> {
+        switch (mode) {
+            case VK_PRESENT_MODE_IMMEDIATE_KHR: return PresentMode::Immediate;
+            case VK_PRESENT_MODE_MAILBOX_KHR: return PresentMode::Mailbox;
+            case VK_PRESENT_MODE_FIFO_KHR: return PresentMode::Fifo;
+            case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return PresentMode::FifoRelaxed;
+            default: return std::nullopt;
+        }
+    }
+
+    static auto FromVkColorSpace(VkColorSpaceKHR cs) -> std::optional<SurfaceColorSpace> {
+        switch (cs) {
+            case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR: return SurfaceColorSpace::SRGB;
+            case VK_COLOR_SPACE_HDR10_ST2084_EXT: return SurfaceColorSpace::HDR10_ST2084;
+            case VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT: return SurfaceColorSpace::scRGBLinear;
+            default: return std::nullopt;
+        }
+    }
+
+    auto VulkanDevice::GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
+        RenderSurfaceCapabilities caps;
+
+        VkSurfaceKHR surface = CreateVkSurface(instance_, window);
+        if (surface == VK_NULL_HANDLE) {
+            return caps;
+        }
+
+        // Query surface capabilities
+        VkSurfaceCapabilitiesKHR vkCaps{};
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface, &vkCaps);
+
+        caps.minExtent = {vkCaps.minImageExtent.width, vkCaps.minImageExtent.height};
+        caps.maxExtent = {vkCaps.maxImageExtent.width, vkCaps.maxImageExtent.height};
+        caps.minImageCount = vkCaps.minImageCount;
+        caps.maxImageCount = (vkCaps.maxImageCount == 0) ? 16 : vkCaps.maxImageCount;
+
+        // Query surface formats
+        uint32_t formatCount = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_, surface, &formatCount, nullptr);
+        if (formatCount > 0) {
+            std::vector<VkSurfaceFormatKHR> vkFormats(formatCount);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_, surface, &formatCount, vkFormats.data());
+            for (auto& sf : vkFormats) {
+                if (auto fmt = FromVkFormat(sf.format)) {
+                    caps.supportedFormats.push_back(*fmt);
+                }
+                if (auto cs = FromVkColorSpace(sf.colorSpace)) {
+                    if (std::find(caps.supportedColorSpaces.begin(), caps.supportedColorSpaces.end(), *cs)
+                        == caps.supportedColorSpaces.end()) {
+                        caps.supportedColorSpaces.push_back(*cs);
+                    }
+                }
+            }
+        }
+
+        // Query present modes
+        uint32_t modeCount = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface, &modeCount, nullptr);
+        if (modeCount > 0) {
+            std::vector<VkPresentModeKHR> vkModes(modeCount);
+            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface, &modeCount, vkModes.data());
+            for (auto m : vkModes) {
+                if (auto pm = FromVkPresentMode(m)) {
+                    caps.supportedPresentModes.push_back(*pm);
+                }
+            }
+        }
+
+        vkDestroySurfaceKHR(instance_, surface, nullptr);
+        return caps;
+    }
+
 }  // namespace miki::rhi
