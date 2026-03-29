@@ -125,7 +125,7 @@ TEST_P(RhiIntegrationTest, DescriptorBindingFullChain) {
     Dev().Dispatch([&](auto& dev) { dev.UpdateDescriptorSet(*ds, std::span{&update, 1}); });
 
     // Create pipeline layout referencing the descriptor layout
-    PipelineLayoutDesc plDesc{.descriptorLayouts = std::span{&*layout, 1}};
+    PipelineLayoutDesc plDesc{.setLayouts = std::span{&*layout, 1}};
     auto pipelineLayout = Dev().Dispatch([&](auto& dev) { return dev.CreatePipelineLayout(plDesc); });
     ASSERT_TRUE(pipelineLayout.has_value());
 

@@ -27,6 +27,11 @@ using namespace miki::platform;
 using namespace miki::rhi;
 using namespace miki::core;
 
+// Win32 defines CreateWindow as a macro — undefine to avoid clash
+#ifdef CreateWindow
+#    undef CreateWindow
+#endif
+
 // ============================================================================
 // Backend abstraction — each real backend creates a Device + DeviceHandle
 // ============================================================================
@@ -84,8 +89,10 @@ class DeviceHolder {
     }
     auto operator=(DeviceHolder&&) -> DeviceHolder& = delete;
 
-    [[nodiscard]] static auto Create(BackendType type, [[maybe_unused]] void* glfwWindow = nullptr)
-        -> std::unique_ptr<DeviceHolder> {
+    [[nodiscard]] static auto Create(
+        BackendType type, [[maybe_unused]] IWindowBackend* backend = nullptr,
+        [[maybe_unused]] void* nativeToken = nullptr
+    ) -> std::unique_ptr<DeviceHolder> {
         auto holder = std::make_unique<DeviceHolder>();
         switch (type) {
 #if MIKI_BUILD_WEBGPU
@@ -102,7 +109,7 @@ class DeviceHolder {
 #if MIKI_BUILD_OPENGL
             case BackendType::OpenGL43: {
                 holder->opengl_ = std::make_unique<OpenGLDevice>();
-                OpenGLDeviceDesc dd{.enableValidation = true, .glfwWindow = glfwWindow};
+                OpenGLDeviceDesc dd{.enableValidation = true, .windowBackend = backend, .nativeToken = nativeToken};
                 if (auto r = holder->opengl_->Init(dd); !r) {
                     return nullptr;
                 }
@@ -177,19 +184,21 @@ class SurfaceIntegrationTest : public ::testing::TestWithParam<BackendInfo> {
         wm_ = std::make_unique<WindowManager>(std::move(*wmResult));
 
         // Create a helper window for OpenGL context if needed
-        void* glfwWindow = nullptr;
+        IWindowBackend* backendPtr = nullptr;
+        void* nativeToken = nullptr;
 #if MIKI_BUILD_OPENGL
         if (info.type == BackendType::OpenGL43) {
-            // OpenGL needs a GLFWwindow for context — create one first
+            // OpenGL needs a window for GL context — create one first
             auto hWin = wm_->CreateWindow({.width = 64, .height = 64, .flags = WindowFlags::Hidden});
             ASSERT_TRUE(hWin.has_value());
             contextWindow_ = *hWin;
-            glfwWindow = wm_->GetNativeToken(contextWindow_);
+            backendPtr = glfwBackend_;
+            nativeToken = wm_->GetNativeToken(contextWindow_);
         }
 #endif
 
         // Create real device
-        device_ = DeviceHolder::Create(info.type, glfwWindow);
+        device_ = DeviceHolder::Create(info.type, backendPtr, nativeToken);
         ASSERT_NE(device_, nullptr) << "Device creation failed for " << info.name;
         ASSERT_TRUE(device_->handle.IsValid());
 
