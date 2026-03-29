@@ -1,67 +1,43 @@
 # =============================================================================
 # miki demos — Example applications showcasing engine features
 # =============================================================================
+#
+# All demos link to the unified `miki` shared library.
+#
 
 if(NOT MIKI_BUILD_EXAMPLES)
     return()
 endif()
 
-# ---------------------------------------------------------------------------
-# WindowManager Demo — Multi-window, events, parent-child hierarchy
-# ---------------------------------------------------------------------------
-if(TARGET miki_glfw_backend AND TARGET miki_debug AND EXISTS "${CMAKE_SOURCE_DIR}/demos/platform/window_manager_demo.cpp")
-    add_executable(window_manager_demo demos/platform/window_manager_demo.cpp)
-    target_link_libraries(window_manager_demo PRIVATE miki_glfw_backend miki_debug)
-    miki_setup_executable(window_manager_demo)
-
-    if(EMSCRIPTEN)
-        # Generate HTML shell for browser execution
-        # Note: USE_WEBGPU is deprecated, use --use-port=emdawnwebgpu for WebGPU support
-        set_target_properties(window_manager_demo PROPERTIES
-            SUFFIX ".html"
-            LINK_FLAGS "--shell-file ${CMAKE_SOURCE_DIR}/demos/shell/miki_shell.html"
-        )
-    endif()
+if(NOT TARGET miki)
+    message(WARNING "[miki] demos require the unified miki target")
+    return()
 endif()
 
-# ---------------------------------------------------------------------------
-# Logger Demo — Structured logging demonstration
-# ---------------------------------------------------------------------------
-if(TARGET miki_debug AND EXISTS "${CMAKE_SOURCE_DIR}/demos/debug/logger_demo.cpp")
-    add_executable(logger_demo demos/debug/logger_demo.cpp)
-    target_link_libraries(logger_demo PRIVATE miki_debug)
-    miki_setup_executable(logger_demo)
-endif()
-
-# ---------------------------------------------------------------------------
-# RHI Triangle Demo — renders a color triangle on WebGPU or OpenGL backend
-# ---------------------------------------------------------------------------
-if(EXISTS "${CMAKE_SOURCE_DIR}/demos/rhi/rhi_triangle_demo.cpp")
-    set(_rhi_triangle_deps "")
-    if(TARGET miki_webgpu)
-        list(APPEND _rhi_triangle_deps miki_webgpu)
-    endif()
-    if(TARGET miki_opengl)
-        list(APPEND _rhi_triangle_deps miki_opengl)
-    endif()
-
-    if(_rhi_triangle_deps)
-        add_executable(rhi_triangle_demo demos/rhi/rhi_triangle_demo.cpp)
-        target_link_libraries(rhi_triangle_demo PRIVATE ${_rhi_triangle_deps} miki_rhi miki_debug glfw)
-        miki_setup_executable(rhi_triangle_demo)
+# -- Helper macro: create a demo exe linking miki ----------------------------
+macro(miki_add_demo DEMO_NAME SOURCE_FILE)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/${SOURCE_FILE}")
+        add_executable(${DEMO_NAME} ${SOURCE_FILE})
+        target_link_libraries(${DEMO_NAME} PRIVATE miki)
+        miki_setup_executable(${DEMO_NAME})
 
         if(EMSCRIPTEN)
-            set_target_properties(rhi_triangle_demo PROPERTIES
+            set_target_properties(${DEMO_NAME} PROPERTIES
                 SUFFIX ".html"
                 LINK_FLAGS "--shell-file ${CMAKE_SOURCE_DIR}/demos/shell/miki_shell.html"
             )
         endif()
     endif()
-endif()
+endmacro()
 
-# ---------------------------------------------------------------------------
-# Third-party demos (always built if present)
-# ---------------------------------------------------------------------------
+# -- Platform demos -----------------------------------------------------------
+miki_add_demo(window_manager_demo  demos/platform/window_manager_demo.cpp)
+miki_add_demo(logger_demo          demos/debug/logger_demo.cpp)
+
+# -- RHI demos ----------------------------------------------------------------
+miki_add_demo(rhi_triangle_demo    demos/rhi/rhi_triangle_demo.cpp)
+
+# -- Third-party demos (always built if present) ------------------------------
 if(EXISTS "${CMAKE_SOURCE_DIR}/demos/thirdparty/CMakeLists.txt")
     add_subdirectory(demos/thirdparty)
 endif()

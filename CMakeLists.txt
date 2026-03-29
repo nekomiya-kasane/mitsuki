@@ -37,17 +37,22 @@ add_subdirectory(third_party)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # ---------------------------------------------------------------------------
-# Library targets (order matters: dependencies first)
+# OBJECT library targets (order matters: dependencies first)
 # ---------------------------------------------------------------------------
 include(cmake/targets/miki_core.cmake)
+include(cmake/targets/miki_debug.cmake)
 include(cmake/targets/miki_rhi.cmake)
 include(cmake/targets/miki_vulkan.cmake)
 include(cmake/targets/miki_d3d12.cmake)
 include(cmake/targets/miki_opengl.cmake)
 include(cmake/targets/miki_webgpu.cmake)
 include(cmake/targets/miki_glfw_backend.cmake)
-include(cmake/targets/miki_debug.cmake)
 include(cmake/targets/miki_shader.cmake)
+
+# ---------------------------------------------------------------------------
+# Unified shared library (DLL) — all tests and demos link to this
+# ---------------------------------------------------------------------------
+include(cmake/targets/miki.cmake)
 
 # ---------------------------------------------------------------------------
 # Tests and demos
