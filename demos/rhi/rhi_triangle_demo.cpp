@@ -1,22 +1,28 @@
 /** @file rhi_triangle_demo.cpp
- *  @brief RHI triangle demo — renders a color triangle on WebGPU or OpenGL backend.
+ *  @brief RHI triangle demo — renders a color triangle on ALL backends.
  *
- *  Usage: rhi_triangle_demo [--backend webgpu|opengl]
- *  On Emscripten: always WebGPU, main loop via emscripten_set_main_loop.
+ *  Usage: rhi_triangle_demo [--backend vulkan|d3d12|opengl|webgpu]
+ *  Default: Vulkan14 (desktop), WebGPU (Emscripten).
  *
- *  The triangle is defined entirely in the vertex shader (no vertex buffer needed).
- *  Shaders are passed as raw byte spans to ShaderModuleDesc.code.
- *
- *  Command recording uses the concrete CRTP command buffer type directly —
- *  no type-erased CommandListHandle needed for a single-backend demo.
+ *  Uses WindowManager + GlfwWindowBackend for window management.
+ *  Uses SlangCompiler for cross-backend shader compilation.
+ *  Uses DeviceHandle + CommandListHandle for type-erased rendering.
  */
 
+#include "miki/platform/WindowManager.h"
+#include "miki/platform/glfw/GlfwWindowBackend.h"
 #include "miki/rhi/backend/AllBackends.h"
-#if MIKI_BUILD_WEBGPU
-#    include "miki/rhi/backend/WebGPUCommandBuffer.h"
+#if MIKI_BUILD_VULKAN
+#    include "miki/rhi/backend/VulkanCommandBuffer.h"
+#endif
+#if MIKI_BUILD_D3D12
+#    include "miki/rhi/backend/D3D12CommandBuffer.h"
 #endif
 #if MIKI_BUILD_OPENGL
 #    include "miki/rhi/backend/OpenGLCommandBuffer.h"
+#endif
+#if MIKI_BUILD_WEBGPU
+#    include "miki/rhi/backend/WebGPUCommandBuffer.h"
 #endif
 #include "miki/rhi/CommandBuffer.h"
 #include "miki/rhi/Device.h"
@@ -25,20 +31,15 @@
 #include "miki/rhi/Sync.h"
 #include "miki/rhi/RhiEnums.h"
 #include "miki/rhi/RhiTypes.h"
+#include "miki/shader/SlangCompiler.h"
+#include "miki/shader/ShaderTypes.h"
 
-#include <GLFW/glfw3.h>
-#if defined(_WIN32)
-#    define GLFW_EXPOSE_NATIVE_WIN32
-#    include <GLFW/glfw3native.h>
-#    ifdef CreateSemaphore
-#        undef CreateSemaphore  // Win32 macro conflicts with DeviceBase::CreateSemaphore
-#    endif
-#elif defined(__APPLE__)
-#    define GLFW_EXPOSE_NATIVE_COCOA
-#    include <GLFW/glfw3native.h>
-#elif defined(__linux__)
-#    define GLFW_EXPOSE_NATIVE_X11
-#    include <GLFW/glfw3native.h>
+// Win32 macro conflicts
+#ifdef CreateWindow
+#    undef CreateWindow
+#endif
+#ifdef CreateSemaphore
+#    undef CreateSemaphore
 #endif
 
 #if defined(__EMSCRIPTEN__)
@@ -51,129 +52,279 @@
 #include <span>
 #include <string_view>
 
-// ============================================================================
-// Shader source strings (passed as byte spans to ShaderModuleDesc.code)
-// ============================================================================
+// Embed triangle shader source at compile time (C++23 #embed)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc23-extensions"
+static constexpr char kTriangleSlangSource[] = {
+#embed "shaders/triangle.slang"
+    , '\0'
+};
+#pragma clang diagnostic pop
 
-static constexpr std::string_view kWGSL = R"(
-@vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
-    var pos = array<vec2f, 3>(vec2f(0.0, 0.6), vec2f(-0.6, -0.6), vec2f(0.6, -0.6));
-    return vec4f(pos[vi], 0.0, 1.0);
-}
-@fragment fn fs_main() -> @location(0) vec4f { return vec4f(0.4, 0.7, 1.0, 1.0); }
-)";
-
-#if MIKI_BUILD_OPENGL
-static constexpr std::string_view kGLSL_Vert = R"(
-#version 430 core
-const vec2 kPos[3] = vec2[3](vec2(0.0,0.6), vec2(-0.6,-0.6), vec2(0.6,-0.6));
-void main() { gl_Position = vec4(kPos[gl_VertexID], 0.0, 1.0); }
-)";
-
-static constexpr std::string_view kGLSL_Frag = R"(
-#version 430 core
-out vec4 oColor;
-void main() { oColor = vec4(0.4, 0.7, 1.0, 1.0); }
-)";
-#endif
+using namespace miki::platform;
+using namespace miki::rhi;
+namespace shader = miki::shader;
 
 // ============================================================================
-// Helpers
+// CLI parsing
 // ============================================================================
 
-static auto ToBytes(std::string_view sv) -> std::span<const uint8_t> {
-    return {reinterpret_cast<const uint8_t*>(sv.data()), sv.size()};
-}
-
-static auto ParseBackend(std::string_view s) -> miki::rhi::BackendType {
-    if (s == "opengl") {
-        return miki::rhi::BackendType::OpenGL43;
+static auto ParseBackend(std::string_view s) -> BackendType {
+    if (s == "vulkan" || s == "vk") {
+        return BackendType::Vulkan14;
     }
-    return miki::rhi::BackendType::WebGPU;
+    if (s == "d3d12" || s == "dx12") {
+        return BackendType::D3D12;
+    }
+    if (s == "opengl" || s == "gl") {
+        return BackendType::OpenGL43;
+    }
+    if (s == "webgpu" || s == "wgpu") {
+        return BackendType::WebGPU;
+    }
+    return BackendType::Vulkan14;
 }
 
-static auto MakeNativeHandle(GLFWwindow* w) -> miki::rhi::NativeWindowHandle {
-#if defined(__EMSCRIPTEN__)
-    (void)w;
-    return miki::rhi::EmscriptenCanvas{.selector = "#canvas"};
-#elif defined(_WIN32)
-    return miki::rhi::Win32Window{.hwnd = glfwGetWin32Window(w), .hinstance = GetModuleHandle(nullptr)};
-#elif defined(__APPLE__)
-    return miki::rhi::CocoaWindow{.nsWindow = glfwGetCocoaWindow(w)};
-#elif defined(__linux__)
-    return miki::rhi::X11Window{
-        .display = glfwGetX11Display(),
-        .window = static_cast<uint64_t>(glfwGetX11Window(w)),
+static auto BackendName(BackendType t) -> const char* {
+    switch (t) {
+        case BackendType::Vulkan14: return "Vulkan";
+        case BackendType::D3D12: return "D3D12";
+        case BackendType::OpenGL43: return "OpenGL";
+        case BackendType::WebGPU: return "WebGPU";
+        default: return "Unknown";
+    }
+}
+
+// ============================================================================
+// Shader compilation (Slang → per-backend bytecode)
+// ============================================================================
+
+struct CompiledShaders {
+    shader::ShaderBlob vs;
+    shader::ShaderBlob fs;
+};
+
+static auto CompileShaders(BackendType backend) -> std::optional<CompiledShaders> {
+    auto compilerResult = shader::SlangCompiler::Create();
+    if (!compilerResult) {
+        std::println("[demo] shader::SlangCompiler::Create failed");
+        return std::nullopt;
+    }
+    auto compiler = std::move(*compilerResult);
+    auto target = shader::ShaderTargetForBackend(backend);
+    std::string src(kTriangleSlangSource);
+
+    shader::ShaderCompileDesc vsDesc{
+        .sourcePath = {},
+        .sourceCode = src,
+        .entryPoint = "vs_main",
+        .stage = shader::ShaderStage::Vertex,
+        .target = target,
+        .permutation = {},
+        .defines = {}
     };
-#else
-    (void)w;
-    return miki::rhi::Win32Window{};
-#endif
+    auto vsResult = compiler.Compile(vsDesc);
+    if (!vsResult) {
+        std::println("[demo] VS compilation failed for {}", BackendName(backend));
+        for (auto& d : compiler.GetLastDiagnostics()) {
+            std::println("  {}:{}:{}: {}", d.filePath, d.line, d.column, d.message);
+        }
+        return std::nullopt;
+    }
+
+    shader::ShaderCompileDesc fsDesc{
+        .sourcePath = {},
+        .sourceCode = src,
+        .entryPoint = "fs_main",
+        .stage = shader::ShaderStage::Fragment,
+        .target = target,
+        .permutation = {},
+        .defines = {}
+    };
+    auto fsResult = compiler.Compile(fsDesc);
+    if (!fsResult) {
+        std::println("[demo] FS compilation failed for {}", BackendName(backend));
+        for (auto& d : compiler.GetLastDiagnostics()) {
+            std::println("  {}:{}:{}: {}", d.filePath, d.line, d.column, d.message);
+        }
+        return std::nullopt;
+    }
+
+    return CompiledShaders{.vs = std::move(*vsResult), .fs = std::move(*fsResult)};
 }
 
 // ============================================================================
-// Per-backend demo runner (templated on concrete Dev + CmdBuf types)
+// Device creation (type-erased via DeviceHandle)
 // ============================================================================
 
-template <typename Dev, typename CmdBuf>
-struct TriangleDemo {
-    Dev* dev = nullptr;
-    GLFWwindow* window = nullptr;
+struct DeviceHolder {
+    DeviceHandle handle;
 
-    miki::rhi::SwapchainHandle swapchain;
-    miki::rhi::ShaderModuleHandle vertShader;
-    miki::rhi::ShaderModuleHandle fragShader;
-    miki::rhi::PipelineLayoutHandle pipelineLayout;
-    miki::rhi::PipelineHandle pipeline;
-    miki::rhi::CommandBufferHandle cmdHandle;
-    miki::rhi::SemaphoreHandle acquireSem;
-    CmdBuf cmd;
+    ~DeviceHolder() {
+        if (handle.IsValid()) {
+            (void)handle.Dispatch([](auto& dev) {
+                dev.WaitIdle();
+                return 0;
+            });
+            handle.Destroy();
+        }
+    }
 
+#if MIKI_BUILD_VULKAN
+    std::unique_ptr<VulkanDevice> vulkan_;
+#endif
+#if MIKI_BUILD_D3D12
+    std::unique_ptr<D3D12Device> d3d12_;
+#endif
+#if MIKI_BUILD_OPENGL
+    std::unique_ptr<OpenGLDevice> opengl_;
+#endif
+#if MIKI_BUILD_WEBGPU
+    std::unique_ptr<WebGPUDevice> webgpu_;
+#endif
+};
+
+static auto CreateDevice(BackendType backend, [[maybe_unused]] IWindowBackend* wb, [[maybe_unused]] void* nativeToken)
+    -> std::unique_ptr<DeviceHolder> {
+    auto holder = std::make_unique<DeviceHolder>();
+    switch (backend) {
+#if MIKI_BUILD_VULKAN
+        case BackendType::Vulkan14: {
+            holder->vulkan_ = std::make_unique<VulkanDevice>();
+            VulkanDeviceDesc dd{.enableValidation = true};
+            if (auto r = holder->vulkan_->Init(dd); !r) {
+                return nullptr;
+            }
+            holder->handle = DeviceHandle(holder->vulkan_.get(), BackendType::Vulkan14);
+            break;
+        }
+#endif
+#if MIKI_BUILD_D3D12
+        case BackendType::D3D12: {
+            holder->d3d12_ = std::make_unique<D3D12Device>();
+            D3D12DeviceDesc dd{.enableValidation = true};
+            if (auto r = holder->d3d12_->Init(dd); !r) {
+                return nullptr;
+            }
+            holder->handle = DeviceHandle(holder->d3d12_.get(), BackendType::D3D12);
+            break;
+        }
+#endif
+#if MIKI_BUILD_OPENGL
+        case BackendType::OpenGL43: {
+            holder->opengl_ = std::make_unique<OpenGLDevice>();
+            OpenGLDeviceDesc dd{.enableValidation = true, .windowBackend = wb, .nativeToken = nativeToken};
+            if (auto r = holder->opengl_->Init(dd); !r) {
+                return nullptr;
+            }
+            holder->handle = DeviceHandle(holder->opengl_.get(), BackendType::OpenGL43);
+            break;
+        }
+#endif
+#if MIKI_BUILD_WEBGPU
+        case BackendType::WebGPU: {
+            holder->webgpu_ = std::make_unique<WebGPUDevice>();
+            WebGPUDeviceDesc dd{.enableValidation = true};
+            if (auto r = holder->webgpu_->Init(dd); !r) {
+                return nullptr;
+            }
+            holder->handle = DeviceHandle(holder->webgpu_.get(), BackendType::WebGPU);
+            break;
+        }
+#endif
+        default: return nullptr;
+    }
+    return holder;
+}
+
+// ============================================================================
+// Triangle renderer — type-erased via DeviceHandle + CommandListHandle
+// ============================================================================
+
+struct TriangleRenderer {
+    DeviceHandle device;
+    SwapchainHandle swapchain;
+    ShaderModuleHandle vertShader;
+    ShaderModuleHandle fragShader;
+    PipelineLayoutHandle pipelineLayout;
+    PipelineHandle pipeline;
+    CommandBufferHandle cmdBuf;
+    CommandListHandle cmdList;
+    SemaphoreHandle acquireSem;
     uint32_t width = 1280;
     uint32_t height = 720;
-    miki::rhi::BackendType backendType = miki::rhi::BackendType::WebGPU;
 
-    auto Init(
-        std::string_view vertSrc, std::string_view fragSrc, const char* vertEntry, const char* fragEntry,
-        const miki::rhi::NativeWindowHandle& nativeHandle
-    ) -> bool {
-        using namespace miki::rhi;
+    auto Init(DeviceHolder& holder, const NativeWindowHandle& surface, CompiledShaders& shaders, uint32_t w, uint32_t h)
+        -> bool {
+        device = holder.handle;
+        width = w;
+        height = h;
+
+        // Helper: Dispatch with explicit return type to avoid multi-backend type mismatch
+        auto createSwapchain = [&](const SwapchainDesc& sc) -> RhiResult<SwapchainHandle> {
+            return device.Dispatch([&](auto& d) -> RhiResult<SwapchainHandle> { return d.CreateSwapchain(sc); });
+        };
+        auto createShader = [&](const ShaderModuleDesc& sd) -> RhiResult<ShaderModuleHandle> {
+            return device.Dispatch([&](auto& d) -> RhiResult<ShaderModuleHandle> { return d.CreateShaderModule(sd); });
+        };
+        auto createPipelineLayout = [&](const PipelineLayoutDesc& pld) -> RhiResult<PipelineLayoutHandle> {
+            return device.Dispatch([&](auto& d) -> RhiResult<PipelineLayoutHandle> {
+                return d.CreatePipelineLayout(pld);
+            });
+        };
+        auto createPipeline = [&](const GraphicsPipelineDesc& gpd) -> RhiResult<PipelineHandle> {
+            return device.Dispatch([&](auto& d) -> RhiResult<PipelineHandle> { return d.CreateGraphicsPipeline(gpd); });
+        };
+        auto createCmdBuf = [&](const CommandBufferDesc& cbd) -> RhiResult<CommandBufferHandle> {
+            return device.Dispatch([&](auto& d) -> RhiResult<CommandBufferHandle> {
+                return d.CreateCommandBuffer(cbd);
+            });
+        };
+        auto createSem = [&](const SemaphoreDesc& sd) -> RhiResult<SemaphoreHandle> {
+            return device.Dispatch([&](auto& d) -> RhiResult<SemaphoreHandle> { return d.CreateSemaphore(sd); });
+        };
 
         // Swapchain
         SwapchainDesc sc{};
-        sc.surface = nativeHandle;
-        sc.width = width;
-        sc.height = height;
+        sc.surface = surface;
+        sc.width = w;
+        sc.height = h;
         sc.preferredFormat = Format::BGRA8_UNORM;
         sc.presentMode = PresentMode::Fifo;
         sc.debugName = "TriangleSwapchain";
-        auto scr = dev->CreateSwapchain(sc);
+        auto scr = createSwapchain(sc);
         if (!scr) {
-            std::println("[demo] CreateSwapchain failed: {}", static_cast<int>(scr.error()));
+            std::println("[demo] CreateSwapchain failed");
             return false;
         }
         swapchain = *scr;
 
-        // Shaders — code passed as byte span of source text
-        ShaderModuleDesc vd{.stage = ShaderStage::Vertex, .code = ToBytes(vertSrc), .entryPoint = vertEntry};
-        auto vs = dev->CreateShaderModule(vd);
+        // Shaders
+        auto vsCode = std::span<const uint8_t>(shaders.vs.data);
+        auto fsCode = std::span<const uint8_t>(shaders.fs.data);
+        ShaderModuleDesc vd{
+            .stage = miki::rhi::ShaderStage::Vertex, .code = vsCode, .entryPoint = shaders.vs.entryPoint.c_str()
+        };
+        auto vs = createShader(vd);
         if (!vs) {
-            std::println("[demo] VS failed");
+            std::println("[demo] VS create failed");
             return false;
         }
         vertShader = *vs;
 
-        ShaderModuleDesc fd{.stage = ShaderStage::Fragment, .code = ToBytes(fragSrc), .entryPoint = fragEntry};
-        auto fs = dev->CreateShaderModule(fd);
+        ShaderModuleDesc fd{
+            .stage = miki::rhi::ShaderStage::Fragment, .code = fsCode, .entryPoint = shaders.fs.entryPoint.c_str()
+        };
+        auto fs = createShader(fd);
         if (!fs) {
-            std::println("[demo] FS failed");
+            std::println("[demo] FS create failed");
             return false;
         }
         fragShader = *fs;
 
-        // Pipeline layout (no user descriptors)
+        // Pipeline layout (empty)
         PipelineLayoutDesc pld{};
-        auto pl = dev->CreatePipelineLayout(pld);
+        auto pl = createPipelineLayout(pld);
         if (!pl) {
             std::println("[demo] PipelineLayout failed");
             return false;
@@ -181,9 +332,8 @@ struct TriangleDemo {
         pipelineLayout = *pl;
 
         // Graphics pipeline
-        ColorAttachmentBlend blend{};  // defaults: blendEnable=false, writeMask=All
+        ColorAttachmentBlend blend{};
         Format colorFmt = Format::BGRA8_UNORM;
-
         GraphicsPipelineDesc gpd{};
         gpd.vertexShader = vertShader;
         gpd.fragmentShader = fragShader;
@@ -194,30 +344,67 @@ struct TriangleDemo {
         gpd.colorBlends = {&blend, 1};
         gpd.colorFormats = {&colorFmt, 1};
         gpd.pipelineLayout = pipelineLayout;
-        auto pso = dev->CreateGraphicsPipeline(gpd);
+        auto pso = createPipeline(gpd);
         if (!pso) {
             std::println("[demo] PSO failed");
             return false;
         }
         pipeline = *pso;
 
-        // Command buffer + concrete CRTP object
+        // Command buffer
         CommandBufferDesc cbd{.type = QueueType::Graphics};
-        auto cb = dev->CreateCommandBuffer(cbd);
+        auto cb = createCmdBuf(cbd);
         if (!cb) {
             std::println("[demo] CommandBuffer failed");
             return false;
         }
-        cmdHandle = *cb;
-        if constexpr (requires { cmd.Init(dev, cmdHandle); }) {
-            cmd.Init(dev, cmdHandle);
-        } else {
-            cmd.Init(dev);
+        cmdBuf = *cb;
+
+        // Initialize concrete command buffer per backend using DeviceHolder's owned pointers
+        auto bt = device.GetBackendType();
+        switch (bt) {
+#if MIKI_BUILD_VULKAN
+            case BackendType::Vulkan14: {
+                static VulkanCommandBuffer cmd;
+                auto* dev = holder.vulkan_.get();
+                auto* data = dev->GetCommandBufferPool().Lookup(cmdBuf);
+                cmd.Init(dev, data->buffer, data->pool, data->queueType);
+                cmdList = CommandListHandle(&cmd, bt);
+                break;
+            }
+#endif
+#if MIKI_BUILD_D3D12
+            case BackendType::D3D12: {
+                static D3D12CommandBuffer cmd;
+                auto* dev = holder.d3d12_.get();
+                auto* data = dev->GetCommandBufferPool().Lookup(cmdBuf);
+                cmd.Init(dev, data->list.Get(), data->allocator.Get(), data->queueType);
+                cmdList = CommandListHandle(&cmd, bt);
+                break;
+            }
+#endif
+#if MIKI_BUILD_OPENGL
+            case BackendType::OpenGL43: {
+                static OpenGLCommandBuffer cmd;
+                cmd.Init(holder.opengl_.get());
+                cmdList = CommandListHandle(&cmd, bt);
+                break;
+            }
+#endif
+#if MIKI_BUILD_WEBGPU
+            case BackendType::WebGPU: {
+                static WebGPUCommandBuffer cmd;
+                cmd.Init(holder.webgpu_.get(), cmdBuf);
+                cmdList = CommandListHandle(&cmd, bt);
+                break;
+            }
+#endif
+            default: std::println("[demo] Unsupported backend"); return false;
         }
 
-        // Semaphore (binary, for acquire sync)
+        // Semaphore
         SemaphoreDesc sd{.type = SemaphoreType::Binary};
-        auto sem = dev->CreateSemaphore(sd);
+        auto sem = createSem(sd);
         if (!sem) {
             std::println("[demo] Semaphore failed");
             return false;
@@ -228,146 +415,179 @@ struct TriangleDemo {
     }
 
     void Resize(uint32_t w, uint32_t h) {
+        if (w == 0 || h == 0) {
+            return;
+        }
         width = w;
         height = h;
-        if (swapchain.IsValid()) {
-            (void)dev->ResizeSwapchain(swapchain, w, h);
-        }
+        (void)device.Dispatch([&](auto& d) {
+            (void)d.ResizeSwapchain(swapchain, w, h);
+            return 0;
+        });
     }
 
     void RenderFrame() {
-        using namespace miki::rhi;
-
-        auto imgRes = dev->AcquireNextImage(swapchain, acquireSem);
+        auto imgRes = device.Dispatch([&](auto& d) -> RhiResult<uint32_t> {
+            return d.AcquireNextImage(swapchain, acquireSem);
+        });
         if (!imgRes) {
             return;
         }
 
-        TextureHandle colorTex = dev->GetSwapchainTexture(swapchain, *imgRes);
-
-        // Need a TextureView for RenderingAttachment
-        TextureViewDesc tvd{};
-        tvd.texture = colorTex;
-        auto tvRes = dev->CreateTextureView(tvd);
+        auto colorTex
+            = device.Dispatch([&](auto& d) -> TextureHandle { return d.GetSwapchainTexture(swapchain, *imgRes); });
+        auto tvRes = device.Dispatch([&](auto& d) -> RhiResult<TextureViewHandle> {
+            TextureViewDesc tvd{.texture = colorTex};
+            return d.CreateTextureView(tvd);
+        });
         if (!tvRes) {
             return;
         }
         TextureViewHandle colorView = *tvRes;
 
-        cmd.Begin();
+        (void)cmdList.Dispatch([&](auto& cmd) {
+            cmd.Begin();
 
-        // Transition: Undefined → ColorAttachment
-        TextureBarrierDesc toRender{};
-        toRender.srcStage = PipelineStage::TopOfPipe;
-        toRender.dstStage = PipelineStage::ColorAttachmentOutput;
-        toRender.srcAccess = AccessFlags::None;
-        toRender.dstAccess = AccessFlags::ColorAttachmentWrite;
-        toRender.oldLayout = TextureLayout::Undefined;
-        toRender.newLayout = TextureLayout::ColorAttachment;
-        cmd.CmdTextureBarrier(colorTex, toRender);
+            // Transition: Undefined -> ColorAttachment
+            TextureBarrierDesc toRender{};
+            toRender.srcStage = PipelineStage::TopOfPipe;
+            toRender.dstStage = PipelineStage::ColorAttachmentOutput;
+            toRender.srcAccess = AccessFlags::None;
+            toRender.dstAccess = AccessFlags::ColorAttachmentWrite;
+            toRender.oldLayout = TextureLayout::Undefined;
+            toRender.newLayout = TextureLayout::ColorAttachment;
+            cmd.CmdTextureBarrier(colorTex, toRender);
 
-        // Render pass
-        ClearValue clearVal{};
-        clearVal.color.r = 0.08f;
-        clearVal.color.g = 0.08f;
-        clearVal.color.b = 0.12f;
-        clearVal.color.a = 1.0f;
-        RenderingAttachment colorAtt{};
-        colorAtt.view = colorView;
-        colorAtt.loadOp = AttachmentLoadOp::Clear;
-        colorAtt.storeOp = AttachmentStoreOp::Store;
-        colorAtt.clearValue = clearVal;
-        RenderingDesc rd{
-            .renderArea = Rect2D{.offset = {0, 0}, .extent = {width, height}},
-            .colorAttachments = {&colorAtt, 1},
-        };
+            // Render pass
+            ClearValue clearVal{};
+            clearVal.color.r = 0.08f;
+            clearVal.color.g = 0.08f;
+            clearVal.color.b = 0.12f;
+            clearVal.color.a = 1.0f;
+            RenderingAttachment colorAtt{};
+            colorAtt.view = colorView;
+            colorAtt.loadOp = AttachmentLoadOp::Clear;
+            colorAtt.storeOp = AttachmentStoreOp::Store;
+            colorAtt.clearValue = clearVal;
+            RenderingDesc rd{
+                .renderArea = Rect2D{.offset = {0, 0}, .extent = {width, height}},
+                .colorAttachments = {&colorAtt, 1},
+            };
 
-        cmd.CmdBeginRendering(rd);
-        cmd.CmdBindPipeline(pipeline);
-        cmd.CmdSetViewport(
-            {.x = 0,
-             .y = 0,
-             .width = static_cast<float>(width),
-             .height = static_cast<float>(height),
-             .minDepth = 0,
-             .maxDepth = 1}
-        );
-        cmd.CmdSetScissor({.offset = {0, 0}, .extent = {width, height}});
-        cmd.CmdDraw(3, 1, 0, 0);
-        cmd.CmdEndRendering();
+            cmd.CmdBeginRendering(rd);
+            cmd.CmdBindPipeline(pipeline);
+            cmd.CmdSetViewport(
+                {.x = 0,
+                 .y = 0,
+                 .width = static_cast<float>(width),
+                 .height = static_cast<float>(height),
+                 .minDepth = 0,
+                 .maxDepth = 1}
+            );
+            cmd.CmdSetScissor({.offset = {0, 0}, .extent = {width, height}});
+            cmd.CmdDraw(3, 1, 0, 0);
+            cmd.CmdEndRendering();
 
-        // Transition: ColorAttachment → PresentSrc
-        TextureBarrierDesc toPresent{};
-        toPresent.srcStage = PipelineStage::ColorAttachmentOutput;
-        toPresent.dstStage = PipelineStage::BottomOfPipe;
-        toPresent.srcAccess = AccessFlags::ColorAttachmentWrite;
-        toPresent.dstAccess = AccessFlags::None;
-        toPresent.oldLayout = TextureLayout::ColorAttachment;
-        toPresent.newLayout = TextureLayout::Present;
-        cmd.CmdTextureBarrier(colorTex, toPresent);
+            // Transition: ColorAttachment -> Present
+            TextureBarrierDesc toPresent{};
+            toPresent.srcStage = PipelineStage::ColorAttachmentOutput;
+            toPresent.dstStage = PipelineStage::BottomOfPipe;
+            toPresent.srcAccess = AccessFlags::ColorAttachmentWrite;
+            toPresent.dstAccess = AccessFlags::None;
+            toPresent.oldLayout = TextureLayout::ColorAttachment;
+            toPresent.newLayout = TextureLayout::Present;
+            cmd.CmdTextureBarrier(colorTex, toPresent);
 
-        cmd.End();
+            cmd.End();
+            return 0;
+        });
 
-        SemaphoreSubmitInfo waitInfo{};
-        waitInfo.semaphore = acquireSem;
-        waitInfo.stageMask = PipelineStage::ColorAttachmentOutput;
+        SemaphoreSubmitInfo waitInfo{.semaphore = acquireSem, .stageMask = PipelineStage::ColorAttachmentOutput};
         SubmitDesc submitDesc{};
-        submitDesc.commandBuffers = {&cmdHandle, 1};
+        submitDesc.commandBuffers = {&cmdBuf, 1};
         submitDesc.waitSemaphores = {&waitInfo, 1};
-        dev->Submit(QueueType::Graphics, submitDesc);
-
-        dev->Present(swapchain, {});
-        dev->DestroyTextureView(colorView);
+        (void)device.Dispatch([&](auto& d) {
+            d.Submit(QueueType::Graphics, submitDesc);
+            return 0;
+        });
+        (void)device.Dispatch([&](auto& d) {
+            d.Present(swapchain, {});
+            return 0;
+        });
+        (void)device.Dispatch([&](auto& d) {
+            d.DestroyTextureView(colorView);
+            return 0;
+        });
     }
 
     void Cleanup() {
-        dev->WaitIdle();
-        if (acquireSem.IsValid()) {
-            dev->DestroySemaphore(acquireSem);
-        }
-        if (cmdHandle.IsValid()) {
-            dev->DestroyCommandBuffer(cmdHandle);
-        }
-        if (pipeline.IsValid()) {
-            dev->DestroyPipeline(pipeline);
-        }
-        if (pipelineLayout.IsValid()) {
-            dev->DestroyPipelineLayout(pipelineLayout);
-        }
-        if (fragShader.IsValid()) {
-            dev->DestroyShaderModule(fragShader);
-        }
-        if (vertShader.IsValid()) {
-            dev->DestroyShaderModule(vertShader);
-        }
-        if (swapchain.IsValid()) {
-            dev->DestroySwapchain(swapchain);
-        }
+        (void)device.Dispatch([&](auto& d) {
+            d.WaitIdle();
+            if (acquireSem.IsValid()) {
+                d.DestroySemaphore(acquireSem);
+            }
+            if (cmdBuf.IsValid()) {
+                d.DestroyCommandBuffer(cmdBuf);
+            }
+            if (pipeline.IsValid()) {
+                d.DestroyPipeline(pipeline);
+            }
+            if (pipelineLayout.IsValid()) {
+                d.DestroyPipelineLayout(pipelineLayout);
+            }
+            if (fragShader.IsValid()) {
+                d.DestroyShaderModule(fragShader);
+            }
+            if (vertShader.IsValid()) {
+                d.DestroyShaderModule(vertShader);
+            }
+            if (swapchain.IsValid()) {
+                d.DestroySwapchain(swapchain);
+            }
+            return 0;
+        });
     }
 };
 
 // ============================================================================
-// Global state (kept minimal — only what emscripten_set_main_loop needs)
+// Global state (emscripten needs static callbacks)
 // ============================================================================
 
-static GLFWwindow* g_window = nullptr;
-static void (*g_tick)() = nullptr;
-static void (*g_cleanup)() = nullptr;
+static std::unique_ptr<WindowManager> g_wm;
+static std::unique_ptr<DeviceHolder> g_device;
+static TriangleRenderer g_renderer;
+static WindowHandle g_mainWindow;
+static bool g_shouldQuit = false;
 
 static void MainLoopIteration() {
-    glfwPollEvents();
-    if (glfwWindowShouldClose(g_window)) {
+    auto events = g_wm->PollEvents();
+    for (auto& ev : events) {
+        std::visit(
+            [](auto& e) {
+                using T = std::decay_t<decltype(e)>;
+                if constexpr (std::is_same_v<T, neko::platform::KeyDown>) {
+                    if (e.key == neko::platform::Key::Escape) {
+                        g_shouldQuit = true;
+                    }
+                } else if constexpr (std::is_same_v<T, neko::platform::CloseRequested>) {
+                    g_shouldQuit = true;
+                } else if constexpr (std::is_same_v<T, neko::platform::Resize>) {
+                    g_renderer.Resize(e.width, e.height);
+                }
+            },
+            ev.event
+        );
+    }
+
+    if (g_shouldQuit) {
 #if defined(__EMSCRIPTEN__)
         emscripten_cancel_main_loop();
-        if (g_cleanup) {
-            g_cleanup();
-        }
+        g_renderer.Cleanup();
 #endif
         return;
     }
-    if (g_tick) {
-        g_tick();
-    }
+
+    g_renderer.RenderFrame();
 }
 
 // ============================================================================
@@ -376,9 +596,9 @@ static void MainLoopIteration() {
 
 int main(int argc, char** argv) {
     // Parse CLI
-    miki::rhi::BackendType backend = miki::rhi::BackendType::WebGPU;
+    BackendType backend = BackendType::Vulkan14;
 #if defined(__EMSCRIPTEN__)
-    backend = miki::rhi::BackendType::WebGPU;
+    backend = BackendType::WebGPU;
 #else
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--backend" && i + 1 < argc) {
@@ -387,114 +607,64 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    // GLFW
-    if (!glfwInit()) {
-        std::println("[demo] glfwInit failed");
+    std::println("[demo] Starting RHI Triangle with {} backend", BackendName(backend));
+
+    // Create WindowManager with GLFW backend
+    auto glfwBackend = std::make_unique<GlfwWindowBackend>(backend, /*visible=*/true);
+    auto* backendPtr = glfwBackend.get();
+    auto wmResult = WindowManager::Create(std::move(glfwBackend));
+    if (!wmResult) {
+        std::println("[demo] WindowManager::Create failed");
         return 1;
     }
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    g_wm = std::make_unique<WindowManager>(std::move(*wmResult));
 
+    // Create window
     constexpr uint32_t kW = 1280, kH = 720;
-    g_window = glfwCreateWindow(static_cast<int>(kW), static_cast<int>(kH), "miki RHI Triangle", nullptr, nullptr);
-    if (!g_window) {
-        glfwTerminate();
+    auto winResult = g_wm->CreateWindow({.title = "miki RHI Triangle", .width = kW, .height = kH});
+    if (!winResult) {
+        std::println("[demo] CreateWindow failed");
         return 1;
     }
+    g_mainWindow = *winResult;
 
-    glfwSetKeyCallback(g_window, [](GLFWwindow* w, int k, int, int a, int) {
-        if (k == GLFW_KEY_ESCAPE && a == GLFW_PRESS) {
-            glfwSetWindowShouldClose(w, GLFW_TRUE);
-        }
-    });
+    // Get native handle for swapchain
+    auto nativeHandle = g_wm->GetNativeHandle(g_mainWindow);
+    auto* nativeToken = g_wm->GetNativeToken(g_mainWindow);
 
-    auto nativeHandle = MakeNativeHandle(g_window);
-
-#if MIKI_BUILD_WEBGPU
-    if (backend == miki::rhi::BackendType::WebGPU) {
-        static miki::rhi::WebGPUDevice dev;
-        static TriangleDemo<miki::rhi::WebGPUDevice, miki::rhi::WebGPUCommandBuffer> demo;
-
-        miki::rhi::WebGPUDeviceDesc dd{.enableValidation = true};
-        if (auto r = dev.Init(dd); !r) {
-            std::println("[demo] WebGPU init failed");
-            glfwTerminate();
-            return 1;
-        }
-
-        demo.dev = &dev;
-        demo.width = kW;
-        demo.height = kH;
-        demo.backendType = backend;
-
-        if (!demo.Init(kWGSL, kWGSL, "vs_main", "fs_main", nativeHandle)) {
-            glfwTerminate();
-            return 1;
-        }
-
-        glfwSetFramebufferSizeCallback(g_window, [](GLFWwindow*, int w, int h) {
-            if (w > 0 && h > 0) {
-                demo.Resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
-            }
-        });
-
-        g_tick = []() { demo.RenderFrame(); };
-        g_cleanup = []() { demo.Cleanup(); };
-        std::println("[demo] WebGPU triangle running. ESC to quit.");
-    }
-#endif
-
-#if MIKI_BUILD_OPENGL
-    if (backend == miki::rhi::BackendType::OpenGL43) {
-        static miki::rhi::OpenGLDevice dev;
-        static TriangleDemo<miki::rhi::OpenGLDevice, miki::rhi::OpenGLCommandBuffer> demo;
-
-        miki::rhi::OpenGLDeviceDesc dd{.enableValidation = true};
-        if (auto r = dev.Init(dd); !r) {
-            std::println("[demo] OpenGL init failed");
-            glfwTerminate();
-            return 1;
-        }
-
-        demo.dev = &dev;
-        demo.width = kW;
-        demo.height = kH;
-        demo.backendType = backend;
-
-        if (!demo.Init(kGLSL_Vert, kGLSL_Frag, "main", "main", nativeHandle)) {
-            glfwTerminate();
-            return 1;
-        }
-
-        glfwSetFramebufferSizeCallback(g_window, [](GLFWwindow*, int w, int h) {
-            if (w > 0 && h > 0) {
-                demo.Resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
-            }
-        });
-
-        g_tick = []() { demo.RenderFrame(); };
-        g_cleanup = []() { demo.Cleanup(); };
-        std::println("[demo] OpenGL triangle running. ESC to quit.");
-    }
-#endif
-
-    if (!g_tick) {
-        std::println("[demo] No backend available for {}.", static_cast<int>(backend));
-        glfwTerminate();
+    // Create device
+    g_device = CreateDevice(backend, backendPtr, nativeToken);
+    if (!g_device || !g_device->handle.IsValid()) {
+        std::println("[demo] Device creation failed for {}", BackendName(backend));
         return 1;
     }
+    std::println("[demo] Device created successfully");
 
+    // Compile embedded shaders via Slang
+    auto shaders = CompileShaders(backend);
+    if (!shaders) {
+        std::println("[demo] Shader compilation failed");
+        return 1;
+    }
+    std::println("[demo] Shaders compiled: VS={} bytes, FS={} bytes", shaders->vs.data.size(), shaders->fs.data.size());
+
+    // Initialize renderer
+    if (!g_renderer.Init(*g_device, nativeHandle, *shaders, kW, kH)) {
+        std::println("[demo] Renderer init failed");
+        return 1;
+    }
+    std::println("[demo] {} triangle running. ESC to quit.", BackendName(backend));
+
+    // Main loop
 #if defined(__EMSCRIPTEN__)
     emscripten_set_main_loop(MainLoopIteration, 0, true);
 #else
-    while (!glfwWindowShouldClose(g_window)) {
+    while (!g_shouldQuit) {
         MainLoopIteration();
     }
-    if (g_cleanup) {
-        g_cleanup();
-    }
-    glfwDestroyWindow(g_window);
-    glfwTerminate();
+    g_renderer.Cleanup();
+    g_device.reset();
+    g_wm.reset();
 #endif
     return 0;
 }
