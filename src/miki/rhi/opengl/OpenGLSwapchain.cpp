@@ -123,4 +123,22 @@ namespace miki::rhi {
         }
     }
 
+    // =========================================================================
+    // Surface capability query
+    // =========================================================================
+
+    auto OpenGLDevice::GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
+        (void)window;
+        RenderSurfaceCapabilities caps;
+        // OpenGL default framebuffer is always SRGB 8-bit
+        caps.supportedFormats = {Format::BGRA8_SRGB, Format::RGBA8_SRGB};
+        caps.supportedPresentModes = {PresentMode::Fifo};  // glfwSwapInterval(1) only
+        caps.supportedColorSpaces = {SurfaceColorSpace::SRGB};
+        caps.minExtent = {1, 1};
+        caps.maxExtent = {16384, 16384};
+        caps.minImageCount = 2;
+        caps.maxImageCount = 2;  // Double-buffered default FBO
+        return caps;
+    }
+
 }  // namespace miki::rhi

@@ -5,6 +5,9 @@
 
 #include "miki/rhi/backend/OpenGLDevice.h"
 
+#include "miki/rhi/backend/OpenGLCommandBuffer.h"
+
+#include <algorithm>
 #include <cstring>
 
 namespace miki::rhi {
@@ -55,7 +58,9 @@ namespace miki::rhi {
         uint32_t copyCount = std::min(count, static_cast<uint32_t>(results.size()));
         for (uint32_t i = 0; i < copyCount; ++i) {
             uint32_t idx = first + i;
-            if (idx >= data->count) break;
+            if (idx >= data->count) {
+                break;
+            }
 
             GLuint64 result = 0;
             gl_->GetQueryObjectui64v(data->queries[idx], GL_QUERY_RESULT, &result);
@@ -88,6 +93,36 @@ namespace miki::rhi {
             return;
         }
         commandBuffers_.Free(h);
+    }
+
+    // =========================================================================
+    // Command list acquisition (unified factory)
+    // =========================================================================
+
+    auto OpenGLDevice::AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition> {
+        CommandBufferDesc desc{.type = queue, .secondary = false};
+        auto bufResult = CreateCommandBufferImpl(desc);
+        if (!bufResult) {
+            return std::unexpected(bufResult.error());
+        }
+
+        auto bufHandle = *bufResult;
+        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<OpenGLCommandBuffer>());
+        cmdBuf->Init(this);
+
+        CommandListHandle listHandle(cmdBuf.get(), BackendType::OpenGL43);
+        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+    }
+
+    void OpenGLDevice::ReleaseCommandListImpl(const CommandListAcquisition& acq) {
+        void* raw = acq.listHandle.GetRawPtr();
+        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
+            return p.get() == raw;
+        });
+        if (it != commandListArena_.end()) {
+            commandListArena_.erase(it);
+        }
+        DestroyCommandBufferImpl(acq.bufferHandle);
     }
 
 }  // namespace miki::rhi

@@ -16,7 +16,7 @@
 namespace miki::rhi {
 
     namespace {
-        auto ToGLShaderType(ShaderStage stage) -> GLenum {
+        [[maybe_unused]] auto ToGLShaderType(ShaderStage stage) -> GLenum {
             switch (stage) {
                 case ShaderStage::Vertex: return GL_VERTEX_SHADER;
                 case ShaderStage::Fragment: return GL_FRAGMENT_SHADER;
@@ -186,16 +186,23 @@ namespace miki::rhi {
 
         // Compile and attach shaders
         auto attachShader = [&](ShaderModuleHandle h, GLenum type) -> bool {
-            if (!h.IsValid()) return true;
+            if (!h.IsValid()) {
+                return true;
+            }
             auto* mod = shaderModules_.Lookup(h);
-            if (!mod) return false;
+            if (!mod) {
+                return false;
+            }
             GLuint shader = CompileShader(gl_, mod->compiledShader, mod->source, type);
-            if (!shader) return false;
+            if (!shader) {
+                return false;
+            }
             gl_->AttachShader(program, shader);
             return true;
         };
 
-        if (!attachShader(desc.vertexShader, GL_VERTEX_SHADER) || !attachShader(desc.fragmentShader, GL_FRAGMENT_SHADER)) {
+        if (!attachShader(desc.vertexShader, GL_VERTEX_SHADER)
+            || !attachShader(desc.fragmentShader, GL_FRAGMENT_SHADER)) {
             gl_->DeleteProgram(program);
             return std::unexpected(RhiError::ShaderCompilationFailed);
         }
@@ -220,26 +227,20 @@ namespace miki::rhi {
         for (auto& attr : desc.vertexInput.attributes) {
             GLVertexFormatInfo vfmt = ToGLVertexFormat(attr.format);
             gl_->EnableVertexAttribArray(attr.location);
-
-            // Find stride from bindings
-            uint32_t stride = 0;
-            bool perInstance = false;
-            for (auto& bind : desc.vertexInput.bindings) {
-                if (bind.binding == attr.binding) {
-                    stride = bind.stride;
-                    perInstance = (bind.inputRate == VertexInputRate::PerInstance);
-                    break;
-                }
-            }
-
             if (vfmt.type == GL_INT || vfmt.type == GL_UNSIGNED_INT) {
                 gl_->VertexAttribIFormat(attr.location, vfmt.components, vfmt.type, attr.offset);
             } else {
-                gl_->VertexAttribFormat(attr.location, vfmt.components, vfmt.type, vfmt.normalized ? GL_TRUE : GL_FALSE, attr.offset);
+                gl_->VertexAttribFormat(
+                    attr.location, vfmt.components, vfmt.type, vfmt.normalized ? GL_TRUE : GL_FALSE, attr.offset
+                );
             }
             gl_->VertexAttribBinding(attr.location, attr.binding);
-            if (perInstance) {
-                gl_->VertexBindingDivisor(attr.binding, 1);
+        }
+
+        // Set per-binding divisor (instancing) — once per binding, not per attribute
+        for (auto& bind : desc.vertexInput.bindings) {
+            if (bind.inputRate == VertexInputRate::PerInstance) {
+                gl_->VertexBindingDivisor(bind.binding, 1);
             }
         }
 
@@ -268,16 +269,12 @@ namespace miki::rhi {
         data->colorAttachmentCount = static_cast<uint32_t>(desc.colorBlends.size());
 
         // Stencil state
-        data->stencilFront = {
-            ToGLStencilOp(desc.stencilFront.failOp), ToGLStencilOp(desc.stencilFront.depthFailOp),
-            ToGLStencilOp(desc.stencilFront.passOp), ToGLCompareFunc(desc.stencilFront.compareOp),
-            desc.stencilFront.compareMask, desc.stencilFront.writeMask
-        };
-        data->stencilBack = {
-            ToGLStencilOp(desc.stencilBack.failOp), ToGLStencilOp(desc.stencilBack.depthFailOp),
-            ToGLStencilOp(desc.stencilBack.passOp), ToGLCompareFunc(desc.stencilBack.compareOp),
-            desc.stencilBack.compareMask, desc.stencilBack.writeMask
-        };
+        data->stencilFront = {ToGLStencilOp(desc.stencilFront.failOp), ToGLStencilOp(desc.stencilFront.depthFailOp),
+                              ToGLStencilOp(desc.stencilFront.passOp), ToGLCompareFunc(desc.stencilFront.compareOp),
+                              desc.stencilFront.compareMask,           desc.stencilFront.writeMask};
+        data->stencilBack = {ToGLStencilOp(desc.stencilBack.failOp), ToGLStencilOp(desc.stencilBack.depthFailOp),
+                             ToGLStencilOp(desc.stencilBack.passOp), ToGLCompareFunc(desc.stencilBack.compareOp),
+                             desc.stencilBack.compareMask,           desc.stencilBack.writeMask};
 
         // Blend state
         for (size_t i = 0; i < desc.colorBlends.size() && i < 8; ++i) {
@@ -298,7 +295,9 @@ namespace miki::rhi {
         }
         for (auto& attr : desc.vertexInput.attributes) {
             GLVertexFormatInfo vfmt = ToGLVertexFormat(attr.format);
-            data->vertexAttribs.push_back({attr.location, attr.binding, vfmt.type, vfmt.components, attr.offset, vfmt.normalized});
+            data->vertexAttribs.push_back(
+                {attr.location, attr.binding, vfmt.type, vfmt.components, attr.offset, vfmt.normalized}
+            );
         }
 
         return handle;
@@ -403,7 +402,8 @@ namespace miki::rhi {
     // Pipeline library (no split compilation on GL — fallback)
     // =========================================================================
 
-    auto OpenGLDevice::CreatePipelineLibraryPartImpl(const PipelineLibraryPartDesc&) -> RhiResult<PipelineLibraryPartHandle> {
+    auto OpenGLDevice::CreatePipelineLibraryPartImpl(const PipelineLibraryPartDesc&)
+        -> RhiResult<PipelineLibraryPartHandle> {
         return std::unexpected(RhiError::FeatureNotSupported);
     }
 
