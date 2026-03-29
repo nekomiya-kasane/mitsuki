@@ -38,6 +38,7 @@ namespace miki::rhi::test {
 #if MIKI_BUILD_WEBGPU
         backends.push_back(BackendType::WebGPU);
 #endif
+        backends.push_back(BackendType::Mock);
         return backends;
     }
 
@@ -72,6 +73,7 @@ namespace miki::rhi::test {
 #if MIKI_BUILD_WEBGPU
         std::unique_ptr<WebGPUDevice> webgpu;
 #endif
+        std::unique_ptr<MockDevice> mock;
 
         static auto Create(BackendType backend) -> std::pair<std::unique_ptr<DeviceOwner>, RhiError> {
             auto owner = std::make_unique<DeviceOwner>();
@@ -124,6 +126,15 @@ namespace miki::rhi::test {
                     return {std::move(owner), RhiError{}};
                 }
 #endif
+                case BackendType::Mock: {
+                    owner->mock = std::make_unique<MockDevice>();
+                    auto r = owner->mock->Init();
+                    if (!r.has_value()) {
+                        return {nullptr, r.error()};
+                    }
+                    owner->handle = DeviceHandle(owner->mock.get(), BackendType::Mock);
+                    return {std::move(owner), RhiError{}};
+                }
                 default: return {nullptr, RhiError::NotImplemented};
             }
         }

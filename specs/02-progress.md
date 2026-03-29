@@ -61,3 +61,201 @@ CmdClearColor/DepthStencil — WebGPU only supports clear via render pass loadOp
 CmdExecuteSecondary — render bundles not yet wired
 Linux/macOS surface — only Win32 HWND + Emscripten canvas implemented
 Dawn prebuilt — needs to be downloaded to third_party/webgpu/dawn/prebuilt/
+
+---
+
+# RHI Architecture Audit (2026-03-29)
+
+> Full audit of Layer 2 RHI + supporting infrastructure.
+> Scope: Device, CommandBuffer, IPipelineFactory, Swapchain/Surface, Descriptors, Sync, HandlePool, RenderGraph.
+
+## Fix Plan — Current Phase
+
+Fixes are ordered by dependency chain. H2 must land before H1; H1+H3 before M8.
+
+### Wave 1: Core Ownership & Factory (H1, H2, H3, M2)
+
+**H2 + H1 + M2: OwnedDevice + DeviceFactory**
+
+Goal: `DeviceHandle` becomes a non-owning view (current design preserved). A new `OwnedDevice` class owns the concrete backend device via `unique_ptr<void, Deleter>`. A free function `CreateDevice(DeviceDesc)` replaces per-demo switch-case.
+
+Files to create/modify:
+
+- NEW `include/miki/rhi/DeviceFactory.h` — `OwnedDevice` class + `CreateDevice()` free function
+- NEW `src/miki/rhi/DeviceFactory.cpp` — switch on `DeviceDesc::backend`, create concrete device, return `OwnedDevice`
+- MODIFY `include/miki/rhi/Device.h` — `DeviceDesc` gains `enableValidation`, `enableGpuCapture` (already has them); remove or keep as-is since factory will consume it
+- MODIFY `cmake/targets/miki_rhi.cmake` — add `DeviceFactory.cpp` to sources
+
+Design:
+
+```cpp
+class OwnedDevice {
+public:
+    ~OwnedDevice(); // calls WaitIdle + destroy
+    OwnedDevice(OwnedDevice&&) noexcept;
+    auto operator=(OwnedDevice&&) noexcept -> OwnedDevice&;
+    [[nodiscard]] auto GetHandle() const noexcept -> DeviceHandle; // non-owning view
+    [[nodiscard]] auto IsValid() const noexcept -> bool;
+private:
+    struct Impl; std::unique_ptr<Impl> impl_;
+};
+
+[[nodiscard]] auto CreateDevice(const DeviceDesc& desc) -> core::Result<OwnedDevice>;
+```
+
+**H3: CommandList Factory**
+
+Goal: `DeviceBase` gains `AcquireCommandList(QueueType) -> RhiResult<CommandListHandle>` that internally creates the backend command buffer object AND initializes the recordable CommandBuffer, returning a ready-to-use type-erased handle.
+
+Files to modify:
+
+- MODIFY `include/miki/rhi/Device.h` — add `AcquireCommandList` / `ReleaseCommandList` to `DeviceBase`
+- MODIFY each backend `XxxDevice.h` — add `AcquireCommandListImpl` / `ReleaseCommandListImpl`
+- MODIFY each backend `XxxDevice.cpp` or new `XxxCommandBuffer.cpp` section — implement the factory
+
+Each backend's impl:
+
+- Vulkan: allocate from VkCommandPool, create VulkanCommandBuffer on internal pool, return handle
+- D3D12: allocate ID3D12GraphicsCommandList + allocator, create D3D12CommandBuffer, return handle
+- OpenGL: create OpenGLCommandBuffer, return handle
+- WebGPU: create WebGPUCommandBuffer, return handle
+
+The concrete CommandBuffer objects are stored in a per-device arena (e.g., `std::vector<std::unique_ptr<XxxCommandBuffer>>` or a fixed pool).
+
+### Wave 2: Type Erasure Completeness (H4, M1)
+
+**H4: const Dispatch on CommandListHandle**
+
+Files to modify:
+
+- MODIFY `include/miki/rhi/CommandBuffer.h` — add `const` overload of `Dispatch`, mirroring `DeviceHandle`'s pattern
+
+**M1: IPipelineFactory return FeatureNotSupported**
+
+Files to modify:
+
+- MODIFY `src/miki/rhi/MainPipelineFactory.cpp` — stub methods return `std::unexpected(RhiError::FeatureNotImplemented)` instead of `PipelineHandle{}`
+- MODIFY `src/miki/rhi/CompatPipelineFactory.cpp` — same
+
+### Wave 3: RenderSurface Correctness (H5, L4)
+
+**H5: GetCapabilities real query**
+
+Goal: Add `DeviceBase::GetSurfaceCapabilities(NativeWindowHandle)` that queries the backend (e.g., `vkGetPhysicalDeviceSurfaceCapabilitiesKHR`). RenderSurface delegates to this.
+
+Files to modify:
+
+- MODIFY `include/miki/rhi/Device.h` — add `GetSurfaceCapabilities` to `DeviceBase`
+- MODIFY each backend — implement `GetSurfaceCapabilitiesImpl`
+- MODIFY `src/miki/rhi/RenderSurface.cpp` — `GetCapabilities()` delegates to device
+
+**L4: Format validation in Configure**
+
+Files to modify:
+
+- MODIFY `src/miki/rhi/RenderSurface.cpp` — `ResolveSwapchainDesc` queries `formatSupport` table before overriding format
+
+### Wave 4: HandlePool Hardening (M3, M4)
+
+**M3: Dynamic capacity**
+
+Replace `std::array<Slot, Capacity>` with `std::vector<Slot>` initialized to `Capacity` size. Template `Capacity` becomes default constructor argument. This preserves O(1) access while allowing runtime sizing.
+
+Files to modify:
+
+- MODIFY `include/miki/rhi/Handle.h` — `HandlePool` template loses `Capacity` template param, gains constructor `HandlePool(size_t capacity)`
+- MODIFY all backend `XxxDevice.h` — update pool member declarations
+
+**M4: Atomic acquire/release**
+
+Files to modify:
+
+- MODIFY `include/miki/rhi/Handle.h` — `Slot::alive` and `Slot::generation` become `std::atomic<bool>` / `std::atomic<uint16_t>` with `memory_order_acquire` on read, `memory_order_release` on write
+
+### Wave 5: Enum Unification (M5, M6)
+
+**M5: ShaderStage unification**
+
+Files to modify:
+
+- MODIFY `include/miki/shader/ShaderTypes.h` — remove `shader::ShaderStage`, replace with `using ShaderStage = rhi::ShaderStage`
+- MODIFY `src/miki/shader/SlangCompiler.cpp` — adapt to unified enum
+- MODIFY demo — remove namespace disambiguation
+
+**M6: Bitmask enum migration to EnumFlags**
+
+Approach: Add `MIKI_ENABLE_ENUM_FLAGS()` for all bitmask enums in `RhiEnums.h`, or directly use `EnumFlags<E>` as the field type in desc structs. Phase 1: add missing operators (`~`, `|=`, `&=`) via the macro. Phase 2 (optional): migrate desc struct fields to `EnumFlags<E>`.
+
+Files to modify:
+
+- MODIFY `include/miki/rhi/RhiEnums.h` — replace manual `operator|`/`operator&` with `MIKI_ENABLE_ENUM_FLAGS`
+
+### Wave 6: PipelineCache + Mock + Convenience (L1, L2, L3)
+
+**L1: PipelineCache ↔ PipelineCacheHandle**
+
+Files to modify:
+
+- MODIFY `include/miki/rhi/PipelineCache.h` — store `PipelineCacheHandle` internally, expose getter
+- MODIFY `src/miki/rhi/PipelineCache.cpp` — `Load()` calls `device.CreatePipelineCache(blob)` to get handle
+
+**L2: MockDevice + MockCommandBuffer**
+
+Files to create:
+
+- NEW `include/miki/rhi/backend/MockDevice.h`
+- NEW `include/miki/rhi/backend/MockCommandBuffer.h`
+- NEW `src/miki/rhi/mock/MockDevice.cpp`
+- NEW `src/miki/rhi/mock/MockCommandBuffer.cpp`
+
+All methods are no-op. HandlePool allocation works normally but native handles are null. This enables headless testing without any GPU.
+
+**L3: DeviceHandle convenience**
+
+Files to modify:
+
+- MODIFY `include/miki/rhi/Device.h` — add `GetBackendName()` and `GetDeviceName()` to `DeviceHandle`
+
+### Wave 7: Demo Refactor (M8)
+
+After H1/H2/H3 land:
+
+- MODIFY `demos/rhi/rhi_triangle_demo.cpp` — replace `DeviceHolder` + `CreateDevice()` + static CommandBuffer with `OwnedDevice` + `AcquireCommandList`
+
+---
+
+## Deferred to Future Phases
+
+The following defects are **not fixed in this phase** because they require Layer 3+ infrastructure or FrameManager implementation.
+
+### H6: RenderSurface sync primitives not created
+
+**Status**: DEFERRED to FrameManager implementation phase
+**Reason**: Sync primitive lifecycle (create/destroy per swapchain image) is FrameManager's responsibility. RenderSurface stores the handles but FrameManager populates them at `Create()` time. This is the correct layering — fixing it requires implementing FrameManager first.
+**Impact**: Vulkan/D3D12 swapchain acquire/present will crash without valid semaphores. Demo currently bypasses RenderSurface entirely (uses raw device API).
+
+### H7: Layer 3 infrastructure (BindlessTable, StagingRing, MemBudget, RenderGraph)
+
+**Status**: DEFERRED — these are Phase 3/4/5 deliverables per roadmap
+**Components missing**:
+
+| Component         | Layer | Roadmap Phase           | Dependency                     |
+| ----------------- | ----- | ----------------------- | ------------------------------ |
+| BindlessTable     | L3    | Phase 3 (Resource)      | Device + Descriptor system     |
+| StagingRing       | L3    | Phase 3 (Resource)      | Device + Buffer + FrameManager |
+| ReadbackRing      | L3    | Phase 3 (Resource)      | Device + Buffer + FrameManager |
+| MemBudget         | L3    | Phase 3 (Resource)      | Device + VMA/D3D12MA           |
+| ResidencyFeedback | L3    | Phase 6 (Streaming)     | MemBudget + Sparse binding     |
+| RenderGraph       | L5    | Phase 5 (Core Pipeline) | All of L2 + L3                 |
+
+### M7: FrameManager implementation missing
+
+**Status**: DEFERRED to Phase 3
+**Reason**: FrameManager.h is fully designed but no .cpp exists. It depends on:
+
+- OwnedDevice (H1/H2 — this phase fixes)
+- RenderSurface sync primitives (H6 — deferred)
+- DeferredDestructor (header exists, impl may be partial)
+- StagingRing / ReadbackRing (H7 — deferred)
+
+FrameManager implementation is the bridge between Layer 2 (RHI) and Layer 3 (Resource). It should be the first deliverable of Phase 3.
