@@ -8,6 +8,7 @@
 
 #include "miki/rhi/RenderSurface.h"
 
+#include <algorithm>
 #include <array>
 
 #include "miki/rhi/backend/AllBackends.h"
@@ -99,13 +100,34 @@ namespace miki::rhi {
             return std::unexpected(core::ErrorCode::InvalidState);
         }
 
+        // Validate against real backend surface capabilities
+        auto caps = GetCapabilities();
+        auto desc = ResolveSwapchainDesc(iConfig, impl_->nativeWindow, iWidth, iHeight);
+
+        if (!caps.supportedFormats.empty()) {
+            if (std::find(caps.supportedFormats.begin(), caps.supportedFormats.end(), desc.preferredFormat)
+                == caps.supportedFormats.end()) {
+                return std::unexpected(core::ErrorCode::InvalidArgument);
+            }
+        }
+        if (!caps.supportedPresentModes.empty()) {
+            if (std::find(caps.supportedPresentModes.begin(), caps.supportedPresentModes.end(), desc.presentMode)
+                == caps.supportedPresentModes.end()) {
+                return std::unexpected(core::ErrorCode::InvalidArgument);
+            }
+        }
+        if (!caps.supportedColorSpaces.empty()) {
+            if (std::find(caps.supportedColorSpaces.begin(), caps.supportedColorSpaces.end(), desc.colorSpace)
+                == caps.supportedColorSpaces.end()) {
+                return std::unexpected(core::ErrorCode::InvalidArgument);
+            }
+        }
+
         // Destroy old swapchain if exists
         if (impl_->swapchain.IsValid()) {
             impl_->device.Dispatch([&](auto& dev) { dev.DestroySwapchain(impl_->swapchain); });
             impl_->swapchain = {};
         }
-
-        auto desc = ResolveSwapchainDesc(iConfig, impl_->nativeWindow, iWidth, iHeight);
         auto result = impl_->device.Dispatch([&](auto& dev) { return dev.CreateSwapchain(desc); });
         if (!result) {
             return std::unexpected(core::ErrorCode::InvalidState);
@@ -201,17 +223,7 @@ namespace miki::rhi {
     }
 
     auto RenderSurface::GetCapabilities() const -> RenderSurfaceCapabilities {
-        // TODO(Phase-Backend): Query actual capabilities from device/surface via
-        // backend-specific surface capability queries (vkGetPhysicalDeviceSurfaceCapabilitiesKHR, etc.)
-        RenderSurfaceCapabilities caps;
-        caps.supportedFormats = {Format::BGRA8_SRGB, Format::RGBA8_SRGB};
-        caps.supportedPresentModes = {PresentMode::Fifo, PresentMode::Mailbox};
-        caps.supportedColorSpaces = {SurfaceColorSpace::SRGB};
-        caps.minExtent = {1, 1};
-        caps.maxExtent = {16384, 16384};
-        caps.minImageCount = 2;
-        caps.maxImageCount = 8;
-        return caps;
+        return impl_->device.Dispatch([&](const auto& dev) { return dev.GetSurfaceCapabilities(impl_->nativeWindow); });
     }
 
 }  // namespace miki::rhi

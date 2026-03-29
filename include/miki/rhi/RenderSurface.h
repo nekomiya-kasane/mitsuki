@@ -18,7 +18,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <vector>
 
 #include "miki/core/Result.h"
 #include "miki/rhi/Device.h"
@@ -27,19 +26,7 @@
 
 namespace miki::rhi {
 
-    // =========================================================================
-    // RenderSurfaceCapabilities — hardware-queried surface capabilities
-    // =========================================================================
-
-    struct RenderSurfaceCapabilities {
-        std::vector<Format> supportedFormats;
-        std::vector<PresentMode> supportedPresentModes;
-        std::vector<SurfaceColorSpace> supportedColorSpaces;
-        Extent2D minExtent;
-        Extent2D maxExtent;
-        uint32_t minImageCount = 2;
-        uint32_t maxImageCount = 8;
-    };
+    // RenderSurfaceCapabilities is defined in Swapchain.h (available via Device.h include chain)
 
     // =========================================================================
     // SubmitSyncInfo — per-frame sync primitives for FrameManager

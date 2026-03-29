@@ -12,6 +12,7 @@
 
 #include "miki/core/ChunkedSlotMap.h"
 #include "miki/core/ErrorCode.h"
+#include "miki/debug/StructuredLogger.h"
 
 #include <cassert>
 
@@ -127,9 +128,18 @@ namespace miki::platform {
 
     auto WindowManager::CreateWindow(const WindowDesc& iDesc) -> miki::core::Result<WindowHandle> {
         if (!impl_ || !impl_->backend) {
+            MIKI_LOG_ERROR(
+                ::miki::debug::LogCategory::Platform,
+                "WindowManager::CreateWindow failed: Invalid state (impl_={}, backend={})", impl_ != nullptr,
+                impl_ && impl_->backend != nullptr
+            );
             return std::unexpected(miki::core::ErrorCode::InvalidState);
         }
         if (iDesc.width == 0 || iDesc.height == 0) {
+            MIKI_LOG_ERROR(
+                ::miki::debug::LogCategory::Platform, "WindowManager::CreateWindow failed: Invalid window size ({}x{})",
+                iDesc.width, iDesc.height
+            );
             return std::unexpected(miki::core::ErrorCode::InvalidArgument);
         }
 
@@ -138,9 +148,18 @@ namespace miki::platform {
         if (iDesc.parent.IsValid()) {
             auto* pn = impl_->Find(iDesc.parent);
             if (!pn || !pn->alive) {
+                MIKI_LOG_ERROR(
+                    ::miki::debug::LogCategory::Platform,
+                    "WindowManager::CreateWindow failed: Parent window {} not found or not alive", iDesc.parent.id
+                );
                 return std::unexpected(miki::core::ErrorCode::InvalidArgument);
             }
             if (impl_->ComputeDepth(iDesc.parent) >= kMaxDepth) {
+                MIKI_LOG_ERROR(
+                    ::miki::debug::LogCategory::Platform,
+                    "WindowManager::CreateWindow failed: Parent window depth {} exceeds maximum {}",
+                    impl_->ComputeDepth(iDesc.parent), kMaxDepth
+                );
                 return std::unexpected(miki::core::ErrorCode::InvalidArgument);
             }
             parentToken = pn->nativeToken;
@@ -149,6 +168,11 @@ namespace miki::platform {
         void* nativeToken = nullptr;
         auto nativeResult = impl_->backend->CreateNativeWindow(iDesc, parentToken, nativeToken);
         if (!nativeResult) {
+            MIKI_LOG_ERROR(
+                ::miki::debug::LogCategory::Platform,
+                "WindowManager::CreateWindow failed: Backend CreateNativeWindow returned error {}",
+                static_cast<uint32_t>(nativeResult.error())
+            );
             return std::unexpected(nativeResult.error());
         }
 
@@ -176,6 +200,12 @@ namespace miki::platform {
         }
 
         impl_->backend->SetWindowHandle(nativeToken, wh);
+
+        MIKI_LOG_INFO(
+            ::miki::debug::LogCategory::Platform, "WindowManager::CreateWindow succeeded: window {} ({}x{}) created",
+            wh.id, extent.width, extent.height
+        );
+
         return wh;
     }
 

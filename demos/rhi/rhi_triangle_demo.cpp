@@ -24,6 +24,7 @@
 #if MIKI_BUILD_WEBGPU
 #    include "miki/rhi/backend/WebGPUCommandBuffer.h"
 #endif
+#include "miki/rhi/backend/MockCommandBuffer.h"
 #include "miki/rhi/CommandBuffer.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Pipeline.h"
