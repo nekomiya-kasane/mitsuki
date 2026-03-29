@@ -16,19 +16,7 @@
 #include "miki/rhi/GpuCapabilityProfile.h"
 #include "miki/rhi/RhiTypes.h"
 
-#if MIKI_BUILD_VULKAN
-#    include "miki/rhi/backend/VulkanDevice.h"
-#    include "miki/rhi/backend/VulkanCompatDevice.h"
-#endif
-#if MIKI_BUILD_D3D12
-#    include "miki/rhi/backend/D3D12Device.h"
-#endif
-#if MIKI_BUILD_OPENGL
-#    include "miki/rhi/backend/OpenGLDevice.h"
-#endif
-#if MIKI_BUILD_WEBGPU
-#    include "miki/rhi/backend/WebGPUDevice.h"
-#endif
+#include "miki/rhi/backend/AllBackends.h"
 
 namespace miki::rhi::test {
 

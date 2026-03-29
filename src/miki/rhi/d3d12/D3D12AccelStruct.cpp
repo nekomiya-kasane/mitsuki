@@ -7,6 +7,12 @@
 
 #include "miki/rhi/backend/D3D12Device.h"
 
+#if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wnested-anon-types"
+#    pragma clang diagnostic ignored "-Wlanguage-extension-token"
+#endif
+
 #include <D3D12MemAlloc.h>
 
 namespace miki::rhi {
@@ -198,3 +204,7 @@ namespace miki::rhi {
     }
 
 }  // namespace miki::rhi
+
+#if defined(__clang__)
+#    pragma clang diagnostic pop
+#endif

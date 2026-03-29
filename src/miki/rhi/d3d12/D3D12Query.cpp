@@ -5,6 +5,11 @@
 
 #include "miki/rhi/backend/D3D12Device.h"
 
+#if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wlanguage-extension-token"
+#endif
+
 namespace miki::rhi {
 
     namespace {
@@ -162,3 +167,7 @@ namespace miki::rhi {
     }
 
 }  // namespace miki::rhi
+
+#if defined(__clang__)
+#    pragma clang diagnostic pop
+#endif

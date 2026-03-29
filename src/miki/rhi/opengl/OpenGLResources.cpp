@@ -80,7 +80,7 @@ namespace miki::rhi {
             // clang-format on
         }
 
-        auto ToGLTextureTarget(TextureDimension dim, uint32_t arrayLayers) -> GLenum {
+        auto ToGLTextureTarget(TextureDimension dim, [[maybe_unused]] uint32_t arrayLayers) -> GLenum {
             switch (dim) {
                 case TextureDimension::Tex1D: return GL_TEXTURE_1D;
                 case TextureDimension::Tex2D: return GL_TEXTURE_2D;
@@ -106,9 +106,6 @@ namespace miki::rhi {
     auto OpenGLDevice::CreateBufferImpl(const BufferDesc& desc) -> RhiResult<BufferHandle> {
         GLuint buffer = 0;
         GLbitfield storageFlags = 0;
-
-        auto has
-            = [&](BufferUsage bit) { return (static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(bit)) != 0; };
 
         // Determine storage flags
         if (desc.memory == MemoryLocation::CpuToGpu) {

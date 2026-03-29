@@ -11,18 +11,13 @@
 #if defined(__clang__)
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wnested-anon-types"
+#    pragma clang diagnostic ignored "-Wlanguage-extension-token"
 #elif defined(_MSC_VER)
 #    pragma warning(push)
 #    pragma warning(disable : 4201)  // nonstandard extension used: nameless struct/union
 #endif
 
 #include <D3D12MemAlloc.h>
-
-#if defined(__clang__)
-#    pragma clang diagnostic pop
-#elif defined(_MSC_VER)
-#    pragma warning(pop)
-#endif
 
 #include <cassert>
 #include <cstring>
@@ -555,8 +550,8 @@ namespace miki::rhi {
             return D3D12_COMPARISON_FUNC_NEVER;
         }
 
-        auto ToD3D12BorderColor(BorderColor c) -> void {
-            (void)c;  // Border color set via float[4] in D3D12_STATIC_BORDER_COLOR
+        [[maybe_unused]] auto ToD3D12BorderColor([[maybe_unused]] BorderColor c) -> void {
+            assert(false && "Unsupported border color. Border color set via float[4] in D3D12_STATIC_BORDER_COLOR.");
         }
     }  // namespace
 
@@ -799,3 +794,9 @@ namespace miki::rhi {
     }
 
 }  // namespace miki::rhi
+
+#if defined(__clang__)
+#    pragma clang diagnostic pop
+#elif defined(_MSC_VER)
+#    pragma warning(pop)
+#endif
