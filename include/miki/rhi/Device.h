@@ -54,6 +54,17 @@ namespace miki::rhi {
     };
 
     // =========================================================================
+    // CommandListAcquisition — result of AcquireCommandList
+    // =========================================================================
+
+    /// Returned by DeviceBase::AcquireCommandList. Pairs an opaque buffer handle
+    /// (for Submit/Destroy) with a type-erased recordable command list.
+    struct CommandListAcquisition {
+        CommandBufferHandle bufferHandle;  ///< Opaque handle for Submit/Destroy
+        CommandListHandle listHandle;      ///< Type-erased recordable command list
+    };
+
+    // =========================================================================
     // DeviceBase — CRTP base for all backend devices
     // =========================================================================
 
@@ -174,10 +185,7 @@ namespace miki::rhi {
         void DestroyCommandBuffer(CommandBufferHandle h) { Self().DestroyCommandBufferImpl(h); }
 
         // --- Command list acquisition (unified factory) ---
-        struct CommandListAcquisition {
-            CommandBufferHandle bufferHandle;  ///< Opaque handle for Submit/Destroy
-            CommandListHandle listHandle;      ///< Type-erased recordable command list
-        };
+        using CommandListAcquisition = rhi::CommandListAcquisition;
         /** @brief Create a command buffer AND its recordable command list in one call.
          *  Eliminates the need for callers to manually Init backend-specific CommandBuffer objects.
          */
