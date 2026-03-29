@@ -18,11 +18,11 @@
 #include <vector>
 
 #include "miki/core/ErrorCode.h"
+#include "miki/rhi/Device.h"
+#include "miki/rhi/Handle.h"
 #include "miki/rhi/RhiTypes.h"
 
 namespace miki::rhi {
-
-    class DeviceHandle;
 
     // ===========================================================================
     // Cache header (on-disk format)
@@ -67,13 +67,10 @@ namespace miki::rhi {
          *  @param iPath File path to write to.
          *  @return void on success, ErrorCode on I/O failure.
          */
-        [[nodiscard]] auto Save(const std::filesystem::path& iPath) const -> std::expected<void, core::ErrorCode>;
+        [[nodiscard]] auto Save(const std::filesystem::path& iPath) -> std::expected<void, core::ErrorCode>;
 
-        /** @brief Get the backend-specific native cache handle.
-         *  Vulkan: VkPipelineCache. D3D12: ID3D12PipelineLibrary*.
-         *  GL/WebGPU/Mock: nullptr.
-         */
-        [[nodiscard]] auto GetNativeHandle() const noexcept -> void* { return nativeHandle_; }
+        /** @brief Get the RHI handle for use in pipeline creation descriptors. */
+        [[nodiscard]] auto GetHandle() const noexcept -> PipelineCacheHandle { return handle_; }
 
         /** @brief Check if this cache holds a valid backend object. */
         [[nodiscard]] auto IsValid() const noexcept -> bool { return valid_; }
@@ -89,7 +86,8 @@ namespace miki::rhi {
         PipelineCache() = default;
 
         bool valid_ = false;
-        void* nativeHandle_ = nullptr;
+        PipelineCacheHandle handle_;
+        DeviceHandle device_;
         std::vector<uint8_t> cacheBlob_;
         BackendType backendType_ = BackendType::Mock;
     };

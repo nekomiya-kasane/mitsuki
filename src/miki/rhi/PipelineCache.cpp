@@ -8,12 +8,11 @@
 
 #include "miki/rhi/PipelineCache.h"
 
-#include <cassert>
 #include <cstring>
 #include <fstream>
 #include <utility>
 
-#include "miki/rhi/Device.h"
+#include "miki/rhi/backend/AllBackends.h"
 
 namespace miki::rhi {
 
@@ -66,8 +65,12 @@ namespace miki::rhi {
             // Invalid header -> discard silently, create empty cache
         }
 
-        // Store blob for future VkPipelineCache / ID3D12PipelineLibrary integration.
-        // Native handle creation is deferred to backend wiring (Phase 4).
+        // Create backend pipeline cache from loaded blob (or empty)
+        pc.device_ = iDevice;
+        auto result = iDevice.Dispatch([&](auto& dev) { return dev.CreatePipelineCache(cacheData); });
+        if (result) {
+            pc.handle_ = *result;
+        }
         pc.cacheBlob_ = std::move(cacheData);
 
         return pc;
@@ -77,7 +80,7 @@ namespace miki::rhi {
     // Save
     // ===========================================================================
 
-    auto PipelineCache::Save(const std::filesystem::path& iPath) const -> std::expected<void, core::ErrorCode> {
+    auto PipelineCache::Save(const std::filesystem::path& iPath) -> std::expected<void, core::ErrorCode> {
         if (!valid_) {
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }
@@ -86,6 +89,12 @@ namespace miki::rhi {
         if (backendType_ != BackendType::Vulkan14 && backendType_ != BackendType::VulkanCompat
             && backendType_ != BackendType::D3D12) {
             return {};
+        }
+
+        // Query fresh cache data from the backend
+        std::vector<uint8_t> freshBlob;
+        if (handle_.IsValid() && device_.IsValid()) {
+            freshBlob = device_.Dispatch([&](auto& dev) { return dev.GetPipelineCacheData(handle_); });
         }
 
         // Ensure parent directory exists
@@ -100,7 +109,7 @@ namespace miki::rhi {
 
         // Write header + blob
         PipelineCacheHeader header{};
-        header.dataSize = cacheBlob_.size();
+        header.dataSize = freshBlob.size();
 
         std::ofstream file(iPath, std::ios::binary | std::ios::trunc);
         if (!file.is_open()) {
@@ -108,8 +117,8 @@ namespace miki::rhi {
         }
 
         file.write(reinterpret_cast<const char*>(&header), sizeof(header));
-        if (!cacheBlob_.empty()) {
-            file.write(reinterpret_cast<const char*>(cacheBlob_.data()), static_cast<std::streamsize>(cacheBlob_.size()));
+        if (!freshBlob.empty()) {
+            file.write(reinterpret_cast<const char*>(freshBlob.data()), static_cast<std::streamsize>(freshBlob.size()));
         }
 
         if (!file.good()) {
@@ -124,25 +133,28 @@ namespace miki::rhi {
     // ===========================================================================
 
     PipelineCache::~PipelineCache() {
-        // When VkPipelineCache / ID3D12PipelineLibrary integration is wired (Phase 4),
-        // add vkDestroyPipelineCache / ID3D12PipelineLibrary::Release here.
-        assert(!nativeHandle_ && "Native pipeline cache handle leaked — add backend-specific destroy");
-        nativeHandle_ = nullptr;
+        if (handle_.IsValid() && device_.IsValid()) {
+            device_.Dispatch([&](auto& dev) { dev.DestroyPipelineCache(handle_); });
+        }
     }
 
     PipelineCache::PipelineCache(PipelineCache&& o) noexcept
         : valid_{std::exchange(o.valid_, false)}
-        , nativeHandle_{std::exchange(o.nativeHandle_, nullptr)}
+        , handle_{std::exchange(o.handle_, {})}
+        , device_{o.device_}
         , cacheBlob_{std::move(o.cacheBlob_)}
         , backendType_{o.backendType_} {}
 
     auto PipelineCache::operator=(PipelineCache&& o) noexcept -> PipelineCache& {
         if (this != &o) {
-            using std::swap;
-            swap(valid_, o.valid_);
-            swap(nativeHandle_, o.nativeHandle_);
-            swap(cacheBlob_, o.cacheBlob_);
-            swap(backendType_, o.backendType_);
+            if (handle_.IsValid() && device_.IsValid()) {
+                device_.Dispatch([&](auto& dev) { dev.DestroyPipelineCache(handle_); });
+            }
+            valid_ = std::exchange(o.valid_, false);
+            handle_ = std::exchange(o.handle_, {});
+            device_ = o.device_;
+            cacheBlob_ = std::move(o.cacheBlob_);
+            backendType_ = o.backendType_;
         }
         return *this;
     }

@@ -24,39 +24,38 @@ namespace miki::rhi {
             if (iDesc.mode == ShadowMode::CSM && iDesc.cascadeCount == 0) {
                 return std::unexpected(RhiError::InvalidParameter);
             }
-            return PipelineHandle{};
+            return std::unexpected(RhiError::FeatureNotSupported);
         }
 
         [[nodiscard]] auto CreateOITPass(const OITPassDesc& iDesc) -> RhiResult<PipelineHandle> override {
             if (iDesc.colorFormatCount == 0) {
                 return std::unexpected(RhiError::InvalidParameter);
             }
-            return PipelineHandle{};
+            return std::unexpected(RhiError::FeatureNotSupported);
         }
 
         [[nodiscard]] auto CreateAOPass(const AOPassDesc& iDesc) -> RhiResult<PipelineHandle> override {
             (void)iDesc;
-            return PipelineHandle{};
+            return std::unexpected(RhiError::FeatureNotSupported);
         }
 
         [[nodiscard]] auto CreateAAPass(const AAPassDesc& iDesc) -> RhiResult<PipelineHandle> override {
             if (iDesc.mode == AAPassMode::None) {
                 return PipelineHandle{};
             }
-            (void)iDesc;
-            return PipelineHandle{};
+            return std::unexpected(RhiError::FeatureNotSupported);
         }
 
         [[nodiscard]] auto CreatePickPass(const PickPassDesc& iDesc) -> RhiResult<PipelineHandle> override {
             (void)iDesc;
-            return PipelineHandle{};
+            return std::unexpected(RhiError::FeatureNotSupported);
         }
 
         [[nodiscard]] auto CreateHLRPass(const HLRPassDesc& iDesc) -> RhiResult<PipelineHandle> override {
             if (iDesc.colorFormatCount == 0) {
                 return std::unexpected(RhiError::InvalidParameter);
             }
-            return PipelineHandle{};
+            return std::unexpected(RhiError::FeatureNotSupported);
         }
 
         [[nodiscard]] auto GetTier() const noexcept -> CapabilityTier override {
