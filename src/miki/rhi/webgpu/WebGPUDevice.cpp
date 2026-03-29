@@ -267,6 +267,100 @@ namespace miki::rhi {
         cap.maxFramebufferHeight = lim.maxTextureDimension2D;
         cap.maxViewports = 1;  // WebGPU supports 1 viewport
         cap.maxClipDistances = 0;
+
+        // Runtime format support probe
+        PopulateFormatSupport();
+    }
+
+    void WebGPUDevice::PopulateFormatSupport() {
+        // WebGPU format support is spec-defined. We set it statically based on the spec,
+        // then check optional features (e.g. texture-compression-bc) for compressed formats.
+        using F = FormatFeatureFlags;
+        constexpr auto SF = F::Sampled | F::Filter;
+        constexpr auto SFC = F::Sampled | F::Filter | F::ColorAttachment | F::BlendSrc;
+        constexpr auto SFI = F::Sampled | F::ColorAttachment;  // Integer (no filter/blend)
+        constexpr auto SFCS = SFC | F::Storage;
+        constexpr auto SFIS = SFI | F::Storage;
+        constexpr auto DS = F::Sampled | F::Filter | F::DepthStencil;
+
+        auto& fs = capabilities_.formatSupport;
+        // 8-bit
+        fs[static_cast<uint32_t>(Format::R8_UNORM)] = SFC;
+        fs[static_cast<uint32_t>(Format::R8_SNORM)] = SF;  // Not renderable in WebGPU
+        fs[static_cast<uint32_t>(Format::R8_UINT)] = SFI;
+        fs[static_cast<uint32_t>(Format::R8_SINT)] = SFI;
+        fs[static_cast<uint32_t>(Format::RG8_UNORM)] = SFC;
+        fs[static_cast<uint32_t>(Format::RG8_SNORM)] = SF;
+        fs[static_cast<uint32_t>(Format::RG8_UINT)] = SFI;
+        fs[static_cast<uint32_t>(Format::RG8_SINT)] = SFI;
+        fs[static_cast<uint32_t>(Format::RGBA8_UNORM)] = SFCS;
+        fs[static_cast<uint32_t>(Format::RGBA8_SNORM)] = F::Sampled | F::Filter | F::Storage;
+        fs[static_cast<uint32_t>(Format::RGBA8_UINT)] = SFIS;
+        fs[static_cast<uint32_t>(Format::RGBA8_SINT)] = SFIS;
+        fs[static_cast<uint32_t>(Format::RGBA8_SRGB)] = SFC;
+        fs[static_cast<uint32_t>(Format::BGRA8_UNORM)] = SFC;
+        fs[static_cast<uint32_t>(Format::BGRA8_SRGB)] = SFC;
+        // 16-bit
+        fs[static_cast<uint32_t>(Format::R16_UNORM)] = F::None;  // Not in WebGPU spec
+        fs[static_cast<uint32_t>(Format::R16_SNORM)] = F::None;
+        fs[static_cast<uint32_t>(Format::R16_UINT)] = SFI;
+        fs[static_cast<uint32_t>(Format::R16_SINT)] = SFI;
+        fs[static_cast<uint32_t>(Format::R16_FLOAT)] = SFC;
+        fs[static_cast<uint32_t>(Format::RG16_UNORM)] = F::None;
+        fs[static_cast<uint32_t>(Format::RG16_SNORM)] = F::None;
+        fs[static_cast<uint32_t>(Format::RG16_UINT)] = SFI;
+        fs[static_cast<uint32_t>(Format::RG16_SINT)] = SFI;
+        fs[static_cast<uint32_t>(Format::RG16_FLOAT)] = SFC;
+        fs[static_cast<uint32_t>(Format::RGBA16_UNORM)] = F::None;
+        fs[static_cast<uint32_t>(Format::RGBA16_SNORM)] = F::None;
+        fs[static_cast<uint32_t>(Format::RGBA16_UINT)] = SFIS;
+        fs[static_cast<uint32_t>(Format::RGBA16_SINT)] = SFIS;
+        fs[static_cast<uint32_t>(Format::RGBA16_FLOAT)] = SFCS;
+        // 32-bit
+        fs[static_cast<uint32_t>(Format::R32_UINT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        fs[static_cast<uint32_t>(Format::R32_SINT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        fs[static_cast<uint32_t>(Format::R32_FLOAT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        fs[static_cast<uint32_t>(Format::RG32_UINT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        fs[static_cast<uint32_t>(Format::RG32_SINT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        fs[static_cast<uint32_t>(Format::RG32_FLOAT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        fs[static_cast<uint32_t>(Format::RGB32_UINT)] = F::None;  // Not in WebGPU spec
+        fs[static_cast<uint32_t>(Format::RGB32_SINT)] = F::None;
+        fs[static_cast<uint32_t>(Format::RGB32_FLOAT)] = F::None;
+        fs[static_cast<uint32_t>(Format::RGBA32_UINT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        fs[static_cast<uint32_t>(Format::RGBA32_SINT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        fs[static_cast<uint32_t>(Format::RGBA32_FLOAT)] = F::Sampled | F::ColorAttachment | F::Storage;
+        // Packed
+        fs[static_cast<uint32_t>(Format::RGB10A2_UNORM)] = SFC;
+        fs[static_cast<uint32_t>(Format::RG11B10_FLOAT)] = SF;  // Not renderable in base spec
+        // Depth/stencil
+        fs[static_cast<uint32_t>(Format::D16_UNORM)] = DS;
+        fs[static_cast<uint32_t>(Format::D32_FLOAT)] = DS;
+        fs[static_cast<uint32_t>(Format::D24_UNORM_S8_UINT)] = DS;
+        fs[static_cast<uint32_t>(Format::D32_FLOAT_S8_UINT)] = DS;
+
+        // BC compression — requires "texture-compression-bc" feature
+        bool hasBcCompression = wgpuDeviceHasFeature(device_, WGPUFeatureName_TextureCompressionBC);
+        FormatFeatureFlags bcFlags = hasBcCompression ? SF : F::None;
+        fs[static_cast<uint32_t>(Format::BC1_UNORM)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC1_SRGB)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC2_UNORM)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC2_SRGB)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC3_UNORM)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC3_SRGB)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC4_UNORM)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC4_SNORM)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC5_UNORM)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC5_SNORM)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC6H_UFLOAT)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC6H_SFLOAT)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC7_UNORM)] = bcFlags;
+        fs[static_cast<uint32_t>(Format::BC7_SRGB)] = bcFlags;
+
+        // ASTC — requires "texture-compression-astc" feature
+        bool hasAstcCompression = wgpuDeviceHasFeature(device_, WGPUFeatureName_TextureCompressionASTC);
+        FormatFeatureFlags astcFlags = hasAstcCompression ? SF : F::None;
+        fs[static_cast<uint32_t>(Format::ASTC_4x4_UNORM)] = astcFlags;
+        fs[static_cast<uint32_t>(Format::ASTC_4x4_SRGB)] = astcFlags;
     }
 
     // =========================================================================

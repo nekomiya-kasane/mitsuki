@@ -220,6 +220,141 @@ namespace miki::rhi {
         // Always-on features
         capabilities_.enabledFeatures.Add(DeviceFeature::Present);
         capabilities_.enabledFeatures.Add(DeviceFeature::DynamicRendering);
+
+        // Runtime format support probe
+        PopulateFormatSupport();
+    }
+
+    void OpenGLDevice::PopulateFormatSupport() {
+        // GL internal format indexed by miki::rhi::Format enum value
+        static constexpr GLenum kFormatMap[] = {
+            0,                      // Undefined
+            GL_R8,                  // R8_UNORM
+            GL_R8_SNORM,            // R8_SNORM
+            GL_R8UI,                // R8_UINT
+            GL_R8I,                 // R8_SINT
+            GL_RG8,                 // RG8_UNORM
+            GL_RG8_SNORM,           // RG8_SNORM
+            GL_RG8UI,               // RG8_UINT
+            GL_RG8I,                // RG8_SINT
+            GL_RGBA8,               // RGBA8_UNORM
+            GL_RGBA8_SNORM,         // RGBA8_SNORM
+            GL_RGBA8UI,             // RGBA8_UINT
+            GL_RGBA8I,              // RGBA8_SINT
+            GL_SRGB8_ALPHA8,        // RGBA8_SRGB
+            GL_RGBA8,               // BGRA8_UNORM (GL uses RGBA8 + GL_BGRA swizzle)
+            GL_SRGB8_ALPHA8,        // BGRA8_SRGB
+            GL_R16,                 // R16_UNORM
+            GL_R16_SNORM,           // R16_SNORM
+            GL_R16UI,               // R16_UINT
+            GL_R16I,                // R16_SINT
+            GL_R16F,                // R16_FLOAT
+            GL_RG16,                // RG16_UNORM
+            GL_RG16_SNORM,          // RG16_SNORM
+            GL_RG16UI,              // RG16_UINT
+            GL_RG16I,               // RG16_SINT
+            GL_RG16F,               // RG16_FLOAT
+            GL_RGBA16,              // RGBA16_UNORM
+            GL_RGBA16_SNORM,        // RGBA16_SNORM
+            GL_RGBA16UI,            // RGBA16_UINT
+            GL_RGBA16I,             // RGBA16_SINT
+            GL_RGBA16F,             // RGBA16_FLOAT
+            GL_R32UI,               // R32_UINT
+            GL_R32I,                // R32_SINT
+            GL_R32F,                // R32_FLOAT
+            GL_RG32UI,              // RG32_UINT
+            GL_RG32I,               // RG32_SINT
+            GL_RG32F,               // RG32_FLOAT
+            GL_RGB32UI,             // RGB32_UINT
+            GL_RGB32I,              // RGB32_SINT
+            GL_RGB32F,              // RGB32_FLOAT
+            GL_RGBA32UI,            // RGBA32_UINT
+            GL_RGBA32I,             // RGBA32_SINT
+            GL_RGBA32F,             // RGBA32_FLOAT
+            GL_RGB10_A2,            // RGB10A2_UNORM
+            GL_R11F_G11F_B10F,      // RG11B10_FLOAT
+            GL_DEPTH_COMPONENT16,   // D16_UNORM
+            GL_DEPTH_COMPONENT32F,  // D32_FLOAT
+            GL_DEPTH24_STENCIL8,    // D24_UNORM_S8_UINT
+            GL_DEPTH32F_STENCIL8,   // D32_FLOAT_S8_UINT
+            0x83F1,                 // BC1_UNORM
+            0x8C4D,                 // BC1_SRGB
+            0x83F2,                 // BC2_UNORM
+            0x8C4E,                 // BC2_SRGB
+            0x83F3,                 // BC3_UNORM
+            0x8C4F,                 // BC3_SRGB
+            0x8DBB,                 // BC4_UNORM
+            0x8DBC,                 // BC4_SNORM
+            0x8DBD,                 // BC5_UNORM
+            0x8DBE,                 // BC5_SNORM
+            0x8E8F,                 // BC6H_UFLOAT
+            0x8E8E,                 // BC6H_SFLOAT
+            0x8E8C,                 // BC7_UNORM
+            0x8E8D,                 // BC7_SRGB
+            0,                      // ASTC_4x4_UNORM (not core GL 4.3)
+            0,                      // ASTC_4x4_SRGB
+        };
+        static_assert(sizeof(kFormatMap) / sizeof(kFormatMap[0]) == GpuCapabilityProfile::kFormatCount);
+
+        for (uint32_t i = 1; i < GpuCapabilityProfile::kFormatCount; ++i) {
+            if (kFormatMap[i] == 0) {
+                capabilities_.formatSupport[i] = FormatFeatureFlags::None;
+                continue;
+            }
+
+            GLenum glFmt = kFormatMap[i];
+            auto info = FormatInfo(static_cast<Format>(i));
+
+            // Check if format is supported at all (GL 4.3 core: glGetInternalformativ)
+            GLint supported = 0;
+            gl_->GetInternalformativ(GL_TEXTURE_2D, glFmt, GL_INTERNALFORMAT_SUPPORTED, 1, &supported);
+            if (gl_->GetError() != GL_NO_ERROR || supported != GL_TRUE) {
+                capabilities_.formatSupport[i] = FormatFeatureFlags::None;
+                continue;
+            }
+
+            FormatFeatureFlags flags = FormatFeatureFlags::Sampled;  // If supported, always samplable
+
+            // Renderable (color attachment or depth/stencil)
+            GLint renderable = 0;
+            gl_->GetInternalformativ(GL_TEXTURE_2D, glFmt, GL_FRAMEBUFFER_RENDERABLE, 1, &renderable);
+            if (gl_->GetError() == GL_NO_ERROR && renderable == static_cast<GLint>(GL_FULL_SUPPORT)) {
+                if (info.isDepth || info.isStencil) {
+                    flags = flags | FormatFeatureFlags::DepthStencil;
+                } else if (!info.isCompressed) {
+                    flags = flags | FormatFeatureFlags::ColorAttachment;
+                }
+            }
+
+            // Blendable
+            if (!info.isDepth && !info.isStencil && !info.isCompressed) {
+                GLint blendable = 0;
+                gl_->GetInternalformativ(GL_TEXTURE_2D, glFmt, GL_FRAMEBUFFER_BLEND, 1, &blendable);
+                if (gl_->GetError() == GL_NO_ERROR && blendable == static_cast<GLint>(GL_FULL_SUPPORT)) {
+                    flags = flags | FormatFeatureFlags::BlendSrc;
+                }
+            }
+
+            // Image load/store (storage)
+            if (!info.isCompressed && !info.isDepth) {
+                GLint imageLoad = 0;
+                gl_->GetInternalformativ(GL_TEXTURE_2D, glFmt, GL_SHADER_IMAGE_LOAD, 1, &imageLoad);
+                if (gl_->GetError() == GL_NO_ERROR && imageLoad == static_cast<GLint>(GL_FULL_SUPPORT)) {
+                    flags = flags | FormatFeatureFlags::Storage;
+                }
+            }
+
+            // Linear filtering
+            GLint filterable = 0;
+            gl_->GetInternalformativ(GL_TEXTURE_2D, glFmt, GL_FILTER, 1, &filterable);
+            if (gl_->GetError() == GL_NO_ERROR && filterable == static_cast<GLint>(GL_FULL_SUPPORT)) {
+                flags = flags | FormatFeatureFlags::Filter;
+            }
+
+            capabilities_.formatSupport[i] = flags;
+        }
+        // Clear any accumulated GL errors from probing
+        while (gl_->GetError() != GL_NO_ERROR) {}
     }
 
     // =========================================================================

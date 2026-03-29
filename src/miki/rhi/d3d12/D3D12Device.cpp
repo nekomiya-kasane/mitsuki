@@ -6,6 +6,12 @@
 
 #include "miki/rhi/backend/D3D12Device.h"
 
+#if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wnested-anon-types"
+#    pragma clang diagnostic ignored "-Wlanguage-extension-token"
+#endif
+
 #include <D3D12MemAlloc.h>
 
 #include "miki/debug/StructuredLogger.h"
@@ -356,6 +362,118 @@ namespace miki::rhi {
         if (capabilities_.hasAsyncCompute) {
             capabilities_.enabledFeatures.Add(DeviceFeature::AsyncCompute);
         }
+
+        // Runtime format support probe
+        PopulateFormatSupport();
+    }
+
+    void D3D12Device::PopulateFormatSupport() {
+        static constexpr DXGI_FORMAT kFormatMap[] = {
+            DXGI_FORMAT_UNKNOWN,               // Undefined
+            DXGI_FORMAT_R8_UNORM,              // R8_UNORM
+            DXGI_FORMAT_R8_SNORM,              // R8_SNORM
+            DXGI_FORMAT_R8_UINT,               // R8_UINT
+            DXGI_FORMAT_R8_SINT,               // R8_SINT
+            DXGI_FORMAT_R8G8_UNORM,            // RG8_UNORM
+            DXGI_FORMAT_R8G8_SNORM,            // RG8_SNORM
+            DXGI_FORMAT_R8G8_UINT,             // RG8_UINT
+            DXGI_FORMAT_R8G8_SINT,             // RG8_SINT
+            DXGI_FORMAT_R8G8B8A8_UNORM,        // RGBA8_UNORM
+            DXGI_FORMAT_R8G8B8A8_SNORM,        // RGBA8_SNORM
+            DXGI_FORMAT_R8G8B8A8_UINT,         // RGBA8_UINT
+            DXGI_FORMAT_R8G8B8A8_SINT,         // RGBA8_SINT
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,   // RGBA8_SRGB
+            DXGI_FORMAT_B8G8R8A8_UNORM,        // BGRA8_UNORM
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,   // BGRA8_SRGB
+            DXGI_FORMAT_R16_UNORM,             // R16_UNORM
+            DXGI_FORMAT_R16_SNORM,             // R16_SNORM
+            DXGI_FORMAT_R16_UINT,              // R16_UINT
+            DXGI_FORMAT_R16_SINT,              // R16_SINT
+            DXGI_FORMAT_R16_FLOAT,             // R16_FLOAT
+            DXGI_FORMAT_R16G16_UNORM,          // RG16_UNORM
+            DXGI_FORMAT_R16G16_SNORM,          // RG16_SNORM
+            DXGI_FORMAT_R16G16_UINT,           // RG16_UINT
+            DXGI_FORMAT_R16G16_SINT,           // RG16_SINT
+            DXGI_FORMAT_R16G16_FLOAT,          // RG16_FLOAT
+            DXGI_FORMAT_R16G16B16A16_UNORM,    // RGBA16_UNORM
+            DXGI_FORMAT_R16G16B16A16_SNORM,    // RGBA16_SNORM
+            DXGI_FORMAT_R16G16B16A16_UINT,     // RGBA16_UINT
+            DXGI_FORMAT_R16G16B16A16_SINT,     // RGBA16_SINT
+            DXGI_FORMAT_R16G16B16A16_FLOAT,    // RGBA16_FLOAT
+            DXGI_FORMAT_R32_UINT,              // R32_UINT
+            DXGI_FORMAT_R32_SINT,              // R32_SINT
+            DXGI_FORMAT_R32_FLOAT,             // R32_FLOAT
+            DXGI_FORMAT_R32G32_UINT,           // RG32_UINT
+            DXGI_FORMAT_R32G32_SINT,           // RG32_SINT
+            DXGI_FORMAT_R32G32_FLOAT,          // RG32_FLOAT
+            DXGI_FORMAT_R32G32B32_UINT,        // RGB32_UINT
+            DXGI_FORMAT_R32G32B32_SINT,        // RGB32_SINT
+            DXGI_FORMAT_R32G32B32_FLOAT,       // RGB32_FLOAT
+            DXGI_FORMAT_R32G32B32A32_UINT,     // RGBA32_UINT
+            DXGI_FORMAT_R32G32B32A32_SINT,     // RGBA32_SINT
+            DXGI_FORMAT_R32G32B32A32_FLOAT,    // RGBA32_FLOAT
+            DXGI_FORMAT_R10G10B10A2_UNORM,     // RGB10A2_UNORM
+            DXGI_FORMAT_R11G11B10_FLOAT,       // RG11B10_FLOAT
+            DXGI_FORMAT_D16_UNORM,             // D16_UNORM
+            DXGI_FORMAT_D32_FLOAT,             // D32_FLOAT
+            DXGI_FORMAT_D24_UNORM_S8_UINT,     // D24_UNORM_S8_UINT
+            DXGI_FORMAT_D32_FLOAT_S8X24_UINT,  // D32_FLOAT_S8_UINT
+            DXGI_FORMAT_BC1_UNORM,             // BC1_UNORM
+            DXGI_FORMAT_BC1_UNORM_SRGB,        // BC1_SRGB
+            DXGI_FORMAT_BC2_UNORM,             // BC2_UNORM
+            DXGI_FORMAT_BC2_UNORM_SRGB,        // BC2_SRGB
+            DXGI_FORMAT_BC3_UNORM,             // BC3_UNORM
+            DXGI_FORMAT_BC3_UNORM_SRGB,        // BC3_SRGB
+            DXGI_FORMAT_BC4_UNORM,             // BC4_UNORM
+            DXGI_FORMAT_BC4_SNORM,             // BC4_SNORM
+            DXGI_FORMAT_BC5_UNORM,             // BC5_UNORM
+            DXGI_FORMAT_BC5_SNORM,             // BC5_SNORM
+            DXGI_FORMAT_BC6H_UF16,             // BC6H_UFLOAT
+            DXGI_FORMAT_BC6H_SF16,             // BC6H_SFLOAT
+            DXGI_FORMAT_BC7_UNORM,             // BC7_UNORM
+            DXGI_FORMAT_BC7_UNORM_SRGB,        // BC7_SRGB
+            DXGI_FORMAT_UNKNOWN,               // ASTC_4x4_UNORM (not supported on D3D12)
+            DXGI_FORMAT_UNKNOWN,               // ASTC_4x4_SRGB
+        };
+        static_assert(std::size(kFormatMap) == GpuCapabilityProfile::kFormatCount);
+
+        for (uint32_t i = 1; i < GpuCapabilityProfile::kFormatCount; ++i) {
+            if (kFormatMap[i] == DXGI_FORMAT_UNKNOWN) {
+                capabilities_.formatSupport[i] = FormatFeatureFlags::None;
+                continue;
+            }
+
+            D3D12_FEATURE_DATA_FORMAT_SUPPORT fmtSupport{};
+            fmtSupport.Format = kFormatMap[i];
+            if (FAILED(device_->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &fmtSupport, sizeof(fmtSupport)))) {
+                capabilities_.formatSupport[i] = FormatFeatureFlags::None;
+                continue;
+            }
+
+            auto d3dFlags1 = fmtSupport.Support1;
+            FormatFeatureFlags flags = FormatFeatureFlags::None;
+
+            if (d3dFlags1 & D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE) {
+                flags = flags | FormatFeatureFlags::Sampled;
+            }
+            if (d3dFlags1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) {
+                flags = flags | FormatFeatureFlags::Storage;
+            }
+            if (d3dFlags1 & D3D12_FORMAT_SUPPORT1_RENDER_TARGET) {
+                flags = flags | FormatFeatureFlags::ColorAttachment;
+            }
+            if (d3dFlags1 & D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL) {
+                flags = flags | FormatFeatureFlags::DepthStencil;
+            }
+            if (d3dFlags1 & D3D12_FORMAT_SUPPORT1_BLENDABLE) {
+                flags = flags | FormatFeatureFlags::BlendSrc;
+            }
+            if (d3dFlags1 & D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE_COMPARISON) {
+                flags = flags | FormatFeatureFlags::Filter;
+            }
+
+            capabilities_.formatSupport[i] = flags;
+        }
     }
 
     // =========================================================================
@@ -677,3 +795,7 @@ namespace miki::rhi {
     }
 
 }  // namespace miki::rhi
+
+#if defined(__clang__)
+#    pragma clang diagnostic pop
+#endif

@@ -565,6 +565,111 @@ namespace miki::rhi {
             capabilities_.hasPushDescriptors = true;
             capabilities_.enabledFeatures.Add(DeviceFeature::PushDescriptors);
         }
+
+        // Runtime format support probe via vkGetPhysicalDeviceFormatProperties
+        PopulateFormatSupport();
+    }
+
+    void VulkanDevice::PopulateFormatSupport() {
+        // Mapping from miki::rhi::Format to VkFormat (indexed by Format enum value)
+        static constexpr VkFormat kFormatMap[] = {
+            VK_FORMAT_UNDEFINED,                 // Undefined
+            VK_FORMAT_R8_UNORM,                  // R8_UNORM
+            VK_FORMAT_R8_SNORM,                  // R8_SNORM
+            VK_FORMAT_R8_UINT,                   // R8_UINT
+            VK_FORMAT_R8_SINT,                   // R8_SINT
+            VK_FORMAT_R8G8_UNORM,                // RG8_UNORM
+            VK_FORMAT_R8G8_SNORM,                // RG8_SNORM
+            VK_FORMAT_R8G8_UINT,                 // RG8_UINT
+            VK_FORMAT_R8G8_SINT,                 // RG8_SINT
+            VK_FORMAT_R8G8B8A8_UNORM,            // RGBA8_UNORM
+            VK_FORMAT_R8G8B8A8_SNORM,            // RGBA8_SNORM
+            VK_FORMAT_R8G8B8A8_UINT,             // RGBA8_UINT
+            VK_FORMAT_R8G8B8A8_SINT,             // RGBA8_SINT
+            VK_FORMAT_R8G8B8A8_SRGB,             // RGBA8_SRGB
+            VK_FORMAT_B8G8R8A8_UNORM,            // BGRA8_UNORM
+            VK_FORMAT_B8G8R8A8_SRGB,             // BGRA8_SRGB
+            VK_FORMAT_R16_UNORM,                 // R16_UNORM
+            VK_FORMAT_R16_SNORM,                 // R16_SNORM
+            VK_FORMAT_R16_UINT,                  // R16_UINT
+            VK_FORMAT_R16_SINT,                  // R16_SINT
+            VK_FORMAT_R16_SFLOAT,                // R16_FLOAT
+            VK_FORMAT_R16G16_UNORM,              // RG16_UNORM
+            VK_FORMAT_R16G16_SNORM,              // RG16_SNORM
+            VK_FORMAT_R16G16_UINT,               // RG16_UINT
+            VK_FORMAT_R16G16_SINT,               // RG16_SINT
+            VK_FORMAT_R16G16_SFLOAT,             // RG16_FLOAT
+            VK_FORMAT_R16G16B16A16_UNORM,        // RGBA16_UNORM
+            VK_FORMAT_R16G16B16A16_SNORM,        // RGBA16_SNORM
+            VK_FORMAT_R16G16B16A16_UINT,         // RGBA16_UINT
+            VK_FORMAT_R16G16B16A16_SINT,         // RGBA16_SINT
+            VK_FORMAT_R16G16B16A16_SFLOAT,       // RGBA16_FLOAT
+            VK_FORMAT_R32_UINT,                  // R32_UINT
+            VK_FORMAT_R32_SINT,                  // R32_SINT
+            VK_FORMAT_R32_SFLOAT,                // R32_FLOAT
+            VK_FORMAT_R32G32_UINT,               // RG32_UINT
+            VK_FORMAT_R32G32_SINT,               // RG32_SINT
+            VK_FORMAT_R32G32_SFLOAT,             // RG32_FLOAT
+            VK_FORMAT_R32G32B32_UINT,            // RGB32_UINT
+            VK_FORMAT_R32G32B32_SINT,            // RGB32_SINT
+            VK_FORMAT_R32G32B32_SFLOAT,          // RGB32_FLOAT
+            VK_FORMAT_R32G32B32A32_UINT,         // RGBA32_UINT
+            VK_FORMAT_R32G32B32A32_SINT,         // RGBA32_SINT
+            VK_FORMAT_R32G32B32A32_SFLOAT,       // RGBA32_FLOAT
+            VK_FORMAT_A2B10G10R10_UNORM_PACK32,  // RGB10A2_UNORM
+            VK_FORMAT_B10G11R11_UFLOAT_PACK32,   // RG11B10_FLOAT
+            VK_FORMAT_D16_UNORM,                 // D16_UNORM
+            VK_FORMAT_D32_SFLOAT,                // D32_FLOAT
+            VK_FORMAT_D24_UNORM_S8_UINT,         // D24_UNORM_S8_UINT
+            VK_FORMAT_D32_SFLOAT_S8_UINT,        // D32_FLOAT_S8_UINT
+            VK_FORMAT_BC1_RGBA_UNORM_BLOCK,      // BC1_UNORM
+            VK_FORMAT_BC1_RGBA_SRGB_BLOCK,       // BC1_SRGB
+            VK_FORMAT_BC2_UNORM_BLOCK,           // BC2_UNORM
+            VK_FORMAT_BC2_SRGB_BLOCK,            // BC2_SRGB
+            VK_FORMAT_BC3_UNORM_BLOCK,           // BC3_UNORM
+            VK_FORMAT_BC3_SRGB_BLOCK,            // BC3_SRGB
+            VK_FORMAT_BC4_UNORM_BLOCK,           // BC4_UNORM
+            VK_FORMAT_BC4_SNORM_BLOCK,           // BC4_SNORM
+            VK_FORMAT_BC5_UNORM_BLOCK,           // BC5_UNORM
+            VK_FORMAT_BC5_SNORM_BLOCK,           // BC5_SNORM
+            VK_FORMAT_BC6H_UFLOAT_BLOCK,         // BC6H_UFLOAT
+            VK_FORMAT_BC6H_SFLOAT_BLOCK,         // BC6H_SFLOAT
+            VK_FORMAT_BC7_UNORM_BLOCK,           // BC7_UNORM
+            VK_FORMAT_BC7_SRGB_BLOCK,            // BC7_SRGB
+            VK_FORMAT_ASTC_4x4_UNORM_BLOCK,      // ASTC_4x4_UNORM
+            VK_FORMAT_ASTC_4x4_SRGB_BLOCK,       // ASTC_4x4_SRGB
+        };
+        static_assert(std::size(kFormatMap) == GpuCapabilityProfile::kFormatCount);
+
+        for (uint32_t i = 1; i < GpuCapabilityProfile::kFormatCount; ++i) {
+            VkFormatProperties fmtProps{};
+            vkGetPhysicalDeviceFormatProperties(physicalDevice_, kFormatMap[i], &fmtProps);
+
+            // Use optimalTilingFeatures for texture formats, linearTilingFeatures for buffer
+            auto vkFlags = fmtProps.optimalTilingFeatures;
+            FormatFeatureFlags flags = FormatFeatureFlags::None;
+
+            if (vkFlags & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) {
+                flags = flags | FormatFeatureFlags::Sampled;
+            }
+            if (vkFlags & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) {
+                flags = flags | FormatFeatureFlags::Storage;
+            }
+            if (vkFlags & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) {
+                flags = flags | FormatFeatureFlags::ColorAttachment;
+            }
+            if (vkFlags & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+                flags = flags | FormatFeatureFlags::DepthStencil;
+            }
+            if (vkFlags & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT) {
+                flags = flags | FormatFeatureFlags::BlendSrc;
+            }
+            if (vkFlags & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) {
+                flags = flags | FormatFeatureFlags::Filter;
+            }
+
+            capabilities_.formatSupport[i] = flags;
+        }
     }
 
     // =========================================================================
