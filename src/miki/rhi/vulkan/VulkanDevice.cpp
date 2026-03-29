@@ -9,6 +9,7 @@
 #if defined(__clang__)
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wnullability-extension"
+#    pragma clang diagnostic ignored "-Wnullability-completeness"
 #elif defined(_MSC_VER)
 #    pragma warning(push)
 #    pragma warning(disable : 5105)
@@ -64,7 +65,7 @@ namespace miki::rhi {
         appInfo.applicationVersion = desc.appVersion;
         appInfo.pEngineName = "miki";
         appInfo.engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
-        appInfo.apiVersion = VK_API_VERSION_1_4;
+        appInfo.apiVersion = (tier_ == BackendType::VulkanCompat) ? VK_API_VERSION_1_1 : VK_API_VERSION_1_4;
 
         std::vector<const char*> extensions = {
             VK_KHR_SURFACE_EXTENSION_NAME,
@@ -233,37 +234,121 @@ namespace miki::rhi {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
 
-        // Vulkan 1.4 core features
-        VkPhysicalDeviceVulkan12Features features12{};
-        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        features12.timelineSemaphore = VK_TRUE;
-        features12.bufferDeviceAddress = VK_TRUE;
-        features12.descriptorIndexing = VK_TRUE;
-        features12.runtimeDescriptorArray = VK_TRUE;
-        features12.descriptorBindingPartiallyBound = VK_TRUE;
-        features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
-        features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-        features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+        // =====================================================================
+        // Probe physical device features to decide tier
+        // =====================================================================
+        VkPhysicalDeviceVulkan12Features supported12{};
+        supported12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        VkPhysicalDeviceVulkan13Features supported13{};
+        supported13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        supported13.pNext = &supported12;
+        VkPhysicalDeviceFeatures2 supported2{};
+        supported2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        supported2.pNext = &supported13;
+        vkGetPhysicalDeviceFeatures2(physicalDevice_, &supported2);
 
-        VkPhysicalDeviceVulkan13Features features13{};
-        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        features13.pNext = &features12;
-        features13.dynamicRendering = VK_TRUE;
-        features13.synchronization2 = VK_TRUE;
-        features13.maintenance4 = VK_TRUE;
+        // Check API version
+        VkPhysicalDeviceProperties devProps{};
+        vkGetPhysicalDeviceProperties(physicalDevice_, &devProps);
+        bool has14Api
+            = VK_API_VERSION_MAJOR(devProps.apiVersion) >= 1 && VK_API_VERSION_MINOR(devProps.apiVersion) >= 4;
 
+        // If user requested Vulkan14, check for critical features and auto-downgrade
+        if (tier_ == BackendType::Vulkan14) {
+            using enum ::miki::debug::LogCategory;
+            bool missingCritical = false;
+            auto check = [&](VkBool32 supported, const char* name) {
+                if (!supported) {
+                    MIKI_LOG_WARN(
+                        Rhi, "[Vulkan] Tier1 feature '{}' not supported by GPU, will downgrade to Compat", name
+                    );
+                    missingCritical = true;
+                }
+            };
+            if (!has14Api) {
+                MIKI_LOG_WARN(
+                    Rhi, "[Vulkan] GPU does not support Vulkan 1.4 (reported {}.{}), will downgrade to Compat",
+                    VK_API_VERSION_MAJOR(devProps.apiVersion), VK_API_VERSION_MINOR(devProps.apiVersion)
+                );
+                missingCritical = true;
+            }
+            check(supported12.timelineSemaphore, "timelineSemaphore");
+            check(supported12.bufferDeviceAddress, "bufferDeviceAddress");
+            check(supported12.descriptorIndexing, "descriptorIndexing");
+            check(supported13.dynamicRendering, "dynamicRendering");
+            check(supported13.synchronization2, "synchronization2");
+            check(supported13.maintenance4, "maintenance4");
+
+            if (missingCritical) {
+                MIKI_LOG_WARN(Rhi, "[Vulkan] Downgrading from Vulkan14 to VulkanCompat due to missing features");
+                tier_ = BackendType::VulkanCompat;
+            }
+        }
+
+        // =====================================================================
+        // Build feature request chain based on final tier_
+        // =====================================================================
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features2.pNext = &features13;
-        features2.features.fillModeNonSolid = VK_TRUE;
-        features2.features.wideLines = VK_TRUE;
-        features2.features.samplerAnisotropy = VK_TRUE;
-        features2.features.multiDrawIndirect = VK_TRUE;
-        features2.features.drawIndirectFirstInstance = VK_TRUE;
-        features2.features.depthClamp = VK_TRUE;
-        features2.features.depthBiasClamp = VK_TRUE;
-        features2.features.shaderFloat64 = VK_TRUE;
-        features2.features.shaderInt64 = VK_TRUE;
+
+        // 1.0 core features — requested for both tiers (only if supported)
+        features2.features.samplerAnisotropy = supported2.features.samplerAnisotropy;
+        features2.features.fillModeNonSolid = supported2.features.fillModeNonSolid;
+        features2.features.wideLines = supported2.features.wideLines;
+        features2.features.depthClamp = supported2.features.depthClamp;
+        features2.features.depthBiasClamp = supported2.features.depthBiasClamp;
+        features2.features.multiDrawIndirect = supported2.features.multiDrawIndirect;
+        features2.features.drawIndirectFirstInstance = supported2.features.drawIndirectFirstInstance;
+
+        VkPhysicalDeviceVulkan12Features features12{};
+        VkPhysicalDeviceVulkan13Features features13{};
+
+        if (tier_ == BackendType::Vulkan14) {
+            // Full Vulkan 1.4 — request all critical + nice-to-have features
+            features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+            features12.timelineSemaphore = VK_TRUE;
+            features12.bufferDeviceAddress = VK_TRUE;
+            features12.descriptorIndexing = VK_TRUE;
+            features12.runtimeDescriptorArray = VK_TRUE;
+            features12.descriptorBindingPartiallyBound = VK_TRUE;
+            features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+            features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+
+            features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+            features13.pNext = &features12;
+            features13.dynamicRendering = VK_TRUE;
+            features13.synchronization2 = VK_TRUE;
+            features13.maintenance4 = VK_TRUE;
+
+            features2.pNext = &features13;
+            // Optional 1.0 features (only if GPU supports)
+            features2.features.shaderFloat64 = supported2.features.shaderFloat64;
+            features2.features.shaderInt64 = supported2.features.shaderInt64;
+        } else {
+            // VulkanCompat — only 1.0/1.1 core, no pNext chain for 1.2/1.3 features
+            features2.pNext = nullptr;
+
+            // Compat may still need VK_KHR_timeline_semaphore if available as extension
+            uint32_t extCount = 0;
+            vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
+            std::vector<VkExtensionProperties> availableExts(extCount);
+            vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, availableExts.data());
+            auto hasExt = [&](const char* name) {
+                return std::ranges::any_of(availableExts, [name](const VkExtensionProperties& e) {
+                    return std::strcmp(e.extensionName, name) == 0;
+                });
+            };
+            if (hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+            }
+            if (hasExt(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+            }
+            if (hasExt(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+            }
+        }
 
         VkDeviceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -338,7 +423,7 @@ namespace miki::rhi {
         allocatorInfo.device = device_;
         allocatorInfo.instance = instance_;
         allocatorInfo.pVulkanFunctions = &vmaFunctions;
-        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_4;
+        allocatorInfo.vulkanApiVersion = tier_ == BackendType::VulkanCompat ? VK_API_VERSION_1_1 : VK_API_VERSION_1_4;
 
         VkResult r = vmaCreateAllocator(&allocatorInfo, &allocator_);
         if (r != VK_SUCCESS) {
@@ -386,8 +471,14 @@ namespace miki::rhi {
     // =========================================================================
 
     void VulkanDevice::PopulateCapabilities() {
-        capabilities_.tier = CapabilityTier::Tier1_Vulkan;
-        capabilities_.backendType = BackendType::Vulkan14;
+        using enum ::miki::debug::LogCategory;
+
+        // =====================================================================
+        // Tier & Backend — based on final tier_ (may have been downgraded)
+        // =====================================================================
+        const bool isTier1 = (tier_ == BackendType::Vulkan14);
+        capabilities_.tier = isTier1 ? CapabilityTier::Tier1_Vulkan : CapabilityTier::Tier2_Compat;
+        capabilities_.backendType = tier_;
 
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physicalDevice_, &props);
@@ -399,7 +490,7 @@ namespace miki::rhi {
         capabilities_.vendorId = props.vendorID;
         capabilities_.deviceId = props.deviceID;
 
-        // Limits
+        // Limits (universal — same for both tiers)
         capabilities_.maxTextureSize2D = props.limits.maxImageDimension2D;
         capabilities_.maxTextureSizeCube = props.limits.maxImageDimensionCube;
         capabilities_.maxFramebufferWidth = props.limits.maxFramebufferWidth;
@@ -443,19 +534,16 @@ namespace miki::rhi {
             }
         }
 
-        // Features enabled at device creation (we know they are true because we requested them)
-        capabilities_.hasTimelineSemaphore = true;
-        capabilities_.hasAsyncCompute = (queueFamilies_.compute != queueFamilies_.graphics);
-        capabilities_.hasMultiDrawIndirect = true;
-        capabilities_.hasMultiDrawIndirectCount = true;
-        capabilities_.hasSubgroupOps = true;
-        capabilities_.hasFloat64 = true;
-        capabilities_.hasBindless = true;
-        capabilities_.hasPushDescriptors = false;  // probed separately if extension available
-        capabilities_.maxStorageBufferSize = UINT64_MAX;
+        // Common feature probing
+        VkPhysicalDeviceFeatures deviceFeatures{};
+        vkGetPhysicalDeviceFeatures(physicalDevice_, &deviceFeatures);
 
-        // Descriptor model: probe ONCE at init, store result immutably.
-        // These extensions are device-level properties — no runtime re-probing needed.
+        capabilities_.hasAsyncCompute = (queueFamilies_.compute != queueFamilies_.graphics);
+        capabilities_.hasMultiDrawIndirect = (deviceFeatures.multiDrawIndirect == VK_TRUE);
+        capabilities_.hasSubgroupOps = true;  // Vulkan 1.1+ always has subgroup ops
+        capabilities_.hasPushDescriptors = false;
+
+        // Extension list (shared by tier-specific methods)
         uint32_t extCount = 0;
         vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
         std::vector<VkExtensionProperties> availableExts(extCount);
@@ -467,7 +555,82 @@ namespace miki::rhi {
             });
         };
 
-        // Descriptor path: probe once, immutable after Init (see arch decision #3)
+        // =====================================================================
+        // Dispatch to tier-specific population
+        // =====================================================================
+        if (isTier1) {
+            PopulateCapabilities_Tier1(deviceFeatures, availableExts);
+        } else {
+            PopulateCapabilities_Tier2(deviceFeatures, availableExts);
+        }
+
+        // =====================================================================
+        // Common features & extensions (both tiers)
+        // =====================================================================
+        capabilities_.enabledFeatures.Add(DeviceFeature::Present);
+        if (capabilities_.hasAsyncCompute) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::AsyncCompute);
+        }
+
+        // Sparse binding
+        capabilities_.hasSparseBinding = (deviceFeatures.sparseBinding == VK_TRUE);
+        if (capabilities_.hasSparseBinding) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::SparseBinding);
+        }
+
+        // ReBAR detection
+        for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
+            auto flags = memProps.memoryTypes[i].propertyFlags;
+            if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+                auto heapSize = memProps.memoryHeaps[memProps.memoryTypes[i].heapIndex].size;
+                constexpr uint64_t kRebarThreshold = 256ULL * 1024 * 1024;
+                if (heapSize >= kRebarThreshold) {
+                    capabilities_.hasResizableBAR = true;
+                    break;
+                }
+            }
+        }
+
+        // Memory budget query
+        if (hasExt(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
+            capabilities_.hasMemoryBudgetQuery = true;
+        }
+
+        // Push descriptors
+        if (hasExt(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)) {
+            capabilities_.hasPushDescriptors = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::PushDescriptors);
+        }
+
+        MIKI_LOG_INFO(
+            Rhi, "[Vulkan] Capability tier: {} (backend: {}, GPU: {})", isTier1 ? "Tier1_Vulkan" : "Tier2_Compat",
+            isTier1 ? "Vulkan14" : "VulkanCompat", capabilities_.deviceName
+        );
+
+        PopulateFormatSupport();
+    }
+
+    // =========================================================================
+    // Tier1 (Vulkan 1.4) capability population
+    // =========================================================================
+
+    void VulkanDevice::PopulateCapabilities_Tier1(
+        const VkPhysicalDeviceFeatures& deviceFeatures, const std::vector<VkExtensionProperties>& availableExts
+    ) {
+        auto hasExt = [&](const char* name) -> bool {
+            return std::ranges::any_of(availableExts, [name](const VkExtensionProperties& e) {
+                return std::strcmp(e.extensionName, name) == 0;
+            });
+        };
+
+        // Features guaranteed by Vulkan 1.4 device creation
+        capabilities_.hasTimelineSemaphore = true;
+        capabilities_.hasMultiDrawIndirectCount = true;
+        capabilities_.hasFloat64 = (deviceFeatures.shaderFloat64 == VK_TRUE);
+        capabilities_.hasBindless = true;
+        capabilities_.maxStorageBufferSize = UINT64_MAX;
+
+        // Descriptor model
         if (hasExt("VK_EXT_descriptor_heap")) {
             capabilities_.descriptorModel = DescriptorModel::DescriptorHeap;
         } else if (hasExt(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME)) {
@@ -527,48 +690,60 @@ namespace miki::rhi {
             capabilities_.enabledFeatures.Add(DeviceFeature::VariableRateShading);
         }
 
-        // Sparse binding
-        VkPhysicalDeviceFeatures deviceFeatures{};
-        vkGetPhysicalDeviceFeatures(physicalDevice_, &deviceFeatures);
-        capabilities_.hasSparseBinding = (deviceFeatures.sparseBinding == VK_TRUE);
-        if (capabilities_.hasSparseBinding) {
-            capabilities_.enabledFeatures.Add(DeviceFeature::SparseBinding);
-        }
-
-        // ReBAR detection: check if any DEVICE_LOCAL heap is also HOST_VISIBLE
-        for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
-            auto flags = memProps.memoryTypes[i].propertyFlags;
-            if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
-                auto heapSize = memProps.memoryHeaps[memProps.memoryTypes[i].heapIndex].size;
-                constexpr uint64_t kRebarThreshold = 256ULL * 1024 * 1024;
-                if (heapSize >= kRebarThreshold) {
-                    capabilities_.hasResizableBAR = true;
-                    break;
-                }
-            }
-        }
-
-        // Always-on features for T1 Vulkan
-        capabilities_.enabledFeatures.Add(DeviceFeature::Present);
+        // DeviceFeatureSet — always-on for Tier1
         capabilities_.enabledFeatures.Add(DeviceFeature::TimelineSemaphore);
         capabilities_.enabledFeatures.Add(DeviceFeature::DynamicRendering);
-        if (capabilities_.hasAsyncCompute) {
-            capabilities_.enabledFeatures.Add(DeviceFeature::AsyncCompute);
+        capabilities_.enabledFeatures.Add(DeviceFeature::Synchronization2);
+        capabilities_.enabledFeatures.Add(DeviceFeature::BufferDeviceAddress);
+        capabilities_.enabledFeatures.Add(DeviceFeature::DescriptorIndexing);
+        capabilities_.enabledFeatures.Add(DeviceFeature::MultiDrawIndirect);
+        capabilities_.enabledFeatures.Add(DeviceFeature::MultiDrawIndirectCount);
+        if (capabilities_.hasSubgroupOps) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::SubgroupOps);
         }
-
-        // Memory budget query
-        if (hasExt(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
-            capabilities_.hasMemoryBudgetQuery = true;
+        if (capabilities_.hasFloat64) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::Float64);
         }
+    }
 
-        // Push descriptors
-        if (hasExt(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)) {
-            capabilities_.hasPushDescriptors = true;
-            capabilities_.enabledFeatures.Add(DeviceFeature::PushDescriptors);
+    // =========================================================================
+    // Tier2 (VulkanCompat) capability population
+    // =========================================================================
+
+    void VulkanDevice::PopulateCapabilities_Tier2(
+        const VkPhysicalDeviceFeatures& deviceFeatures, const std::vector<VkExtensionProperties>& availableExts
+    ) {
+        auto hasExt = [&](const char* name) -> bool {
+            return std::ranges::any_of(availableExts, [name](const VkExtensionProperties& e) {
+                return std::strcmp(e.extensionName, name) == 0;
+            });
+        };
+
+        // Compat: probe what's actually available
+        capabilities_.hasTimelineSemaphore = false;
+        capabilities_.hasMultiDrawIndirectCount = false;
+        capabilities_.hasFloat64 = (deviceFeatures.shaderFloat64 == VK_TRUE);
+        capabilities_.hasBindless = false;
+        capabilities_.maxStorageBufferSize = 128ULL * 1024 * 1024;
+        capabilities_.descriptorModel = DescriptorModel::DescriptorSet;
+
+        // DeviceFeatureSet — probe optional extensions
+        if (hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
+            capabilities_.hasTimelineSemaphore = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::TimelineSemaphore);
         }
-
-        // Runtime format support probe via vkGetPhysicalDeviceFormatProperties
-        PopulateFormatSupport();
+        if (hasExt(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::DynamicRendering);
+        }
+        if (hasExt(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::Synchronization2);
+        }
+        if (capabilities_.hasMultiDrawIndirect) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::MultiDrawIndirect);
+        }
+        if (capabilities_.hasSubgroupOps) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::SubgroupOps);
+        }
     }
 
     void VulkanDevice::PopulateFormatSupport() {
