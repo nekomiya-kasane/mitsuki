@@ -4,6 +4,7 @@
  */
 
 #include "miki/rhi/backend/OpenGLDevice.h"
+#include "miki/rhi/backend/OpenGLCommandBuffer.h"
 
 #include "miki/debug/StructuredLogger.h"
 #include "miki/platform/WindowManager.h"
@@ -89,6 +90,8 @@ namespace miki::rhi {
 
         return {};
     }
+
+    OpenGLDevice::OpenGLDevice() = default;
 
     OpenGLDevice::~OpenGLDevice() {
         if (gl_) {

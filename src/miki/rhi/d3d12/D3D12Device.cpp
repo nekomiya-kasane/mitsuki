@@ -5,6 +5,7 @@
  */
 
 #include "miki/rhi/backend/D3D12Device.h"
+#include "miki/rhi/backend/D3D12CommandBuffer.h"
 
 #if defined(__clang__)
 #    pragma clang diagnostic push
@@ -520,6 +521,8 @@ namespace miki::rhi {
 
         return {};
     }
+
+    D3D12Device::D3D12Device() = default;
 
     D3D12Device::~D3D12Device() {
         if (device_) {

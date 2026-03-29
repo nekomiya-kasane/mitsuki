@@ -17,6 +17,7 @@
 
 #include <volk.h>
 
+#include <memory>
 #include <vector>
 
 // VMA forward declaration — full include only in .cpp files
@@ -165,7 +166,7 @@ namespace miki::rhi {
 
     class VulkanDevice : public DeviceBase<VulkanDevice> {
        public:
-        VulkanDevice() = default;
+        VulkanDevice();
         ~VulkanDevice();
 
         VulkanDevice(const VulkanDevice&) = delete;
@@ -271,6 +272,8 @@ namespace miki::rhi {
         // -- Command buffers (VulkanCommandBuffer.cpp) --
         auto CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle>;
         void DestroyCommandBufferImpl(CommandBufferHandle h);
+        auto AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition>;
+        void ReleaseCommandListImpl(const CommandListAcquisition& acq);
 
         // -- Query (VulkanQuery.cpp) --
         auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;
@@ -289,6 +292,9 @@ namespace miki::rhi {
         // -- Memory stats --
         auto GetMemoryStatsImpl() const -> MemoryStats;
         auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t;
+
+        // -- Surface capabilities --
+        auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
 
         // -- HandlePool accessors (for cross-file backend code, e.g. VulkanCommandBuffer) --
         auto GetBufferPool() -> HandlePool<VulkanBufferData, BufferTag, kMaxBuffers>& { return buffers_; }
@@ -377,6 +383,9 @@ namespace miki::rhi {
         HandlePool<VulkanSwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<VulkanCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
         HandlePool<VulkanDeviceMemoryData, DeviceMemoryTag, kMaxDeviceMemory> deviceMemory_;
+
+        // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
+        std::vector<std::unique_ptr<VulkanCommandBuffer>> commandListArena_;
 
         // -- Init helpers --
         auto CreateInstance(const VulkanDeviceDesc& desc) -> RhiResult<void>;

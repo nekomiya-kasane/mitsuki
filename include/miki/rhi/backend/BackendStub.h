@@ -104,6 +104,9 @@
     auto CreateCommandBufferImpl(const CommandBufferDesc&) -> RhiResult<CommandBufferHandle> {                         \
         return std::unexpected(RhiError::NotImplemented); }                                                            \
     void DestroyCommandBufferImpl(CommandBufferHandle) {}                                                              \
+    auto AcquireCommandListImpl(QueueType) -> RhiResult<CommandListAcquisition> {                                      \
+        return std::unexpected(RhiError::NotImplemented); }                                                            \
+    void ReleaseCommandListImpl(const CommandListAcquisition&) {}                                                      \
                                                                                                                        \
     /* --- Query --- */                                                                                                \
     auto CreateQueryPoolImpl(const QueryPoolDesc&) -> RhiResult<QueryPoolHandle> {                                     \
@@ -124,7 +127,10 @@
                                                                                                                        \
     /* --- Memory stats --- */                                                                                         \
     auto GetMemoryStatsImpl() const -> MemoryStats { return {}; }                                                      \
-    auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget>) const -> uint32_t { return 0; }
+    auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget>) const -> uint32_t { return 0; }                         \
+                                                                                                                       \
+    /* --- Surface capabilities --- */                                                                                 \
+    auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle&) const -> RenderSurfaceCapabilities { return {}; }
 
 // ---------------------------------------------------------------------------
 // MIKI_DEVICE_STUB_IMPL — ALL methods stubbed (for backends not yet started)

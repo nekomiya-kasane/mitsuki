@@ -27,6 +27,8 @@
 #if MIKI_BUILD_WEBGPU
 #    include "miki/rhi/backend/WebGPUDevice.h"
 #endif
+
+#include "miki/rhi/backend/MockDevice.h"
 // clang-format on
 
 #ifdef CreateSemaphore

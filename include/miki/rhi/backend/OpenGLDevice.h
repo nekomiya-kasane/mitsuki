@@ -23,6 +23,7 @@
 #pragma clang diagnostic pop
 #pragma warning(pop)
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -227,7 +228,7 @@ namespace miki::rhi {
 
     class OpenGLDevice : public DeviceBase<OpenGLDevice> {
        public:
-        OpenGLDevice() = default;
+        OpenGLDevice();
         ~OpenGLDevice();
 
         OpenGLDevice(const OpenGLDevice&) = delete;
@@ -327,6 +328,8 @@ namespace miki::rhi {
         // -- Command buffers (OpenGLQuery.cpp) --
         auto CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle>;
         void DestroyCommandBufferImpl(CommandBufferHandle h);
+        auto AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition>;
+        void ReleaseCommandListImpl(const CommandListAcquisition& acq);
 
         // -- Query (OpenGLQuery.cpp) --
         auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;
@@ -345,6 +348,9 @@ namespace miki::rhi {
         // -- Memory stats --
         auto GetMemoryStatsImpl() const -> MemoryStats;
         auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t;
+
+        // -- Surface capabilities --
+        auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
 
         // -- HandlePool accessors (for OpenGLCommandBuffer cross-file access) --
         auto GetBufferPool() -> HandlePool<GLBufferData, BufferTag, kMaxBuffers>& { return buffers_; }
@@ -414,6 +420,9 @@ namespace miki::rhi {
         HandlePool<GLQueryPoolData, QueryPoolTag, kMaxQueryPools> queryPools_;
         HandlePool<GLSwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<GLCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
+
+        // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
+        std::vector<std::unique_ptr<OpenGLCommandBuffer>> commandListArena_;
 
         // -- Init helpers --
         void PopulateCapabilities();

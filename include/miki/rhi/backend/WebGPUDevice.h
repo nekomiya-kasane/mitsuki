@@ -17,6 +17,7 @@
 
 #include <dawn/webgpu.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -170,7 +171,7 @@ namespace miki::rhi {
 
     class WebGPUDevice : public DeviceBase<WebGPUDevice> {
        public:
-        WebGPUDevice() = default;
+        WebGPUDevice();
         ~WebGPUDevice();
 
         WebGPUDevice(const WebGPUDevice&) = delete;
@@ -272,6 +273,8 @@ namespace miki::rhi {
         // -- Command buffers (WebGPUQuery.cpp) --
         auto CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle>;
         void DestroyCommandBufferImpl(CommandBufferHandle h);
+        auto AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition>;
+        void ReleaseCommandListImpl(const CommandListAcquisition& acq);
 
         // -- Query (WebGPUQuery.cpp) --
         auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;
@@ -290,6 +293,9 @@ namespace miki::rhi {
         // -- Memory stats --
         auto GetMemoryStatsImpl() const -> MemoryStats;
         auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t;
+
+        // -- Surface capabilities --
+        auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
 
         // -- HandlePool accessors (for WebGPUCommandBuffer cross-file access) --
         auto GetBufferPool() -> HandlePool<WGPUBufferData, BufferTag, kMaxBuffers>& { return buffers_; }
@@ -362,6 +368,9 @@ namespace miki::rhi {
         HandlePool<WGPUQueryPoolData, QueryPoolTag, kMaxQueryPools> queryPools_;
         HandlePool<WGPUSwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<WGPUCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
+
+        // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
+        std::vector<std::unique_ptr<WebGPUCommandBuffer>> commandListArena_;
 
         // -- Init helpers --
         void PopulateCapabilities();

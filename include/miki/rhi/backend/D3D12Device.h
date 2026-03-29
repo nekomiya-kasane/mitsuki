@@ -22,6 +22,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <memory>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -215,7 +216,7 @@ namespace miki::rhi {
 
     class D3D12Device : public DeviceBase<D3D12Device> {
        public:
-        D3D12Device() = default;
+        D3D12Device();
         ~D3D12Device();
 
         D3D12Device(const D3D12Device&) = delete;
@@ -317,6 +318,8 @@ namespace miki::rhi {
         // -- Command buffers (D3D12CommandBuffer.cpp) --
         auto CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle>;
         void DestroyCommandBufferImpl(CommandBufferHandle h);
+        auto AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition>;
+        void ReleaseCommandListImpl(const CommandListAcquisition& acq);
 
         // -- Query (D3D12Query.cpp) --
         auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;
@@ -335,6 +338,9 @@ namespace miki::rhi {
         // -- Memory stats --
         auto GetMemoryStatsImpl() const -> MemoryStats;
         auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t;
+
+        // -- Surface capabilities --
+        auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
 
         // -- HandlePool accessors (for D3D12CommandBuffer cross-file access) --
         auto GetBufferPool() -> HandlePool<D3D12BufferData, BufferTag, kMaxBuffers>& { return buffers_; }
@@ -414,6 +420,9 @@ namespace miki::rhi {
         HandlePool<D3D12SwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<D3D12CommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
         HandlePool<D3D12DeviceMemoryData, DeviceMemoryTag, kMaxDeviceMemory> deviceMemory_;
+
+        // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
+        std::vector<std::unique_ptr<D3D12CommandBuffer>> commandListArena_;
 
         // -- Init helpers --
         auto CreateFactory(bool enableValidation) -> RhiResult<void>;

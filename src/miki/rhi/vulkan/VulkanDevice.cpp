@@ -4,6 +4,7 @@
  */
 
 #include "miki/rhi/backend/VulkanDevice.h"
+#include "miki/rhi/backend/VulkanCommandBuffer.h"
 
 #if defined(__clang__)
 #    pragma clang diagnostic push
@@ -713,6 +714,8 @@ namespace miki::rhi {
 
         return {};
     }
+
+    VulkanDevice::VulkanDevice() = default;
 
     VulkanDevice::~VulkanDevice() {
         if (device_) {

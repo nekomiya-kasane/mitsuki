@@ -19,6 +19,8 @@ namespace miki::rhi {
     // Lifecycle
     // =========================================================================
 
+    WebGPUDevice::WebGPUDevice() = default;
+
     WebGPUDevice::~WebGPUDevice() {
         if (device_) {
             WaitIdleImpl();
