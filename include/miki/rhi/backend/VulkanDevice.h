@@ -381,6 +381,7 @@ namespace miki::rhi {
         auto CreateVmaAllocator() -> RhiResult<void>;
         auto CreateTimelineSemaphores() -> RhiResult<void>;
         void PopulateCapabilities();
+        void PopulateFormatSupport();
     };
 
 }  // namespace miki::rhi

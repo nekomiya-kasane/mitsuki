@@ -365,6 +365,7 @@ namespace miki::rhi {
 
         // -- Init helpers --
         void PopulateCapabilities();
+        void PopulateFormatSupport();
         void CreatePushConstantResources();
     };
 

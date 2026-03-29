@@ -423,6 +423,7 @@ namespace miki::rhi {
         auto CreateQueues() -> RhiResult<void>;
         auto CreateDescriptorHeaps() -> RhiResult<void>;
         void PopulateCapabilities();
+        void PopulateFormatSupport();
     };
 
 }  // namespace miki::rhi

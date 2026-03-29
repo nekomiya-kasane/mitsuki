@@ -186,6 +186,93 @@ namespace miki::rhi {
         [[nodiscard]] bool HasWorkGraphs() const noexcept { return enabledFeatures.Has(DeviceFeature::WorkGraphs); }
 
         // =====================================================================
+        // Format Support Table
+        // =====================================================================
+        static constexpr uint32_t kFormatCount = static_cast<uint32_t>(Format::Count_);
+
+        /** @brief Per-format feature support flags.
+         *  Indexed by static_cast<uint32_t>(Format). Populated by backend PopulateCapabilities().
+         *  Initialized to conservative defaults via BuildDefaultFormatSupport().
+         */
+        std::array<FormatFeatureFlags, kFormatCount> formatSupport = BuildDefaultFormatSupport();
+
+        /** @brief Build a conservative default format support table from format properties.
+         *  - Color formats get Sampled|Filter|ColorAttachment|BlendSrc.
+         *  - Integer formats get Sampled|ColorAttachment (no Filter/Blend).
+         *  - Depth/stencil formats get Sampled|Filter|DepthStencil.
+         *  - Compressed formats get Sampled|Filter.
+         *  - Storage requires explicit backend opt-in (only R32/RG32/RGBA32 float/uint/sint are universal).
+         */
+        [[nodiscard]] static constexpr auto BuildDefaultFormatSupport()
+            -> std::array<FormatFeatureFlags, kFormatCount> {
+            std::array<FormatFeatureFlags, kFormatCount> table{};
+            for (uint32_t i = 0; i < kFormatCount; ++i) {
+                auto fmt = static_cast<Format>(i);
+                if (fmt == Format::Undefined) {
+                    continue;
+                }
+                auto info = FormatInfo(fmt);
+                if (info.isDepth || info.isStencil) {
+                    table[i]
+                        = FormatFeatureFlags::Sampled | FormatFeatureFlags::Filter | FormatFeatureFlags::DepthStencil;
+                } else if (info.isCompressed) {
+                    table[i] = FormatFeatureFlags::Sampled | FormatFeatureFlags::Filter;
+                } else {
+                    // Uncompressed color: check if integer (no filter/blend)
+                    bool isInteger = false;
+                    switch (fmt) {
+                        case Format::R8_UINT:
+                        case Format::R8_SINT:
+                        case Format::RG8_UINT:
+                        case Format::RG8_SINT:
+                        case Format::RGBA8_UINT:
+                        case Format::RGBA8_SINT:
+                        case Format::R16_UINT:
+                        case Format::R16_SINT:
+                        case Format::RG16_UINT:
+                        case Format::RG16_SINT:
+                        case Format::RGBA16_UINT:
+                        case Format::RGBA16_SINT:
+                        case Format::R32_UINT:
+                        case Format::R32_SINT:
+                        case Format::RG32_UINT:
+                        case Format::RG32_SINT:
+                        case Format::RGB32_UINT:
+                        case Format::RGB32_SINT:
+                        case Format::RGBA32_UINT:
+                        case Format::RGBA32_SINT: isInteger = true; break;
+                        default: break;
+                    }
+                    if (isInteger) {
+                        table[i] = FormatFeatureFlags::Sampled | FormatFeatureFlags::ColorAttachment;
+                    } else {
+                        table[i] = FormatFeatureFlags::Sampled | FormatFeatureFlags::Filter
+                                   | FormatFeatureFlags::ColorAttachment | FormatFeatureFlags::BlendSrc;
+                    }
+                    // Universal storage formats (Vulkan/D3D12/GL/WebGPU all guarantee these)
+                    switch (fmt) {
+                        case Format::R32_FLOAT:
+                        case Format::R32_UINT:
+                        case Format::R32_SINT:
+                        case Format::RG32_FLOAT:
+                        case Format::RG32_UINT:
+                        case Format::RG32_SINT:
+                        case Format::RGBA32_FLOAT:
+                        case Format::RGBA32_UINT:
+                        case Format::RGBA32_SINT:
+                        case Format::RGBA16_FLOAT:
+                        case Format::RGBA8_UNORM:
+                        case Format::RGBA8_SNORM:
+                        case Format::RGBA8_UINT:
+                        case Format::RGBA8_SINT: table[i] = table[i] | FormatFeatureFlags::Storage; break;
+                        default: break;
+                    }
+                }
+            }
+            return table;
+        }
+
+        // =====================================================================
         // Tier & Format Queries
         // =====================================================================
 
@@ -209,19 +296,19 @@ namespace miki::rhi {
         }
 
         /** @brief Check if this device supports a given format with specified features.
-         *
-         *  Default implementation returns true for all non-Undefined formats.
-         *  Backends should populate formatSupportTable for accurate queries.
-         *
+         *  O(1) lookup into the flat formatSupport table.
          *  @param iFormat The format to query.
-         *  @param iFeatures Required format features (default: all).
-         *  @return True if the format is supported with the requested features.
+         *  @param iFeatures Required format features (bitwise AND check).
+         *  @return True if all requested features are supported for this format.
          */
-        [[nodiscard]] auto IsFormatSupported(
+        [[nodiscard]] constexpr auto IsFormatSupported(
             Format iFormat, FormatFeatureFlags iFeatures = FormatFeatureFlags::All
         ) const noexcept -> bool {
-            (void)iFeatures;  // TODO: implement per-format feature query
-            return iFormat != Format::Undefined;
+            auto idx = static_cast<uint32_t>(iFormat);
+            if (idx == 0 || idx >= kFormatCount) {
+                return false;
+            }
+            return (formatSupport[idx] & iFeatures) == iFeatures;
         }
     };
 

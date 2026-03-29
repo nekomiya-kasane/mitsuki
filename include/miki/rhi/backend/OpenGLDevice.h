@@ -417,6 +417,7 @@ namespace miki::rhi {
 
         // -- Init helpers --
         void PopulateCapabilities();
+        void PopulateFormatSupport();
     };
 
 }  // namespace miki::rhi
