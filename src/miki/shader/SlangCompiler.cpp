@@ -49,14 +49,15 @@ namespace miki::shader {
             case ShaderStage::Fragment: return SLANG_STAGE_FRAGMENT;
             case ShaderStage::Compute: return SLANG_STAGE_COMPUTE;
             case ShaderStage::Mesh: return SLANG_STAGE_MESH;
-            case ShaderStage::Amplification: return SLANG_STAGE_AMPLIFICATION;
+            case ShaderStage::Task: return SLANG_STAGE_AMPLIFICATION;
             case ShaderStage::RayGen: return SLANG_STAGE_RAY_GENERATION;
             case ShaderStage::ClosestHit: return SLANG_STAGE_CLOSEST_HIT;
             case ShaderStage::Miss: return SLANG_STAGE_MISS;
             case ShaderStage::AnyHit: return SLANG_STAGE_ANY_HIT;
             case ShaderStage::Intersection: return SLANG_STAGE_INTERSECTION;
+            case ShaderStage::Callable: return SLANG_STAGE_CALLABLE;
+            default: return SLANG_STAGE_NONE;  // Composite bitmask values (AllGraphics, All)
         }
-        return SLANG_STAGE_NONE;
     }
 
     static auto ReadFileToString(std::filesystem::path const& iPath) -> std::string {

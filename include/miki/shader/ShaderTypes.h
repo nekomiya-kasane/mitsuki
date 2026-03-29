@@ -5,7 +5,9 @@
  */
 #pragma once
 
+#include "miki/rhi/Descriptors.h"
 #include "miki/rhi/Format.h"
+#include "miki/rhi/RhiEnums.h"
 #include "miki/rhi/RhiTypes.h"
 
 #include <cstdint>
@@ -40,29 +42,11 @@ namespace miki::shader {
         }
     }
 
-    /** @brief Shader pipeline stage. */
-    enum class ShaderStage : uint8_t {
-        Vertex,
-        Fragment,
-        Compute,
-        Mesh,
-        Amplification,
-        RayGen,
-        ClosestHit,
-        Miss,
-        AnyHit,
-        Intersection,
-    };
+    // Unified: use the RHI bitmask ShaderStage (single bits work as single-value enum)
+    using rhi::ShaderStage;
 
-    /** @brief Descriptor binding type. */
-    enum class BindingType : uint8_t {
-        UniformBuffer,
-        StorageBuffer,
-        SampledTexture,
-        StorageTexture,
-        Sampler,
-        CombinedImageSampler,
-    };
+    // Unified: use the RHI BindingType
+    using rhi::BindingType;
 
     /** @brief Single descriptor binding info from reflection. */
     struct BindingInfo {
