@@ -17,6 +17,12 @@ add_library(miki_d3d12 STATIC
     ${PROJECT_SOURCE_DIR}/src/miki/rhi/d3d12/D3D12AccelStruct.cpp
 )
 
+if(MSVC)
+    target_compile_options(miki_d3d12 PRIVATE /wd4201)  # ignore anonymous struct warning
+else()
+    target_compile_options(miki_d3d12 PRIVATE -Wno-language-extension-token)
+endif()
+
 target_link_libraries(miki_d3d12
     PUBLIC  miki_rhi
     PUBLIC  miki::third_party::directx_headers

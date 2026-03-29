@@ -122,8 +122,8 @@ namespace miki::rhi {
 
     /** @brief Thread-safe handle pool with O(1) alloc/free/lookup.
      *
-     *  Alloc/Free are mutex-protected (not hot path — O(100)/frame).
-     *  Lookup is lock-free (generation check on stable slot, read-only).
+     *  Alloc/Free are mutex-protected (not hot path — O(100)/frame). Lookup is lock-free (generation check on stable
+     * slot, read-only).
      *
      *  @tparam T        The payload type stored per slot.
      *  @tparam Tag      The handle tag type (for type-safe handles).
@@ -168,8 +168,8 @@ namespace miki::rhi {
             return {handle, obj};
         }
 
-        /** @brief Immediate free: destroy payload, increment generation, return slot to free list.
-         *  Use when deferred destruction is NOT needed (e.g., shutdown path).
+        /** @brief Immediate free: destroy payload, increment generation, return slot to free list. Use when deferred
+         * destruction is NOT needed (e.g., shutdown path).
          */
         void Free(HandleType handle) {
             if (!handle.IsValid()) {
@@ -196,9 +196,9 @@ namespace miki::rhi {
         }
 
         /** @brief Phase 1 of deferred destruction: mark slot as dead.
-         *  Generation is incremented so Lookup() fails immediately (prevents use-after-free).
-         *  Slot payload remains alive for the backend to access during deferred drain.
-         *  Returns raw index for Reclaim() — caller stores this in the destruction queue.
+         *  Generation is incremented so Lookup() fails immediately (prevents use-after-free). Slot payload remains
+         * alive for the backend to access during deferred drain. Returns raw index for Reclaim() — caller stores this
+         * in the destruction queue.
          *  @return Slot index, or kInvalidIndex if handle was already invalid/stale.
          */
         auto MarkDead(HandleType handle) -> uint32_t {
@@ -222,8 +222,8 @@ namespace miki::rhi {
             return idx;
         }
 
-        /** @brief Phase 2 of deferred destruction: destroy payload and return slot to free list.
-         *  Called by DeferredDestructor::Drain() after GPU has finished referencing the resource.
+        /** @brief Phase 2 of deferred destruction: destroy payload and return slot to free list. Called by
+         * DeferredDestructor::Drain() after GPU has finished referencing the resource.
          *  @param slotIndex  Raw index returned by MarkDead().
          */
         void Reclaim(uint32_t slotIndex) {
@@ -243,8 +243,8 @@ namespace miki::rhi {
             ++freeCount_;
         }
 
-        /** @brief Access payload of a dead-but-not-yet-reclaimed slot.
-         *  Used by DeferredDestructor to retrieve native handles for actual API destruction.
+        /** @brief Access payload of a dead-but-not-yet-reclaimed slot. Used by DeferredDestructor to retrieve native
+         * handles for actual API destruction.
          *  @param slotIndex  Raw index returned by MarkDead().
          *  @return Pointer to payload, or nullptr if slot is not in dead state.
          */
@@ -271,11 +271,10 @@ namespace miki::rhi {
         }
 
         // NOTE: Lookup is lock-free (read-only generation check on stable slots).
-        // On weakly-ordered architectures (ARM), the writer's mutex release does NOT
-        // guarantee visibility to a concurrent lock-free reader. This is acceptable
-        // for now because Lookup is only called after a synchronization point
-        // (e.g., fence wait, frame boundary). If concurrent Alloc+Lookup becomes
-        // a requirement, alive/generation must become std::atomic with acquire/release.
+        // On weakly-ordered architectures (ARM), the writer's mutex release does NOT guarantee visibility to a
+        // concurrent lock-free reader. This is acceptable for now because Lookup is only called after a synchronization
+        // point (e.g., fence wait, frame boundary). If concurrent Alloc+Lookup becomes a requirement, alive/generation
+        // must become std::atomic with acquire/release.
 
         /** @brief Lock-free const lookup. Returns nullptr if handle is stale or invalid. */
         [[nodiscard]] auto Lookup(HandleType handle) const -> const T* {
