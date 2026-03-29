@@ -15,7 +15,9 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "miki/rhi/Handle.h"
@@ -56,8 +58,9 @@ namespace miki::frame {
 
         /// @brief Record a dependency: waitQueue must wait for signalQueue's timeline
         /// to reach signalValue before executing work at waitStage.
-        void AddDependency(rhi::QueueType waitQueue, rhi::QueueType signalQueue, uint64_t signalValue,
-                           rhi::PipelineStage waitStage);
+        void AddDependency(
+            rhi::QueueType waitQueue, rhi::QueueType signalQueue, uint64_t signalValue, rhi::PipelineStage waitStage
+        );
 
         /// @brief Get all pending waits for a queue's next submit.
         /// Returns the accumulated wait entries since the last CommitSubmit for this queue.
@@ -79,6 +82,21 @@ namespace miki::frame {
 
         /// @brief Reset all state (for shutdown / device recreation).
         void Reset();
+
+        // ── Wait-Graph Diagnostic (specs/03-sync.md §12.4) ──────────
+
+        /// @brief Dump current wait-graph state to a FILE stream (human-readable).
+        void DumpWaitGraph(FILE* iOut) const;
+
+        /// @brief Export wait-graph as DOT/GraphViz format string.
+        void ExportWaitGraphDOT(std::string& oOut) const;
+
+        /// @brief Export wait-graph as JSON (machine-readable, CI integration).
+        void ExportWaitGraphJSON(std::string& oOut) const;
+
+        /// @brief Detect deadlock cycles in the current wait-graph.
+        /// Returns true if a cycle is detected (DFS on queue adjacency, O(V+E) where V=3).
+        [[nodiscard]] auto DetectDeadlock() const -> bool;
 
        private:
         static constexpr uint32_t kQueueCount = 3;
