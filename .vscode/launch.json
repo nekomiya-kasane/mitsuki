@@ -2,169 +2,214 @@
     "version": "0.2.0",
     "configurations": [
         // ============================================================
-        // Vulkan Backend (debug-vulkan)
+        // Full Backend (debug-full) — All backends enabled
         // ============================================================
+        // -- Platform Tests --
         {
-            "name": "[Vulkan] test_structured_logger",
+            "name": "[Full] test_window_manager",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-vulkan/test_structured_logger.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_window_manager.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[Vulkan] test_event_simulator",
+            "name": "[Full] test_window_manager_glfw",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-vulkan/test_event_simulator.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_window_manager_glfw.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[Vulkan] test_window_manager",
+            "name": "[Full] test_window_manager_spec",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-vulkan/test_window_manager.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_window_manager_spec.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[Vulkan] logger_demo",
+            "name": "[Full] test_event_simulator",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-vulkan/logger_demo.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_event_simulator.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[Vulkan] tapioca_demo",
+            "name": "[Full] test_structured_logger",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-vulkan/bin/tapioca_demo.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_structured_logger.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
-        },
-        // ============================================================
-        // D3D12 Backend (debug-d3d12)
-        // ============================================================
-        {
-            "name": "[D3D12] test_structured_logger",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/debug-d3d12/test_structured_logger.exe",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[D3D12] test_event_simulator",
+            "name": "[Full] test_surface_integration",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-d3d12/test_event_simulator.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_surface_integration.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
+        },
+        // -- RHI Tests --
+        {
+            "name": "[Full] test_rhi_handle",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_handle.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[D3D12] test_window_manager",
+            "name": "[Full] test_rhi_device",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-d3d12/test_window_manager.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_device.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
-        },
-        // ============================================================
-        // WebGPU Backend (debug-webgpu) - Native Dawn
-        // ============================================================
-        {
-            "name": "[WebGPU] test_structured_logger",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/debug-webgpu/test_structured_logger.exe",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[WebGPU] test_event_simulator",
+            "name": "[Full] test_rhi_resource",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-webgpu/test_event_simulator.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_resource.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[WebGPU] test_window_manager",
+            "name": "[Full] test_rhi_descriptor",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-webgpu/test_window_manager.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_descriptor.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[WebGPU] test_window_manager_spec",
+            "name": "[Full] test_rhi_command_buffer",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-webgpu/test_window_manager_spec.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_command_buffer.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[WebGPU] test_surface_integration",
+            "name": "[Full] test_rhi_pipeline",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-webgpu/test_surface_integration.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_pipeline.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[WebGPU] rhi_triangle_demo",
+            "name": "[Full] test_rhi_sync",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-webgpu/rhi_triangle_demo.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_sync.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
-        },
-        // ============================================================
-        // Default Backend (debug) - No GPU backend enabled
-        // ============================================================
-        {
-            "name": "[Default] test_structured_logger",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/debug/test_structured_logger.exe",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[Default] test_event_simulator",
+            "name": "[Full] test_rhi_accel_struct",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug/test_event_simulator.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_accel_struct.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         },
         {
-            "name": "[Default] test_window_manager",
+            "name": "[Full] test_rhi_swapchain",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug/test_window_manager.exe",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_swapchain.exe",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] test_rhi_query",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_query.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] test_rhi_integration",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/test_rhi_integration.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        // -- Demos --
+        {
+            "name": "[Full] window_manager_demo",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/window_manager_demo.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] logger_demo",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/logger_demo.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] rhi_triangle_demo",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rhi_triangle_demo.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] rhi_triangle_demo --backend vulkan",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rhi_triangle_demo.exe",
+            "args": [
+                "--backend",
+                "vulkan"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] rhi_triangle_demo --backend d3d12",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rhi_triangle_demo.exe",
+            "args": [
+                "--backend",
+                "d3d12"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] rhi_triangle_demo --backend opengl",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rhi_triangle_demo.exe",
+            "args": [
+                "--backend",
+                "opengl"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] rhi_triangle_demo --backend webgpu",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rhi_triangle_demo.exe",
+            "args": [
+                "--backend",
+                "webgpu"
+            ],
+            "cwd": "${workspaceFolder}"
         },
         // ============================================================
         // WASM (Emscripten + WebGPU) - Browser debugging
@@ -194,71 +239,42 @@
             "preLaunchTask": "serve-wasm"
         },
         // ============================================================
-        // Input-based configurations (select exe at runtime)
+        // Input-based configuration (select exe at runtime)
         // ============================================================
         {
-            "name": "[Vulkan] Select Executable...",
+            "name": "[Full] Select Executable...",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug-vulkan/${input:vulkanExe}",
+            "program": "${workspaceFolder}/build/debug-full/${input:fullExe}",
             "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
-        },
-        {
-            "name": "[D3D12] Select Executable...",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/debug-d3d12/${input:d3d12Exe}",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
-        },
-        {
-            "name": "[WebGPU] Select Executable...",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/debug-webgpu/${input:webgpuExe}",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {}
+            "cwd": "${workspaceFolder}"
         }
     ],
     "inputs": [
         {
-            "id": "vulkanExe",
+            "id": "fullExe",
             "type": "pickString",
-            "description": "Select Vulkan executable",
+            "description": "Select executable from debug-full build",
             "options": [
-                "test_structured_logger.exe",
-                "test_event_simulator.exe",
                 "test_window_manager.exe",
-                "logger_demo.exe",
-                "bin/tapioca_demo.exe"
-            ],
-            "default": "test_window_manager.exe"
-        },
-        {
-            "id": "d3d12Exe",
-            "type": "pickString",
-            "description": "Select D3D12 executable",
-            "options": [
-                "test_structured_logger.exe",
-                "test_event_simulator.exe",
-                "test_window_manager.exe"
-            ],
-            "default": "test_window_manager.exe"
-        },
-        {
-            "id": "webgpuExe",
-            "type": "pickString",
-            "description": "Select WebGPU executable",
-            "options": [
-                "test_structured_logger.exe",
-                "test_event_simulator.exe",
-                "test_window_manager.exe",
+                "test_window_manager_glfw.exe",
                 "test_window_manager_spec.exe",
+                "test_event_simulator.exe",
+                "test_structured_logger.exe",
                 "test_surface_integration.exe",
+                "test_rhi_handle.exe",
+                "test_rhi_device.exe",
+                "test_rhi_resource.exe",
+                "test_rhi_descriptor.exe",
+                "test_rhi_command_buffer.exe",
+                "test_rhi_pipeline.exe",
+                "test_rhi_sync.exe",
+                "test_rhi_accel_struct.exe",
+                "test_rhi_swapchain.exe",
+                "test_rhi_query.exe",
+                "test_rhi_integration.exe",
+                "window_manager_demo.exe",
+                "logger_demo.exe",
                 "rhi_triangle_demo.exe"
             ],
             "default": "rhi_triangle_demo.exe"
