@@ -430,8 +430,7 @@ namespace miki::rhi {
                     caps.supportedFormats.push_back(*fmt);
                 }
                 if (auto cs = FromVkColorSpace(sf.colorSpace)) {
-                    if (std::find(caps.supportedColorSpaces.begin(), caps.supportedColorSpaces.end(), *cs)
-                        == caps.supportedColorSpaces.end()) {
+                    if (std::ranges::find(caps.supportedColorSpaces, *cs) == caps.supportedColorSpaces.end()) {
                         caps.supportedColorSpaces.push_back(*cs);
                     }
                 }

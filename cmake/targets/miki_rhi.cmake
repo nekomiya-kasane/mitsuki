@@ -21,6 +21,7 @@ set(MIKI_RHI_SOURCES
     src/miki/rhi/mock/MockRenderSurface.cpp
     src/miki/frame/FrameManager.cpp
     src/miki/frame/DeferredDestructor.cpp
+    src/miki/frame/SyncScheduler.cpp
 )
 
 add_library(miki_rhi OBJECT ${MIKI_RHI_SOURCES})
