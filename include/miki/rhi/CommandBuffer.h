@@ -233,6 +233,7 @@ namespace miki::rhi {
     class D3D12CommandBuffer;
     class WebGPUCommandBuffer;
     class OpenGLCommandBuffer;
+    class MockCommandBuffer;
 
     /** @brief Type-erased command buffer handle.
      *
@@ -268,10 +269,36 @@ namespace miki::rhi {
 #if MIKI_BUILD_OPENGL
                 case BackendType::OpenGL43: return fn(*static_cast<OpenGLCommandBuffer*>(ptr_));
 #endif
+                case BackendType::Mock: return fn(*static_cast<MockCommandBuffer*>(ptr_));
                 default: break;
             }
             std::unreachable();
         }
+
+        template <typename F>
+        [[nodiscard]] auto Dispatch(F&& fn) const -> decltype(auto) {
+            assert(ptr_ != nullptr && "CommandListHandle::Dispatch on null handle");
+            switch (tag_) {
+#if MIKI_BUILD_VULKAN
+                case BackendType::Vulkan14: [[fallthrough]];
+                case BackendType::VulkanCompat: return fn(*static_cast<const VulkanCommandBuffer*>(ptr_));
+#endif
+#if MIKI_BUILD_D3D12
+                case BackendType::D3D12: return fn(*static_cast<const D3D12CommandBuffer*>(ptr_));
+#endif
+#if MIKI_BUILD_WEBGPU
+                case BackendType::WebGPU: return fn(*static_cast<const WebGPUCommandBuffer*>(ptr_));
+#endif
+#if MIKI_BUILD_OPENGL
+                case BackendType::OpenGL43: return fn(*static_cast<const OpenGLCommandBuffer*>(ptr_));
+#endif
+                case BackendType::Mock: return fn(*static_cast<const MockCommandBuffer*>(ptr_));
+                default: break;
+            }
+            std::unreachable();
+        }
+
+        [[nodiscard]] auto GetRawPtr() const noexcept -> void* { return ptr_; }
 
        private:
         void* ptr_ = nullptr;

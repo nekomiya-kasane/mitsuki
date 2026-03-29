@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "miki/rhi/Format.h"
 #include "miki/rhi/Handle.h"
@@ -86,6 +87,20 @@ namespace miki::rhi {
         ImageCountHint imageCount = ImageCountHint::Auto;
         // NOTE: Backend may override preferredFormat based on colorSpace.
         // e.g. scRGBLinear -> R16G16B16A16_SFLOAT on T1 (Vulkan/D3D12).
+    };
+
+    // =========================================================================
+    // RenderSurfaceCapabilities — hardware-queried surface capabilities
+    // =========================================================================
+
+    struct RenderSurfaceCapabilities {
+        std::vector<Format> supportedFormats;
+        std::vector<PresentMode> supportedPresentModes;
+        std::vector<SurfaceColorSpace> supportedColorSpaces;
+        Extent2D minExtent;
+        Extent2D maxExtent;
+        uint32_t minImageCount = 2;
+        uint32_t maxImageCount = 8;
     };
 
 }  // namespace miki::rhi

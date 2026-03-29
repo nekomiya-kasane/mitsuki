@@ -44,6 +44,13 @@ namespace miki::rhi {
         bool enableValidation = false;
         bool enableGpuCapture = false;
         std::span<const char*> requiredExtensions;
+
+        // OpenGL-specific: required for GL context creation via GLFW
+        void* windowBackend = nullptr;  ///< platform::IWindowBackend* (opaque to avoid header dep)
+        void* nativeToken = nullptr;    ///< Native window token from backend
+
+        // Vulkan-specific
+        const char* appName = "miki";
     };
 
     // =========================================================================
@@ -166,6 +173,20 @@ namespace miki::rhi {
         }
         void DestroyCommandBuffer(CommandBufferHandle h) { Self().DestroyCommandBufferImpl(h); }
 
+        // --- Command list acquisition (unified factory) ---
+        struct CommandListAcquisition {
+            CommandBufferHandle bufferHandle;  ///< Opaque handle for Submit/Destroy
+            CommandListHandle listHandle;      ///< Type-erased recordable command list
+        };
+        /** @brief Create a command buffer AND its recordable command list in one call.
+         *  Eliminates the need for callers to manually Init backend-specific CommandBuffer objects.
+         */
+        [[nodiscard]] auto AcquireCommandList(QueueType queue) -> RhiResult<CommandListAcquisition> {
+            return Self().AcquireCommandListImpl(queue);
+        }
+        /** @brief Release a previously acquired command list. Destroys both the list object and the buffer. */
+        void ReleaseCommandList(const CommandListAcquisition& acq) { Self().ReleaseCommandListImpl(acq); }
+
         // --- Synchronization ---
         [[nodiscard]] auto CreateFence(bool signaled = false) -> RhiResult<FenceHandle> {
             return Self().CreateFenceImpl(signaled);
@@ -247,6 +268,11 @@ namespace miki::rhi {
         }
         [[nodiscard]] auto GetBackendType() const -> BackendType { return Self().GetBackendTypeImpl(); }
 
+        // --- Surface capabilities (for RenderSurface) ---
+        [[nodiscard]] auto GetSurfaceCapabilities(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
+            return Self().GetSurfaceCapabilitiesImpl(window);
+        }
+
        private:
         [[nodiscard]] auto Self() noexcept -> Impl& { return static_cast<Impl&>(*this); }
         [[nodiscard]] auto Self() const noexcept -> const Impl& { return static_cast<const Impl&>(*this); }
@@ -260,6 +286,7 @@ namespace miki::rhi {
     class D3D12Device;
     class WebGPUDevice;
     class OpenGLDevice;
+    class MockDevice;
 
     // =========================================================================
     // DeviceHandle — type-erased device facade
@@ -297,6 +324,7 @@ namespace miki::rhi {
 #if MIKI_BUILD_OPENGL
                 case BackendType::OpenGL43: return fn(*static_cast<OpenGLDevice*>(ptr_));
 #endif
+                case BackendType::Mock: return fn(*static_cast<MockDevice*>(ptr_));
                 default: break;
             }
             std::unreachable();
@@ -319,6 +347,7 @@ namespace miki::rhi {
 #if MIKI_BUILD_OPENGL
                 case BackendType::OpenGL43: return fn(*static_cast<const OpenGLDevice*>(ptr_));
 #endif
+                case BackendType::Mock: return fn(*static_cast<const MockDevice*>(ptr_));
                 default: break;
             }
             std::unreachable();
