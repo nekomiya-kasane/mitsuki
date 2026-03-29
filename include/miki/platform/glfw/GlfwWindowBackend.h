@@ -79,6 +79,10 @@ namespace miki::platform {
             return pendingEvents_;
         }
 
+        // -- OpenGL-specific operations --
+        [[nodiscard]] auto GetGLProcLoader() const noexcept -> GLProcLoader override;
+        auto SwapBuffers(void* iNativeToken) -> void override;
+
        private:
         static auto InitGlfw() -> bool;
 

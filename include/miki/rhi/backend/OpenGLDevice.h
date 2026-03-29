@@ -26,6 +26,10 @@
 #include <string>
 #include <vector>
 
+namespace miki::platform {
+    class IWindowBackend;
+}
+
 namespace miki::rhi {
 
     // =========================================================================
@@ -194,10 +198,11 @@ namespace miki::rhi {
     };
 
     struct GLSwapchainData {
-        // OpenGL swapchain is the default framebuffer managed by GLFW
+        // OpenGL swapchain is the default framebuffer managed by window backend
         uint32_t width = 0, height = 0;
         TextureHandle colorTexture;  // Wrapper handle for default FB color
-        void* glfwWindow = nullptr;  // GLFWwindow*
+        platform::IWindowBackend* windowBackend = nullptr;
+        void* nativeToken = nullptr;
         uint32_t currentImage = 0;
     };
 
@@ -212,8 +217,8 @@ namespace miki::rhi {
 
     struct OpenGLDeviceDesc {
         bool enableValidation = true;
-        void* glfwWindow = nullptr;         // GLFWwindow* — required for swapchain
-        GLADloadfunc procLoader = nullptr;  // GL proc loader (e.g. glfwGetProcAddress)
+        platform::IWindowBackend* windowBackend = nullptr;  // Required for swapchain and GL proc loading
+        void* nativeToken = nullptr;                        // Native window token from backend
     };
 
     // =========================================================================
@@ -377,8 +382,8 @@ namespace miki::rhi {
         // -- GL context (glad2 MX) --
         GladGLContext* gl_ = nullptr;
         bool ownsContext_ = false;
-        void* glfwWindow_ = nullptr;  // GLFWwindow* stored from Init for swapchain use
-        GLADloadfunc procLoader_ = nullptr;
+        platform::IWindowBackend* windowBackend_ = nullptr;
+        void* nativeToken_ = nullptr;
 
         // -- Capabilities --
         GpuCapabilityProfile capabilities_;

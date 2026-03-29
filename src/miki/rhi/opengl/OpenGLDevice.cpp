@@ -6,6 +6,7 @@
 #include "miki/rhi/backend/OpenGLDevice.h"
 
 #include "miki/debug/StructuredLogger.h"
+#include "miki/platform/WindowManager.h"
 
 #include <cstring>
 
@@ -39,8 +40,8 @@ namespace miki::rhi {
         gl_ = new GladGLContext{};
         ownsContext_ = true;
 
-        glfwWindow_ = desc.glfwWindow;
-        procLoader_ = desc.procLoader;
+        windowBackend_ = desc.windowBackend;
+        nativeToken_ = desc.nativeToken;
 
         // glad2 MX: load GL function pointers via gladLoaderLoadGLContext (uses platform loader)
         // The GL context must already be current on this thread before calling.
@@ -213,7 +214,8 @@ namespace miki::rhi {
         }
 
         // Probe non-glad2 extensions
-        ext_.Init(gl_, procLoader_);
+        auto loader = windowBackend_ ? reinterpret_cast<GLADloadfunc>(windowBackend_->GetGLProcLoader()) : nullptr;
+        ext_.Init(gl_, loader);
 
         // Always-on features
         capabilities_.enabledFeatures.Add(DeviceFeature::Present);
@@ -420,15 +422,15 @@ namespace miki::rhi {
     // =========================================================================
     // T4 unsupported features — sparse binding
     // =========================================================================
-
     auto OpenGLDevice::GetSparsePageSizeImpl() const -> SparsePageSize {
-        return {};  // Not available on T4
+        assert(false && "Sparse binding not available on OpenGL");
+        return {};
     }
 
     void OpenGLDevice::SubmitSparseBindsImpl(
         QueueType, const SparseBindDesc&, std::span<const SemaphoreSubmitInfo>, std::span<const SemaphoreSubmitInfo>
     ) {
-        // Not available on T4
+        assert(false && "Sparse binding not available on OpenGL");
     }
 
     // =========================================================================
@@ -436,20 +438,26 @@ namespace miki::rhi {
     // =========================================================================
 
     auto OpenGLDevice::GetBLASBuildSizesImpl(const BLASDesc&) -> AccelStructBuildSizes {
+        assert(false && "Acceleration structures not available on OpenGL");
         return {};
     }
     auto OpenGLDevice::GetTLASBuildSizesImpl(const TLASDesc&) -> AccelStructBuildSizes {
+        assert(false && "Acceleration structures not available on OpenGL");
         return {};
     }
 
     auto OpenGLDevice::CreateBLASImpl(const BLASDesc&) -> RhiResult<AccelStructHandle> {
+        assert(false && "Acceleration structures not available on OpenGL");
         return std::unexpected(RhiError::FeatureNotSupported);
     }
 
     auto OpenGLDevice::CreateTLASImpl(const TLASDesc&) -> RhiResult<AccelStructHandle> {
+        assert(false && "Acceleration structures not available on OpenGL");
         return std::unexpected(RhiError::FeatureNotSupported);
     }
 
-    void OpenGLDevice::DestroyAccelStructImpl(AccelStructHandle) {}
+    void OpenGLDevice::DestroyAccelStructImpl(AccelStructHandle) {
+        assert(false && "Acceleration structures not available on OpenGL");
+    }
 
 }  // namespace miki::rhi

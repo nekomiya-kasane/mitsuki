@@ -9,11 +9,7 @@
 
 #include "miki/rhi/backend/OpenGLDevice.h"
 
-struct GLFWwindow;
-extern "C" {
-void glfwSwapBuffers(GLFWwindow* window);
-void glfwGetFramebufferSize(GLFWwindow* window, int* width, int* height);
-}
+#include "miki/platform/WindowManager.h"
 
 namespace miki::rhi {
 
@@ -41,7 +37,8 @@ namespace miki::rhi {
         data->width = desc.width;
         data->height = desc.height;
         data->colorTexture = texHandle;
-        data->glfwWindow = glfwWindow_;
+        data->windowBackend = windowBackend_;
+        data->nativeToken = nativeToken_;
         data->currentImage = 0;
 
         return handle;
@@ -120,9 +117,9 @@ namespace miki::rhi {
         // Bind default framebuffer before swap
         gl_->BindFramebuffer(GL_FRAMEBUFFER, 0);
 
-        // glfwSwapBuffers handles the actual buffer swap
-        if (data->glfwWindow) {
-            glfwSwapBuffers(static_cast<GLFWwindow*>(data->glfwWindow));
+        // Swap buffers via window backend
+        if (data->windowBackend) {
+            data->windowBackend->SwapBuffers(data->nativeToken);
         }
     }
 

@@ -208,6 +208,20 @@ namespace miki::platform {
             (void)iGamepadId;
             return {};
         }
+
+        // -- OpenGL-specific operations (default no-op for non-GL backends) ----
+        // TODO (Nekomiya) this is bad architecture
+
+        /** @brief Get GL function loader for extension probing.
+         *  @return Function pointer loader (e.g. glfwGetProcAddress), or nullptr if not GL backend.
+         */
+        using GLProcLoader = void* (*)(const char*);
+        [[nodiscard]] virtual auto GetGLProcLoader() const noexcept -> GLProcLoader { return nullptr; }
+
+        /** @brief Swap front/back buffers for OpenGL rendering.
+         *  @param iNativeToken Native window token.
+         */
+        virtual auto SwapBuffers(void* iNativeToken) -> void { (void)iNativeToken; }
     };
 
     // ===========================================================================

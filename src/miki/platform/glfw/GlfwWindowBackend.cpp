@@ -437,6 +437,21 @@ namespace miki::platform {
     }
 
     // ===========================================================================
+    // OpenGL-specific operations
+    // ===========================================================================
+
+    auto GlfwWindowBackend::GetGLProcLoader() const noexcept -> GLProcLoader {
+        return reinterpret_cast<GLProcLoader>(glfwGetProcAddress);
+    }
+
+    auto GlfwWindowBackend::SwapBuffers(void* iNativeToken) -> void {
+        auto* window = static_cast<GLFWwindow*>(iNativeToken);
+        if (window) {
+            glfwSwapBuffers(window);
+        }
+    }
+
+    // ===========================================================================
     // Key mapping (absorbed from GlfwBridge)
     // ===========================================================================
 
