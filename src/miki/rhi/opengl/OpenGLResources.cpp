@@ -92,10 +92,11 @@ namespace miki::rhi {
             return GL_TEXTURE_2D;
         }
 
-        auto IsDepthFormat(GLenum fmt) -> bool {
+        [[maybe_unused]] auto IsDepthFormat(GLenum fmt) -> bool {
             return fmt == GL_DEPTH_COMPONENT16 || fmt == GL_DEPTH_COMPONENT32F || fmt == GL_DEPTH24_STENCIL8
                    || fmt == GL_DEPTH32F_STENCIL8;
         }
+
     }  // namespace
 
     // =========================================================================

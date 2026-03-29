@@ -261,7 +261,7 @@ namespace miki::rhi {
             return VK_COMPARE_OP_NEVER;
         }
 
-        auto ToVkShaderStage(ShaderStage stage) -> VkShaderStageFlagBits {
+        [[maybe_unused]] auto ToVkShaderStage(ShaderStage stage) -> VkShaderStageFlagBits {
             switch (stage) {
                 case ShaderStage::Vertex: return VK_SHADER_STAGE_VERTEX_BIT;
                 case ShaderStage::Fragment: return VK_SHADER_STAGE_FRAGMENT_BIT;
