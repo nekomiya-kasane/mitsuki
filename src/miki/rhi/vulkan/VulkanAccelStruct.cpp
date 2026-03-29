@@ -9,7 +9,22 @@
 
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+
+#if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wnullability-extension"
+#elif defined(_MSC_VER)
+#    pragma warning(push)
+#    pragma warning(disable : 5105)
+#endif
+
 #include <vk_mem_alloc.h>
+
+#if defined(__clang__)
+#    pragma clang diagnostic pop
+#elif defined(_MSC_VER)
+#    pragma warning(pop)
+#endif
 
 namespace miki::rhi {
 
@@ -30,8 +45,8 @@ namespace miki::rhi {
             vkGeom.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
             vkGeom.geometry.triangles.vertexStride = geom.vertexStride;
             vkGeom.geometry.triangles.maxVertex = geom.vertexCount;
-            vkGeom.geometry.triangles.indexType = (geom.indexType == IndexType::Uint16)
-                ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+            vkGeom.geometry.triangles.indexType
+                = (geom.indexType == IndexType::Uint16) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
             geometries.push_back(vkGeom);
             maxPrimitiveCounts.push_back(geom.triangleCount);
         }
@@ -55,8 +70,7 @@ namespace miki::rhi {
         VkAccelerationStructureBuildSizesInfoKHR sizesInfo{};
         sizesInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
         vkGetAccelerationStructureBuildSizesKHR(
-            device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-            &buildInfo, maxPrimitiveCounts.data(), &sizesInfo
+            device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, maxPrimitiveCounts.data(), &sizesInfo
         );
 
         return {
@@ -94,8 +108,7 @@ namespace miki::rhi {
         VkAccelerationStructureBuildSizesInfoKHR sizesInfo{};
         sizesInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
         vkGetAccelerationStructureBuildSizesKHR(
-            device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-            &buildInfo, &primitiveCount, &sizesInfo
+            device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &primitiveCount, &sizesInfo
         );
 
         return {
@@ -119,7 +132,8 @@ namespace miki::rhi {
         VkBufferCreateInfo bufInfo{};
         bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufInfo.size = sizes.accelerationStructureSize;
-        bufInfo.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        bufInfo.usage
+            = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
         VmaAllocationCreateInfo allocInfo{};
         allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -169,7 +183,8 @@ namespace miki::rhi {
         VkBufferCreateInfo bufInfo{};
         bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufInfo.size = sizes.accelerationStructureSize;
-        bufInfo.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        bufInfo.usage
+            = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
         VmaAllocationCreateInfo allocInfo{};
         allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -208,7 +223,9 @@ namespace miki::rhi {
 
     void VulkanDevice::DestroyAccelStructImpl(AccelStructHandle h) {
         auto* data = accelStructs_.Lookup(h);
-        if (!data) return;
+        if (!data) {
+            return;
+        }
         if (vkDestroyAccelerationStructureKHR) {
             vkDestroyAccelerationStructureKHR(device_, data->accelStruct, nullptr);
         }

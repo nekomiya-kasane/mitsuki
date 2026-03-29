@@ -10,7 +10,22 @@
 
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+
+#if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wnullability-extension"
+#elif defined(_MSC_VER)
+#    pragma warning(push)
+#    pragma warning(disable : 5105)
+#endif
+
 #include <vk_mem_alloc.h>
+
+#if defined(__clang__)
+#    pragma clang diagnostic pop
+#elif defined(_MSC_VER)
+#    pragma warning(pop)
+#endif
 
 #include <cassert>
 

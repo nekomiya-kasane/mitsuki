@@ -1,10 +1,9 @@
 /** @file OpenGLResources.cpp
- *  @brief OpenGL 4.3+ (Tier 4) backend — Buffer, Texture, TextureView, Sampler,
- *         ShaderModule, Memory aliasing (fallback: separate allocation).
+ *  @brief OpenGL 4.3+ (Tier 4) backend — Buffer, Texture, TextureView, Sampler, ShaderModule, Memory aliasing
+ * (fallback: separate allocation).
  *
- *  Uses DSA (glCreateBuffers/glNamedBufferStorage) when GL 4.5+ or ARB_direct_state_access.
- *  Falls back to bind-to-edit for GL 4.3/4.4.
- *  All buffers use glBufferStorage (immutable) for maximum driver optimization.
+ *  Uses DSA (glCreateBuffers/glNamedBufferStorage) when GL 4.5+ or ARB_direct_state_access. Falls back to bind-to-edit
+ * for GL 4.3/4.4. All buffers use glBufferStorage (immutable) for maximum driver optimization.
  */
 
 #include "miki/rhi/backend/OpenGLDevice.h"
@@ -25,60 +24,60 @@ namespace miki::rhi {
             GLenum type;
             uint32_t bytesPerPixel;
         };
-
         auto ToGLFormat(Format fmt) -> GLFormatInfo {
+            // clang-format off
             switch (fmt) {
-                case Format::R8_UNORM: return {GL_R8, GL_RED, GL_UNSIGNED_BYTE, 1};
-                case Format::R8_SNORM: return {GL_R8_SNORM, GL_RED, GL_BYTE, 1};
-                case Format::R8_UINT: return {GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, 1};
-                case Format::R8_SINT: return {GL_R8I, GL_RED_INTEGER, GL_BYTE, 1};
-                case Format::RG8_UNORM: return {GL_RG8, GL_RG, GL_UNSIGNED_BYTE, 2};
-                case Format::RG8_SNORM: return {GL_RG8_SNORM, GL_RG, GL_BYTE, 2};
-                case Format::RG8_UINT: return {GL_RG8UI, GL_RG_INTEGER, GL_UNSIGNED_BYTE, 2};
-                case Format::RG8_SINT: return {GL_RG8I, GL_RG_INTEGER, GL_BYTE, 2};
-                case Format::RGBA8_UNORM: return {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 4};
-                case Format::RGBA8_SNORM: return {GL_RGBA8_SNORM, GL_RGBA, GL_BYTE, 4};
-                case Format::RGBA8_UINT: return {GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, 4};
-                case Format::RGBA8_SINT: return {GL_RGBA8I, GL_RGBA_INTEGER, GL_BYTE, 4};
-                case Format::RGBA8_SRGB: return {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE, 4};
-                case Format::BGRA8_UNORM: return {GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE, 4};
-                case Format::BGRA8_SRGB: return {GL_SRGB8_ALPHA8, GL_BGRA, GL_UNSIGNED_BYTE, 4};
-                case Format::R16_UNORM: return {GL_R16, GL_RED, GL_UNSIGNED_SHORT, 2};
-                case Format::R16_SNORM: return {GL_R16_SNORM, GL_RED, GL_SHORT, 2};
-                case Format::R16_UINT: return {GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT, 2};
-                case Format::R16_SINT: return {GL_R16I, GL_RED_INTEGER, GL_SHORT, 2};
-                case Format::R16_FLOAT: return {GL_R16F, GL_RED, GL_HALF_FLOAT, 2};
-                case Format::RG16_UNORM: return {GL_RG16, GL_RG, GL_UNSIGNED_SHORT, 4};
-                case Format::RG16_SNORM: return {GL_RG16_SNORM, GL_RG, GL_SHORT, 4};
-                case Format::RG16_UINT: return {GL_RG16UI, GL_RG_INTEGER, GL_UNSIGNED_SHORT, 4};
-                case Format::RG16_SINT: return {GL_RG16I, GL_RG_INTEGER, GL_SHORT, 4};
-                case Format::RG16_FLOAT: return {GL_RG16F, GL_RG, GL_HALF_FLOAT, 4};
-                case Format::RGBA16_UNORM: return {GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT, 8};
-                case Format::RGBA16_SNORM: return {GL_RGBA16_SNORM, GL_RGBA, GL_SHORT, 8};
-                case Format::RGBA16_UINT: return {GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, 8};
-                case Format::RGBA16_SINT: return {GL_RGBA16I, GL_RGBA_INTEGER, GL_SHORT, 8};
-                case Format::RGBA16_FLOAT: return {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT, 8};
-                case Format::R32_UINT: return {GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, 4};
-                case Format::R32_SINT: return {GL_R32I, GL_RED_INTEGER, GL_INT, 4};
-                case Format::R32_FLOAT: return {GL_R32F, GL_RED, GL_FLOAT, 4};
-                case Format::RG32_UINT: return {GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT, 8};
-                case Format::RG32_SINT: return {GL_RG32I, GL_RG_INTEGER, GL_INT, 8};
-                case Format::RG32_FLOAT: return {GL_RG32F, GL_RG, GL_FLOAT, 8};
-                case Format::RGB32_UINT: return {GL_RGB32UI, GL_RGB_INTEGER, GL_UNSIGNED_INT, 12};
-                case Format::RGB32_SINT: return {GL_RGB32I, GL_RGB_INTEGER, GL_INT, 12};
-                case Format::RGB32_FLOAT: return {GL_RGB32F, GL_RGB, GL_FLOAT, 12};
-                case Format::RGBA32_UINT: return {GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT, 16};
-                case Format::RGBA32_SINT: return {GL_RGBA32I, GL_RGBA_INTEGER, GL_INT, 16};
-                case Format::RGBA32_FLOAT: return {GL_RGBA32F, GL_RGBA, GL_FLOAT, 16};
-                case Format::RGB10A2_UNORM: return {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, 4};
-                case Format::RG11B10_FLOAT: return {GL_R11F_G11F_B10F, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV, 4};
-                case Format::D16_UNORM: return {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, 2};
-                case Format::D32_FLOAT: return {GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT, 4};
-                case Format::D24_UNORM_S8_UINT: return {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, 4};
-                case Format::D32_FLOAT_S8_UINT:
-                    return {GL_DEPTH32F_STENCIL8, GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV, 8};
-                default: return {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 4};
+                case Format::R8_UNORM:     return {.internalFormat = GL_R8, .format = GL_RED, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 1};
+                case Format::R8_SNORM:     return {.internalFormat = GL_R8_SNORM, .format = GL_RED, .type = GL_BYTE, .bytesPerPixel = 1};
+                case Format::R8_UINT:      return {.internalFormat = GL_R8UI, .format = GL_RED_INTEGER, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 1};
+                case Format::R8_SINT:      return {.internalFormat = GL_R8I, .format = GL_RED_INTEGER, .type = GL_BYTE, .bytesPerPixel = 1};
+                case Format::RG8_UNORM:    return {.internalFormat = GL_RG8, .format = GL_RG, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 2};
+                case Format::RG8_SNORM:    return {.internalFormat = GL_RG8_SNORM, .format = GL_RG, .type = GL_BYTE, .bytesPerPixel = 2};
+                case Format::RG8_UINT:     return {.internalFormat = GL_RG8UI, .format = GL_RG_INTEGER, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 2};
+                case Format::RG8_SINT:     return {.internalFormat = GL_RG8I, .format = GL_RG_INTEGER, .type = GL_BYTE, .bytesPerPixel = 2};
+                case Format::RGBA8_UNORM:  return {.internalFormat = GL_RGBA8, .format = GL_RGBA, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 4};
+                case Format::RGBA8_SNORM:  return {.internalFormat = GL_RGBA8_SNORM, .format = GL_RGBA, .type = GL_BYTE, .bytesPerPixel = 4};
+                case Format::RGBA8_UINT:   return {.internalFormat = GL_RGBA8UI, .format = GL_RGBA_INTEGER, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 4};
+                case Format::RGBA8_SINT:   return {.internalFormat = GL_RGBA8I, .format = GL_RGBA_INTEGER, .type = GL_BYTE, .bytesPerPixel = 4};
+                case Format::RGBA8_SRGB:   return {.internalFormat = GL_SRGB8_ALPHA8, .format = GL_RGBA, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 4};
+                case Format::BGRA8_UNORM:  return {.internalFormat = GL_RGBA8, .format = GL_BGRA, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 4};
+                case Format::BGRA8_SRGB:   return {.internalFormat = GL_SRGB8_ALPHA8, .format = GL_BGRA, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 4};
+                case Format::R16_UNORM:    return {.internalFormat = GL_R16, .format = GL_RED, .type = GL_UNSIGNED_SHORT, .bytesPerPixel = 2};
+                case Format::R16_SNORM:    return {.internalFormat = GL_R16_SNORM, .format = GL_RED, .type = GL_SHORT, .bytesPerPixel = 2};
+                case Format::R16_UINT:     return {.internalFormat = GL_R16UI, .format = GL_RED_INTEGER, .type = GL_UNSIGNED_SHORT, .bytesPerPixel = 2};
+                case Format::R16_SINT:     return {.internalFormat = GL_R16I, .format = GL_RED_INTEGER, .type = GL_SHORT, .bytesPerPixel = 2};
+                case Format::R16_FLOAT:    return {.internalFormat = GL_R16F, .format = GL_RED, .type = GL_HALF_FLOAT, .bytesPerPixel = 2};
+                case Format::RG16_UNORM:   return {.internalFormat = GL_RG16, .format = GL_RG, .type = GL_UNSIGNED_SHORT, .bytesPerPixel = 4};
+                case Format::RG16_SNORM:   return {.internalFormat = GL_RG16_SNORM, .format = GL_RG, .type = GL_SHORT, .bytesPerPixel = 4};
+                case Format::RG16_UINT:    return {.internalFormat = GL_RG16UI, .format = GL_RG_INTEGER, .type = GL_UNSIGNED_SHORT, .bytesPerPixel = 4};
+                case Format::RG16_SINT:    return {.internalFormat = GL_RG16I, .format = GL_RG_INTEGER, .type = GL_SHORT, .bytesPerPixel = 4};
+                case Format::RG16_FLOAT:   return {.internalFormat = GL_RG16F, .format = GL_RG, .type = GL_HALF_FLOAT, .bytesPerPixel = 4};
+                case Format::RGBA16_UNORM: return {.internalFormat = GL_RGBA16, .format = GL_RGBA, .type = GL_UNSIGNED_SHORT, .bytesPerPixel = 8};
+                case Format::RGBA16_SNORM: return {.internalFormat = GL_RGBA16_SNORM, .format = GL_RGBA, .type = GL_SHORT, .bytesPerPixel = 8};
+                case Format::RGBA16_UINT:  return {.internalFormat = GL_RGBA16UI, .format = GL_RGBA_INTEGER, .type = GL_UNSIGNED_SHORT, .bytesPerPixel = 8};
+                case Format::RGBA16_SINT:  return {.internalFormat = GL_RGBA16I, .format = GL_RGBA_INTEGER, .type = GL_SHORT, .bytesPerPixel = 8};
+                case Format::RGBA16_FLOAT: return {.internalFormat = GL_RGBA16F, .format = GL_RGBA, .type = GL_HALF_FLOAT, .bytesPerPixel = 8};
+                case Format::R32_UINT:     return {.internalFormat = GL_R32UI, .format = GL_RED_INTEGER, .type = GL_UNSIGNED_INT, .bytesPerPixel = 4};
+                case Format::R32_SINT:     return {.internalFormat = GL_R32I, .format = GL_RED_INTEGER, .type = GL_INT, .bytesPerPixel = 4};
+                case Format::R32_FLOAT:    return {.internalFormat = GL_R32F, .format = GL_RED, .type = GL_FLOAT, .bytesPerPixel = 4};
+                case Format::RG32_UINT:    return {.internalFormat = GL_RG32UI, .format = GL_RG_INTEGER, .type = GL_UNSIGNED_INT, .bytesPerPixel = 8};
+                case Format::RG32_SINT:    return {.internalFormat = GL_RG32I, .format = GL_RG_INTEGER, .type = GL_INT, .bytesPerPixel = 8};
+                case Format::RG32_FLOAT:   return {.internalFormat = GL_RG32F, .format = GL_RG, .type = GL_FLOAT, .bytesPerPixel = 8};
+                case Format::RGB32_UINT:   return {.internalFormat = GL_RGB32UI, .format = GL_RGB_INTEGER, .type = GL_UNSIGNED_INT, .bytesPerPixel = 12};
+                case Format::RGB32_SINT:   return {.internalFormat = GL_RGB32I, .format = GL_RGB_INTEGER, .type = GL_INT, .bytesPerPixel = 12};
+                case Format::RGB32_FLOAT:  return {.internalFormat = GL_RGB32F, .format = GL_RGB, .type = GL_FLOAT, .bytesPerPixel = 12};
+                case Format::RGBA32_UINT:  return {.internalFormat = GL_RGBA32UI, .format = GL_RGBA_INTEGER, .type = GL_UNSIGNED_INT, .bytesPerPixel = 16};
+                case Format::RGBA32_SINT:  return {.internalFormat = GL_RGBA32I, .format = GL_RGBA_INTEGER, .type = GL_INT, .bytesPerPixel = 16};
+                case Format::RGBA32_FLOAT: return {.internalFormat = GL_RGBA32F, .format = GL_RGBA, .type = GL_FLOAT, .bytesPerPixel = 16};
+                case Format::RGB10A2_UNORM: return {.internalFormat = GL_RGB10_A2, .format = GL_RGBA, .type = GL_UNSIGNED_INT_2_10_10_10_REV, .bytesPerPixel = 4};
+                case Format::RG11B10_FLOAT: return {.internalFormat = GL_R11F_G11F_B10F, .format = GL_RGB, .type = GL_UNSIGNED_INT_10F_11F_11F_REV, .bytesPerPixel = 4};
+                case Format::D16_UNORM:    return {.internalFormat = GL_DEPTH_COMPONENT16, .format = GL_DEPTH_COMPONENT, .type = GL_UNSIGNED_SHORT, .bytesPerPixel = 2};
+                case Format::D32_FLOAT:    return {.internalFormat = GL_DEPTH_COMPONENT32F, .format = GL_DEPTH_COMPONENT, .type = GL_FLOAT, .bytesPerPixel = 4};
+                case Format::D24_UNORM_S8_UINT: return {.internalFormat = GL_DEPTH24_STENCIL8, .format = GL_DEPTH_STENCIL, .type = GL_UNSIGNED_INT_24_8, .bytesPerPixel = 4};
+                case Format::D32_FLOAT_S8_UINT: return {.internalFormat = GL_DEPTH32F_STENCIL8, .format = GL_DEPTH_STENCIL, .type = GL_FLOAT_32_UNSIGNED_INT_24_8_REV, .bytesPerPixel = 8};
+                default:                   return {.internalFormat = GL_RGBA8, .format = GL_RGBA, .type = GL_UNSIGNED_BYTE, .bytesPerPixel = 4};
             }
+            // clang-format on
         }
 
         auto ToGLTextureTarget(TextureDimension dim, uint32_t arrayLayers) -> GLenum {

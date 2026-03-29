@@ -61,7 +61,6 @@ namespace miki::test {
             oNativeToken = token;
             bool hidden = iDesc.flags.Has(miki::platform::WindowFlags::Hidden);
             windows[token] = WindowState{
-                .handle = miki::rhi::NativeWindowHandle{miki::rhi::Win32Window{.hwnd = token}},
                 .parentToken = iParentToken,
                 .width = iDesc.width,
                 .height = iDesc.height,
