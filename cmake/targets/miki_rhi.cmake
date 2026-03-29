@@ -25,6 +25,7 @@ set(MIKI_RHI_SOURCES
     src/miki/frame/AsyncTaskManager.cpp
     src/miki/frame/FrameOrchestrator.cpp
     src/miki/resource/StagingRing.cpp
+    src/miki/resource/ReadbackRing.cpp
 )
 
 add_library(miki_rhi OBJECT ${MIKI_RHI_SOURCES})
