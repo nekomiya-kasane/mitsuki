@@ -152,6 +152,7 @@ namespace miki::rhi {
     // =========================================================================
 
     struct VulkanDeviceDesc {
+        BackendType tier = BackendType::Vulkan14;  ///< Vulkan14 (full) or VulkanCompat (1.1 subset)
         bool enableValidation = true;
         bool enableDebugMessenger = true;
         const char* appName = "miki";
@@ -184,7 +185,7 @@ namespace miki::rhi {
         [[nodiscard]] auto GetVmaAllocator() const noexcept -> VmaAllocator { return allocator_; }
 
         // -- Capability --
-        auto GetBackendTypeImpl() const -> BackendType { return BackendType::Vulkan14; }
+        auto GetBackendTypeImpl() const -> BackendType { return tier_; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
 
         // -- Swapchain (VulkanSwapchain.cpp) --
@@ -321,6 +322,9 @@ namespace miki::rhi {
         }
 
        private:
+        // -- Backend tier (Vulkan14 or VulkanCompat) --
+        BackendType tier_ = BackendType::Vulkan14;
+
         // -- Vulkan core objects --
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;

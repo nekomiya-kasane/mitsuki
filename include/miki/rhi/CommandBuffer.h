@@ -231,7 +231,6 @@ namespace miki::rhi {
     /// Each backend defines its own class inheriting CommandBufferBase<Impl>.
     class VulkanCommandBuffer;
     class D3D12CommandBuffer;
-    class VulkanCompatCommandBuffer;
     class WebGPUCommandBuffer;
     class OpenGLCommandBuffer;
 
@@ -257,8 +256,8 @@ namespace miki::rhi {
             assert(ptr_ != nullptr && "CommandListHandle::Dispatch on null handle");
             switch (tag_) {
 #if MIKI_BUILD_VULKAN
-                case BackendType::Vulkan14: return fn(*static_cast<VulkanCommandBuffer*>(ptr_));
-                case BackendType::VulkanCompat: return fn(*static_cast<VulkanCompatCommandBuffer*>(ptr_));
+                case BackendType::Vulkan14: [[fallthrough]];
+                case BackendType::VulkanCompat: return fn(*static_cast<VulkanCommandBuffer*>(ptr_));
 #endif
 #if MIKI_BUILD_D3D12
                 case BackendType::D3D12: return fn(*static_cast<D3D12CommandBuffer*>(ptr_));

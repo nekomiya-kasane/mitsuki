@@ -677,6 +677,8 @@ namespace miki::rhi {
     // =========================================================================
 
     auto VulkanDevice::Init(const VulkanDeviceDesc& desc) -> RhiResult<void> {
+        tier_ = desc.tier;
+
         VkResult vkResult = volkInitialize();
         if (vkResult != VK_SUCCESS) {
             return std::unexpected(RhiError::DeviceLost);

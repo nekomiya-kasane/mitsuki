@@ -258,7 +258,6 @@ namespace miki::rhi {
 
     class VulkanDevice;
     class D3D12Device;
-    class VulkanCompatDevice;
     class WebGPUDevice;
     class OpenGLDevice;
 
@@ -286,8 +285,8 @@ namespace miki::rhi {
             assert(ptr_ != nullptr && "DeviceHandle::Dispatch on null handle");
             switch (tag_) {
 #if MIKI_BUILD_VULKAN
-                case BackendType::Vulkan14: return fn(*static_cast<VulkanDevice*>(ptr_));
-                case BackendType::VulkanCompat: return fn(*static_cast<VulkanCompatDevice*>(ptr_));
+                case BackendType::Vulkan14: [[fallthrough]];
+                case BackendType::VulkanCompat: return fn(*static_cast<VulkanDevice*>(ptr_));
 #endif
 #if MIKI_BUILD_D3D12
                 case BackendType::D3D12: return fn(*static_cast<D3D12Device*>(ptr_));
@@ -308,8 +307,8 @@ namespace miki::rhi {
             assert(ptr_ != nullptr && "DeviceHandle::Dispatch on null handle");
             switch (tag_) {
 #if MIKI_BUILD_VULKAN
-                case BackendType::Vulkan14: return fn(*static_cast<const VulkanDevice*>(ptr_));
-                case BackendType::VulkanCompat: return fn(*static_cast<const VulkanCompatDevice*>(ptr_));
+                case BackendType::Vulkan14: [[fallthrough]];
+                case BackendType::VulkanCompat: return fn(*static_cast<const VulkanDevice*>(ptr_));
 #endif
 #if MIKI_BUILD_D3D12
                 case BackendType::D3D12: return fn(*static_cast<const D3D12Device*>(ptr_));
