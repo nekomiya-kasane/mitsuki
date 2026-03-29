@@ -352,7 +352,7 @@ TEST_P(SurfaceIntegrationTest, BeginEndFrameBasic) {
     ASSERT_TRUE(ctx.has_value()) << "BeginFrame failed";
 
     // EndFrame with no command buffer — pass empty
-    auto r = sm_->EndFrame(h, CommandListHandle{});
+    auto r = sm_->EndFrame(h, CommandBufferHandle{});
     EXPECT_TRUE(r.has_value()) << "EndFrame failed";
 
     SafeDestroy(h);
@@ -372,7 +372,7 @@ TEST_P(SurfaceIntegrationTest, MultiFrameLoop) {
     for (int i = 0; i < 10; ++i) {
         auto ctx = sm_->BeginFrame(h);
         ASSERT_TRUE(ctx.has_value()) << "BeginFrame failed at frame " << i;
-        auto r = sm_->EndFrame(h, CommandListHandle{});
+        auto r = sm_->EndFrame(h, CommandBufferHandle{});
         ASSERT_TRUE(r.has_value()) << "EndFrame failed at frame " << i;
     }
 
@@ -391,8 +391,8 @@ TEST_P(SurfaceIntegrationTest, TwoWindowsInterleavedFrames) {
     auto ctxB = sm_->BeginFrame(b);
     ASSERT_TRUE(ctxB.has_value());
 
-    EXPECT_TRUE(sm_->EndFrame(a, CommandListHandle{}).has_value());
-    EXPECT_TRUE(sm_->EndFrame(b, CommandListHandle{}).has_value());
+    EXPECT_TRUE(sm_->EndFrame(a, CommandBufferHandle{}).has_value());
+    EXPECT_TRUE(sm_->EndFrame(b, CommandBufferHandle{}).has_value());
 
     SafeDestroy(a);
     SafeDestroy(b);
@@ -409,7 +409,7 @@ TEST_P(SurfaceIntegrationTest, ResizeSurface) {
     auto ctx = sm_->BeginFrame(h);
     ASSERT_TRUE(ctx.has_value());
     // Frame dimensions may reflect the new size
-    EXPECT_TRUE(sm_->EndFrame(h, CommandListHandle{}).has_value());
+    EXPECT_TRUE(sm_->EndFrame(h, CommandBufferHandle{}).has_value());
 
     SafeDestroy(h);
 }
@@ -431,7 +431,7 @@ TEST_P(SurfaceIntegrationTest, WaitAllSuccess) {
     for (int i = 0; i < 3; ++i) {
         auto ctx = sm_->BeginFrame(h);
         ASSERT_TRUE(ctx.has_value());
-        EXPECT_TRUE(sm_->EndFrame(h, CommandListHandle{}).has_value());
+        EXPECT_TRUE(sm_->EndFrame(h, CommandBufferHandle{}).has_value());
     }
 
     sm_->WaitAll();
@@ -481,12 +481,12 @@ TEST_P(SurfaceIntegrationTest, CascadeDestroyWithSurfaces) {
     {
         auto ctx = sm_->BeginFrame(root);
         ASSERT_TRUE(ctx.has_value());
-        EXPECT_TRUE(sm_->EndFrame(root, CommandListHandle{}).has_value());
+        EXPECT_TRUE(sm_->EndFrame(root, CommandBufferHandle{}).has_value());
     }
     {
         auto ctx = sm_->BeginFrame(child);
         ASSERT_TRUE(ctx.has_value());
-        EXPECT_TRUE(sm_->EndFrame(child, CommandListHandle{}).has_value());
+        EXPECT_TRUE(sm_->EndFrame(child, CommandBufferHandle{}).has_value());
     }
 
     // Use DestroyWindowCascade — detach surfaces then destroy windows
@@ -506,9 +506,9 @@ TEST_P(SurfaceIntegrationTest, DestroyChildPreservesParentSurface) {
     // Run frames on both
     for (int i = 0; i < 3; ++i) {
         ASSERT_TRUE(sm_->BeginFrame(root).has_value());
-        EXPECT_TRUE(sm_->EndFrame(root, CommandListHandle{}).has_value());
+        EXPECT_TRUE(sm_->EndFrame(root, CommandBufferHandle{}).has_value());
         ASSERT_TRUE(sm_->BeginFrame(child).has_value());
-        EXPECT_TRUE(sm_->EndFrame(child, CommandListHandle{}).has_value());
+        EXPECT_TRUE(sm_->EndFrame(child, CommandBufferHandle{}).has_value());
     }
 
     // Destroy child only
@@ -521,7 +521,7 @@ TEST_P(SurfaceIntegrationTest, DestroyChildPreservesParentSurface) {
 
     for (int i = 0; i < 3; ++i) {
         ASSERT_TRUE(sm_->BeginFrame(root).has_value());
-        EXPECT_TRUE(sm_->EndFrame(root, CommandListHandle{}).has_value());
+        EXPECT_TRUE(sm_->EndFrame(root, CommandBufferHandle{}).has_value());
     }
 
     SafeDestroy(root);
@@ -547,9 +547,9 @@ TEST_P(SurfaceIntegrationTest, DestroyChildSiblingOrderPreserved) {
 
     // A and C surfaces still work
     ASSERT_TRUE(sm_->BeginFrame(a).has_value());
-    EXPECT_TRUE(sm_->EndFrame(a, CommandListHandle{}).has_value());
+    EXPECT_TRUE(sm_->EndFrame(a, CommandBufferHandle{}).has_value());
     ASSERT_TRUE(sm_->BeginFrame(c).has_value());
-    EXPECT_TRUE(sm_->EndFrame(c, CommandListHandle{}).has_value());
+    EXPECT_TRUE(sm_->EndFrame(c, CommandBufferHandle{}).has_value());
 
     SafeDestroy(a);
     SafeDestroy(c);
@@ -598,7 +598,7 @@ TEST_P(SurfaceIntegrationTest, FullLifecycleCascadeStress) {
         for (auto& w : allWindows) {
             auto ctx = sm_->BeginFrame(w);
             ASSERT_TRUE(ctx.has_value()) << "BeginFrame failed, window=" << w.id << " frame=" << frame;
-            EXPECT_TRUE(sm_->EndFrame(w, CommandListHandle{}).has_value());
+            EXPECT_TRUE(sm_->EndFrame(w, CommandBufferHandle{}).has_value());
         }
     }
 
@@ -619,7 +619,7 @@ TEST_P(SurfaceIntegrationTest, FullLifecycleCascadeStress) {
         for (auto& w : remaining) {
             auto ctx = sm_->BeginFrame(w);
             ASSERT_TRUE(ctx.has_value());
-            EXPECT_TRUE(sm_->EndFrame(w, CommandListHandle{}).has_value());
+            EXPECT_TRUE(sm_->EndFrame(w, CommandBufferHandle{}).has_value());
         }
     }
 
@@ -653,7 +653,7 @@ TEST_P(SurfaceIntegrationTest, RapidResizeFlood) {
         if (!ctx.has_value()) {
             continue;
         }
-        (void)sm_->EndFrame(h, CommandListHandle{});
+        (void)sm_->EndFrame(h, CommandBufferHandle{});
     }
 
     SafeDestroy(h);
@@ -676,7 +676,7 @@ TEST_P(SurfaceIntegrationTest, DetachReattachCycle) {
         // Frame
         auto ctx = sm_->BeginFrame(h);
         ASSERT_TRUE(ctx.has_value()) << "BeginFrame failed at cycle " << i;
-        EXPECT_TRUE(sm_->EndFrame(h, CommandListHandle{}).has_value());
+        EXPECT_TRUE(sm_->EndFrame(h, CommandBufferHandle{}).has_value());
 
         // Detach
         ASSERT_TRUE(sm_->DetachSurface(h).has_value()) << "Detach failed at cycle " << i;
@@ -704,7 +704,7 @@ TEST_P(SurfaceIntegrationTest, ChildDestructionIsolation) {
     for (int f = 0; f < 5; ++f) {
         for (auto w : {root, a, b, c}) {
             ASSERT_TRUE(sm_->BeginFrame(w).has_value());
-            EXPECT_TRUE(sm_->EndFrame(w, CommandListHandle{}).has_value());
+            EXPECT_TRUE(sm_->EndFrame(w, CommandBufferHandle{}).has_value());
         }
     }
 
@@ -729,7 +729,7 @@ TEST_P(SurfaceIntegrationTest, ChildDestructionIsolation) {
     for (int f = 0; f < 5; ++f) {
         for (auto w : {root, b, c}) {
             ASSERT_TRUE(sm_->BeginFrame(w).has_value());
-            EXPECT_TRUE(sm_->EndFrame(w, CommandListHandle{}).has_value());
+            EXPECT_TRUE(sm_->EndFrame(w, CommandBufferHandle{}).has_value());
         }
     }
 
@@ -746,7 +746,7 @@ TEST_P(SurfaceIntegrationTest, ChildDestructionIsolation) {
 
     // Root continues rendering alone
     ASSERT_TRUE(sm_->BeginFrame(root).has_value());
-    EXPECT_TRUE(sm_->EndFrame(root, CommandListHandle{}).has_value());
+    EXPECT_TRUE(sm_->EndFrame(root, CommandBufferHandle{}).has_value());
 
     SafeDestroy(root);
 }
@@ -767,7 +767,7 @@ TEST_P(SurfaceIntegrationTest, CrossWindowCascade) {
     for (int f = 0; f < 5; ++f) {
         for (auto w : {root, a, a1}) {
             ASSERT_TRUE(sm_->BeginFrame(w).has_value());
-            EXPECT_TRUE(sm_->EndFrame(w, CommandListHandle{}).has_value());
+            EXPECT_TRUE(sm_->EndFrame(w, CommandBufferHandle{}).has_value());
         }
     }
 
@@ -786,7 +786,7 @@ TEST_P(SurfaceIntegrationTest, CrossWindowCascade) {
 
     for (int f = 0; f < 5; ++f) {
         ASSERT_TRUE(sm_->BeginFrame(root).has_value());
-        EXPECT_TRUE(sm_->EndFrame(root, CommandListHandle{}).has_value());
+        EXPECT_TRUE(sm_->EndFrame(root, CommandBufferHandle{}).has_value());
     }
 
     SafeDestroy(root);

@@ -75,6 +75,13 @@ namespace miki::rhi {
         /// @brief Reconfigure with new settings (triggers swapchain recreation).
         [[nodiscard]] auto Reconfigure(const RenderSurfaceConfig& iConfig) -> core::Result<void>;
 
+        // ── Sync injection ─────────────────────────────────────────
+
+        /// @brief Set the sync primitives for the current frame.
+        /// Called by FrameManager before AcquireNextImage each frame.
+        /// T1/T2: valid semaphores. T3/T4: all invalid (implicit sync).
+        auto SetSubmitSyncInfo(const SubmitSyncInfo& iInfo) -> void;
+
         // ── Per-frame operations ───────────────────────────────────
 
         /// @brief Acquire the next swapchain image.

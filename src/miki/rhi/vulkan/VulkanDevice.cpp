@@ -447,17 +447,30 @@ namespace miki::rhi {
             info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
             info.pNext = &typeInfo;
 
-            return vkCreateSemaphore(device_, &info, nullptr, &outSem);
+            VkSemaphore sem = VK_NULL_HANDLE;
+            if (vkCreateSemaphore(device_, &info, nullptr, &sem) != VK_SUCCESS) {
+                return std::unexpected(RhiError::OutOfDeviceMemory);
+            }
+
+            auto [handle, data] = semaphores_.Allocate();
+            if (!data) {
+                vkDestroySemaphore(device_, sem, nullptr);
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            data->semaphore = sem;
+            data->type = SemaphoreType::Timeline;
+            outHandle = handle;
+            return {};
         };
 
-        if (createTimeline(graphicsTimeline_) != VK_SUCCESS) {
-            return std::unexpected(RhiError::OutOfDeviceMemory);
+        if (auto r = createAndRegister(queueTimelines_.graphics); !r) {
+            return r;
         }
-        if (createTimeline(computeTimeline_) != VK_SUCCESS) {
-            return std::unexpected(RhiError::OutOfDeviceMemory);
+        if (auto r = createAndRegister(queueTimelines_.compute); !r) {
+            return r;
         }
-        if (createTimeline(transferTimeline_) != VK_SUCCESS) {
-            return std::unexpected(RhiError::OutOfDeviceMemory);
+        if (auto r = createAndRegister(queueTimelines_.transfer); !r) {
+            return r;
         }
 
         graphicsTimelineValue_ = 0;
@@ -897,15 +910,15 @@ namespace miki::rhi {
             vkDeviceWaitIdle(device_);
         }
 
-        // Timeline semaphores (device-global, not in HandlePool)
-        if (graphicsTimeline_) {
-            vkDestroySemaphore(device_, graphicsTimeline_, nullptr);
+        // Timeline semaphores (device-global, registered in HandlePool)
+        if (queueTimelines_.graphics.IsValid()) {
+            DestroySemaphoreImpl(queueTimelines_.graphics);
         }
-        if (computeTimeline_) {
-            vkDestroySemaphore(device_, computeTimeline_, nullptr);
+        if (queueTimelines_.compute.IsValid()) {
+            DestroySemaphoreImpl(queueTimelines_.compute);
         }
-        if (transferTimeline_) {
-            vkDestroySemaphore(device_, transferTimeline_, nullptr);
+        if (queueTimelines_.transfer.IsValid()) {
+            DestroySemaphoreImpl(queueTimelines_.transfer);
         }
 
         // Descriptor pools

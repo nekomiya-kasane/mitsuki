@@ -104,7 +104,7 @@ namespace miki::rhi {
         /// @brief End frame for a specific window's surface.
         /// Submits command buffer with correct sync primitives, then presents.
         /// @return void on success, SwapchainOutOfDate if resize needed.
-        [[nodiscard]] auto EndFrame(platform::WindowHandle iWindow, CommandListHandle iCmd) -> core::Result<void>;
+        [[nodiscard]] auto EndFrame(platform::WindowHandle iWindow, CommandBufferHandle iCmd) -> core::Result<void>;
 
         /// @brief Resize a window's surface (typically after WindowEvent::Resize).
         /// Recreates the swapchain at new dimensions. Waits for this surface's

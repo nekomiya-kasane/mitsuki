@@ -189,6 +189,7 @@ namespace miki::rhi {
         // -- Capability --
         auto GetBackendTypeImpl() const -> BackendType { return BackendType::WebGPU; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
+        auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
 
         // -- Swapchain (WebGPUSwapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;

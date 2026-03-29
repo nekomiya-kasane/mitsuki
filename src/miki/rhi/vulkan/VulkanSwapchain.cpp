@@ -414,8 +414,8 @@ namespace miki::rhi {
         VkSurfaceCapabilitiesKHR vkCaps{};
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface, &vkCaps);
 
-        caps.minExtent = {vkCaps.minImageExtent.width, vkCaps.minImageExtent.height};
-        caps.maxExtent = {vkCaps.maxImageExtent.width, vkCaps.maxImageExtent.height};
+        caps.minExtent = {.width = vkCaps.minImageExtent.width, .height = vkCaps.minImageExtent.height};
+        caps.maxExtent = {.width = vkCaps.maxImageExtent.width, .height = vkCaps.maxImageExtent.height};
         caps.minImageCount = vkCaps.minImageCount;
         caps.maxImageCount = (vkCaps.maxImageCount == 0) ? 16 : vkCaps.maxImageCount;
 

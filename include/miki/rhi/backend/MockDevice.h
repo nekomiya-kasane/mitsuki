@@ -79,6 +79,7 @@ namespace miki::rhi {
         // --- Capability ---
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return caps_; }
         auto GetBackendTypeImpl() const -> BackendType { return BackendType::Mock; }
+        auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
 
        private:
         GpuCapabilityProfile caps_;

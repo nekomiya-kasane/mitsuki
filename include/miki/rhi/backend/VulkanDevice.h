@@ -188,6 +188,7 @@ namespace miki::rhi {
         // -- Capability --
         auto GetBackendTypeImpl() const -> BackendType { return tier_; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
+        auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
 
         // -- Swapchain (VulkanSwapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
@@ -346,11 +347,9 @@ namespace miki::rhi {
         VulkanQueueFamilies queueFamilies_;
 
         // -- Timeline semaphores (specs/03-sync.md §3.2) --
-        // Created once at Init, shared across all frames and windows.
-        // Binary semaphores for swapchain are per-surface (in VulkanSwapchainData).
-        VkSemaphore graphicsTimeline_ = VK_NULL_HANDLE;
-        VkSemaphore computeTimeline_ = VK_NULL_HANDLE;
-        VkSemaphore transferTimeline_ = VK_NULL_HANDLE;
+        // Created once at Init, registered in HandlePool, shared across all frames and windows.
+        // Binary semaphores for swapchain are per-surface (in FrameManager).
+        QueueTimelines queueTimelines_;
         uint64_t graphicsTimelineValue_ = 0;
         uint64_t computeTimelineValue_ = 0;
         uint64_t transferTimelineValue_ = 0;

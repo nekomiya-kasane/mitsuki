@@ -173,5 +173,6 @@
         static GpuCapabilityProfile empty{};                                                                           \
         return empty;                                                                                                  \
     }                                                                                                                  \
+    auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }                                                \
     auto GetBackendTypeImpl() const -> BackendType
 // clang-format on

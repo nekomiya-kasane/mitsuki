@@ -113,12 +113,9 @@ namespace miki::frame {
 
         void CreateSyncObjects() {
             if (IsTimeline()) {
-                // T1: One timeline semaphore for the graphics queue
-                rhi::SemaphoreDesc desc{.type = rhi::SemaphoreType::Timeline, .initialValue = 0};
-                auto result = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(desc); });
-                if (result) {
-                    graphicsTimeline = *result;
-                }
+                // T1: Reuse the device-global graphics timeline semaphore (specs/03-sync.md §8.2)
+                auto timelines = device.Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
+                graphicsTimeline = timelines.graphics;
             }
 
             for (uint32_t i = 0; i < framesInFlight; ++i) {
@@ -162,10 +159,9 @@ namespace miki::frame {
                     slot.renderDone = {};
                 }
             }
-            if (graphicsTimeline.IsValid()) {
-                device.Dispatch([&](auto& dev) { dev.DestroySemaphore(graphicsTimeline); });
-                graphicsTimeline = {};
-            }
+            // graphicsTimeline is device-global — do NOT destroy it here.
+            // It is owned by VulkanDevice and destroyed in ~VulkanDevice.
+            graphicsTimeline = {};
         }
     };
 
@@ -241,6 +237,15 @@ namespace miki::frame {
             impl_->deferredDestructor->SetCurrentBin(impl_->frameIndex);
         }
 
+        // 1c. Reclaim staging/readback ring chunks from completed frames (specs/03-sync.md §6.4)
+        // TODO(G5/G6): Uncomment when StagingRing/ReadbackRing are implemented.
+        // if (impl_->stagingRing) {
+        //     impl_->stagingRing->ReclaimCompleted(impl_->frameNumber - impl_->framesInFlight);
+        // }
+        // if (impl_->readbackRing) {
+        //     impl_->readbackRing->ReclaimCompleted(impl_->frameNumber - impl_->framesInFlight);
+        // }
+
         // 2. Advance frame number
         impl_->frameNumber++;
 
@@ -264,6 +269,14 @@ namespace miki::frame {
                 // Minimized — skip this frame
                 return std::unexpected(core::ErrorCode::InvalidState);
             }
+
+            // Inject this slot's sync primitives into RenderSurface before acquire
+            auto& slot = impl_->slots[impl_->frameIndex];
+            impl_->surface->SetSubmitSyncInfo({
+                .imageAvailable = slot.imageAvail,
+                .renderFinished = slot.renderDone,
+                .inFlightFence = slot.fence,
+            });
 
             // Acquire: T1/T2 signal binary semaphore, T3/T4 implicit
             auto acquireResult = impl_->surface->AcquireNextImage();
@@ -289,26 +302,12 @@ namespace miki::frame {
         return ctx;
     }
 
-    auto FrameManager::EndFrame(std::span<rhi::CommandListHandle> iCmdBuffers) -> core::Result<void> {
+    auto FrameManager::EndFrame(std::span<const rhi::CommandBufferHandle> iCmdBuffers) -> core::Result<void> {
         assert(impl_ && "FrameManager used after move");
 
         auto& slot = impl_->slots[impl_->frameIndex];
 
-        // 1. Build command buffer handle array for submission
-        std::vector<rhi::CommandBufferHandle> cmdHandles;
-        cmdHandles.reserve(iCmdBuffers.size());
-        for (auto& cmd : iCmdBuffers) {
-            if (cmd.IsValid()) {
-                cmd.Dispatch([&](auto& cb) {
-                    // Extract the underlying CommandBufferHandle from the CRTP object.
-                    // The CommandBufferHandle is embedded in the backend-specific data.
-                    // For submission, we need the raw handle — use the device's pool lookup.
-                    (void)cb;  // Command buffer is already recorded and ended.
-                });
-            }
-        }
-
-        // 2. Build SubmitDesc with sync primitives
+        // 1. Build SubmitDesc with sync primitives
         std::vector<rhi::SemaphoreSubmitInfo> waits;
         std::vector<rhi::SemaphoreSubmitInfo> signals;
 
@@ -377,11 +376,9 @@ namespace miki::frame {
             slot.timelineValue = impl_->frameNumber;  // Track for WaitAll ordering
         }
 
-        // 3. Submit to graphics queue
-        // Note: For T3/T4, the submit is simplified — no semaphores needed.
-        // The backends handle sync implicitly.
+        // 2. Submit to graphics queue
         rhi::SubmitDesc submitDesc{
-            .commandBuffers = {},  // Backends use CommandListHandle dispatch internally
+            .commandBuffers = iCmdBuffers,
             .waitSemaphores = waits,
             .signalSemaphores = signals,
             .signalFence = impl_->IsFenceBased() ? slot.fence : rhi::FenceHandle{},
@@ -406,9 +403,9 @@ namespace miki::frame {
         return {};
     }
 
-    auto FrameManager::EndFrame(rhi::CommandListHandle iCmd) -> core::Result<void> {
+    auto FrameManager::EndFrame(rhi::CommandBufferHandle iCmd) -> core::Result<void> {
         std::array cmds = {iCmd};
-        return EndFrame(std::span<rhi::CommandListHandle>{cmds});
+        return EndFrame(std::span<const rhi::CommandBufferHandle>{cmds});
     }
 
     // =========================================================================

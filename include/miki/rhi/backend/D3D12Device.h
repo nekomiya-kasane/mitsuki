@@ -234,6 +234,7 @@ namespace miki::rhi {
         // -- Capability --
         auto GetBackendTypeImpl() const -> BackendType { return BackendType::D3D12; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
+        auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
 
         // -- Swapchain (D3D12Swapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;

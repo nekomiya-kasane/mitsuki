@@ -7,11 +7,10 @@
  */
 
 #include "miki/rhi/RenderSurface.h"
+#include "miki/rhi/backend/AllBackends.h"
 
 #include <algorithm>
 #include <array>
-
-#include "miki/rhi/backend/AllBackends.h"
 
 namespace miki::rhi {
 
@@ -105,20 +104,17 @@ namespace miki::rhi {
         auto desc = ResolveSwapchainDesc(iConfig, impl_->nativeWindow, iWidth, iHeight);
 
         if (!caps.supportedFormats.empty()) {
-            if (std::find(caps.supportedFormats.begin(), caps.supportedFormats.end(), desc.preferredFormat)
-                == caps.supportedFormats.end()) {
+            if (std::ranges::find(caps.supportedFormats, desc.preferredFormat) == caps.supportedFormats.end()) {
                 return std::unexpected(core::ErrorCode::InvalidArgument);
             }
         }
         if (!caps.supportedPresentModes.empty()) {
-            if (std::find(caps.supportedPresentModes.begin(), caps.supportedPresentModes.end(), desc.presentMode)
-                == caps.supportedPresentModes.end()) {
+            if (std::ranges::find(caps.supportedPresentModes, desc.presentMode) == caps.supportedPresentModes.end()) {
                 return std::unexpected(core::ErrorCode::InvalidArgument);
             }
         }
         if (!caps.supportedColorSpaces.empty()) {
-            if (std::find(caps.supportedColorSpaces.begin(), caps.supportedColorSpaces.end(), desc.colorSpace)
-                == caps.supportedColorSpaces.end()) {
+            if (std::ranges::find(caps.supportedColorSpaces, desc.colorSpace) == caps.supportedColorSpaces.end()) {
                 return std::unexpected(core::ErrorCode::InvalidArgument);
             }
         }
@@ -135,7 +131,7 @@ namespace miki::rhi {
 
         impl_->swapchain = *result;
         impl_->config = iConfig;
-        impl_->extent = {iWidth, iHeight};
+        impl_->extent = {.width = iWidth, .height = iHeight};
         impl_->actualFormat = desc.preferredFormat;
         return {};
     }
@@ -149,12 +145,21 @@ namespace miki::rhi {
         if (!result) {
             return std::unexpected(core::ErrorCode::InvalidState);
         }
-        impl_->extent = {iWidth, iHeight};
+        impl_->extent = {.width = iWidth, .height = iHeight};
         return {};
     }
 
     auto RenderSurface::Reconfigure(const RenderSurfaceConfig& iConfig) -> core::Result<void> {
         return Configure(iConfig, impl_->extent.width, impl_->extent.height);
+    }
+
+    // =========================================================================
+    // Sync injection
+    // =========================================================================
+
+    auto RenderSurface::SetSubmitSyncInfo(const SubmitSyncInfo& iInfo) -> void {
+        assert(impl_ && "RenderSurface used after move");
+        impl_->syncInfo = iInfo;
     }
 
     // =========================================================================

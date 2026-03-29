@@ -21,7 +21,6 @@
 
 #include "miki/core/Result.h"
 #include "miki/frame/FrameContext.h"
-#include "miki/rhi/CommandBuffer.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Handle.h"
 #include "miki/rhi/Swapchain.h"
@@ -85,10 +84,11 @@ namespace miki::frame {
 
         /// @brief Submit recorded command buffers and present.
         /// Multi-submit: accepts multiple command buffers for multi-threaded recording.
-        [[nodiscard]] auto EndFrame(std::span<rhi::CommandListHandle> iCmdBuffers) -> core::Result<void>;
+        /// Pass the bufferHandle from CommandListAcquisition (NOT the listHandle).
+        [[nodiscard]] auto EndFrame(std::span<const rhi::CommandBufferHandle> iCmdBuffers) -> core::Result<void>;
 
         /// @brief Single command buffer convenience overload.
-        [[nodiscard]] auto EndFrame(rhi::CommandListHandle iCmd) -> core::Result<void>;
+        [[nodiscard]] auto EndFrame(rhi::CommandBufferHandle iCmd) -> core::Result<void>;
 
         // ── Async compute integration ───────────────────────────────
 

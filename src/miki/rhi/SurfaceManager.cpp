@@ -194,7 +194,7 @@ namespace miki::rhi {
         return entry->frameManager.BeginFrame();
     }
 
-    auto SurfaceManager::EndFrame(platform::WindowHandle iWindow, CommandListHandle iCmd) -> core::Result<void> {
+    auto SurfaceManager::EndFrame(platform::WindowHandle iWindow, CommandBufferHandle iCmd) -> core::Result<void> {
         assert(impl_ && "SurfaceManager used after move");
         auto* entry = impl_->Find(iWindow);
         if (!entry) {

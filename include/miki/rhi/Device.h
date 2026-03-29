@@ -213,6 +213,7 @@ namespace miki::rhi {
             Self().WaitSemaphoreImpl(h, value, timeout);
         }
         [[nodiscard]] auto GetSemaphoreValue(SemaphoreHandle h) -> uint64_t { return Self().GetSemaphoreValueImpl(h); }
+        [[nodiscard]] auto GetQueueTimelines() const -> QueueTimelines { return Self().GetQueueTimelinesImpl(); }
 
         // --- Submission ---
         void Submit(QueueType queue, const SubmitDesc& desc) { Self().SubmitImpl(queue, desc); }

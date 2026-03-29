@@ -244,6 +244,7 @@ namespace miki::rhi {
         // -- Capability --
         auto GetBackendTypeImpl() const -> BackendType { return BackendType::OpenGL43; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
+        auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
 
         // -- Swapchain (OpenGLSwapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;

@@ -396,7 +396,7 @@ static void MainLoopIteration() {
     g_renderer->RecordFrame(frame.swapchainImage, frame.width, frame.height);
 
     // EndFrame: submits command buffer with correct sync, then presents
-    (void)g_sm->EndFrame(g_mainWindow, g_renderer->cmdAcq.listHandle);
+    (void)g_sm->EndFrame(g_mainWindow, g_renderer->cmdAcq.bufferHandle);
 }
 
 // ============================================================================
