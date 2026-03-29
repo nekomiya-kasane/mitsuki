@@ -627,12 +627,17 @@ namespace miki::shader {
             return std::unexpected(sessionResult.error());
         }
 
-        auto source = ReadFileToString(iDesc.sourcePath);
-        if (source.empty()) {
-            return std::unexpected(core::ErrorCode::IoError);
+        std::string source;
+        if (!iDesc.sourceCode.empty()) {
+            source = iDesc.sourceCode;
+        } else {
+            source = ReadFileToString(iDesc.sourcePath);
+            if (source.empty()) {
+                return std::unexpected(core::ErrorCode::IoError);
+            }
         }
 
-        auto pathStr = iDesc.sourcePath.string();
+        auto pathStr = iDesc.sourcePath.empty() ? std::string("<embedded>") : iDesc.sourcePath.string();
         return impl_->CompileToBlob(sessionResult->get(), source, pathStr, iDesc.entryPoint, iDesc.stage, iDesc.target);
     }
 

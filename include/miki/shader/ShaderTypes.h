@@ -166,7 +166,8 @@ namespace miki::shader {
 
     /** @brief Descriptor for a shader compilation request. */
     struct ShaderCompileDesc {
-        std::filesystem::path sourcePath;
+        std::filesystem::path sourcePath;  ///< Path to .slang file (used for file I/O and diagnostics)
+        std::string sourceCode;            ///< If non-empty, compile from this string instead of reading sourcePath
         std::string entryPoint;
         ShaderStage stage = ShaderStage::Vertex;
         ShaderTarget target = ShaderTarget::SPIRV;
