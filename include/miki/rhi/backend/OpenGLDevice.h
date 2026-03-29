@@ -29,6 +29,28 @@
 namespace miki::rhi {
 
     // =========================================================================
+    // GLExtContext — holds extension function pointers not in glad2
+    // =========================================================================
+
+    class GLExtContext {
+       public:
+        void Init(GladGLContext* gl, GLADloadfunc loader);
+
+        // GL_EXT_depth_bounds_test (NVIDIA-only)
+        [[nodiscard]] auto HasDepthBoundsTest() const noexcept -> bool { return hasDepthBoundsTest_; }
+        void DepthBoundsEXT(GLdouble zmin, GLdouble zmax) const {
+            if (pfnDepthBoundsEXT_) {
+                pfnDepthBoundsEXT_(zmin, zmax);
+            }
+        }
+
+       private:
+        using PFNGLDEPTHBOUNDSEXTPROC = void(GLAD_API_PTR*)(GLdouble, GLdouble);
+        PFNGLDEPTHBOUNDSEXTPROC pfnDepthBoundsEXT_ = nullptr;
+        bool hasDepthBoundsTest_ = false;
+    };
+
+    // =========================================================================
     // Per-resource backend payloads (stored in HandlePool slots)
     // =========================================================================
 
@@ -190,7 +212,8 @@ namespace miki::rhi {
 
     struct OpenGLDeviceDesc {
         bool enableValidation = true;
-        void* glfwWindow = nullptr;  // GLFWwindow* — required for context
+        void* glfwWindow = nullptr;         // GLFWwindow* — required for swapchain
+        GLADloadfunc procLoader = nullptr;  // GL proc loader (e.g. glfwGetProcAddress)
     };
 
     // =========================================================================
@@ -347,16 +370,21 @@ namespace miki::rhi {
         // -- Push constant UBO --
         auto GetPushConstantUBO() const noexcept -> GLuint { return pushConstantUBO_; }
 
+        // -- Extension context --
+        [[nodiscard]] auto GetExtContext() const noexcept -> const GLExtContext& { return ext_; }
+
        private:
         // -- GL context (glad2 MX) --
         GladGLContext* gl_ = nullptr;
         bool ownsContext_ = false;
         void* glfwWindow_ = nullptr;  // GLFWwindow* stored from Init for swapchain use
+        GLADloadfunc procLoader_ = nullptr;
 
         // -- Capabilities --
         GpuCapabilityProfile capabilities_;
         bool hasDSA_ = false;  // GL_ARB_direct_state_access / GL 4.5
         int glMajor_ = 4, glMinor_ = 3;
+        GLExtContext ext_;
 
         // -- Push constant emulation UBO (binding 0, 128B) --
         GLuint pushConstantUBO_ = 0;

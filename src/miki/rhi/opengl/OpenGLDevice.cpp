@@ -12,6 +12,26 @@
 namespace miki::rhi {
 
     // =========================================================================
+    // GLExtContext — probe and load extension functions not in glad2
+    // =========================================================================
+
+    void GLExtContext::Init(GladGLContext* gl, GLADloadfunc loader) {
+        if (!loader) {
+            return;
+        }
+        GLint numExtensions = 0;
+        gl->GetIntegerv(GL_NUM_EXTENSIONS, &numExtensions);
+        for (GLint i = 0; i < numExtensions; ++i) {
+            const char* ext = reinterpret_cast<const char*>(gl->GetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+            if (ext && std::strcmp(ext, "GL_EXT_depth_bounds_test") == 0) {
+                pfnDepthBoundsEXT_ = reinterpret_cast<PFNGLDEPTHBOUNDSEXTPROC>(loader("glDepthBoundsEXT"));
+                hasDepthBoundsTest_ = (pfnDepthBoundsEXT_ != nullptr);
+                break;
+            }
+        }
+    }
+
+    // =========================================================================
     // Init / Destroy
     // =========================================================================
 
@@ -20,6 +40,7 @@ namespace miki::rhi {
         ownsContext_ = true;
 
         glfwWindow_ = desc.glfwWindow;
+        procLoader_ = desc.procLoader;
 
         // glad2 MX: load GL function pointers via gladLoaderLoadGLContext (uses platform loader)
         // The GL context must already be current on this thread before calling.
@@ -190,6 +211,9 @@ namespace miki::rhi {
                 capabilities_.hasMemoryBudgetQuery = true;
             }
         }
+
+        // Probe non-glad2 extensions
+        ext_.Init(gl_, procLoader_);
 
         // Always-on features
         capabilities_.enabledFeatures.Add(DeviceFeature::Present);

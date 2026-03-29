@@ -750,10 +750,17 @@ namespace miki::rhi {
     }
 
     void OpenGLCommandBuffer::CmdSetDepthBoundsImpl(float minDepth, float maxDepth) {
+        if (!device_->GetExtContext().HasDepthBoundsTest()) {
+            return;
+        }
+        constexpr GLenum GL_DEPTH_BOUNDS_TEST_EXT = 0x8890;
         auto* gl = device_->GetGLContext();
-        // GL_EXT_depth_bounds_test (available on NV, not standard)
-        (void)minDepth;
-        (void)maxDepth;
+        if (minDepth == 0.0f && maxDepth == 1.0f) {
+            gl->Disable(GL_DEPTH_BOUNDS_TEST_EXT);
+        } else {
+            gl->Enable(GL_DEPTH_BOUNDS_TEST_EXT);
+            device_->GetExtContext().DepthBoundsEXT(static_cast<GLdouble>(minDepth), static_cast<GLdouble>(maxDepth));
+        }
     }
 
     void OpenGLCommandBuffer::CmdSetLineWidthImpl(float width) {
