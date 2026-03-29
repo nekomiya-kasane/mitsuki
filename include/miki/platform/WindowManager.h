@@ -72,6 +72,7 @@ namespace miki::platform {
         core::EnumFlags<WindowFlags> flags = WindowFlags::None;
         bool alive = false;
         bool minimized = false;
+        bool maximized = false;
     };
 
     // ===========================================================================

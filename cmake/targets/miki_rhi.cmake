@@ -15,6 +15,8 @@ set(MIKI_RHI_SOURCES
     src/miki/rhi/RenderSurface.cpp
     src/miki/rhi/SurfaceManager.cpp
     src/miki/rhi/mock/MockRenderSurface.cpp
+    src/miki/frame/FrameManager.cpp
+    src/miki/frame/DeferredDestructor.cpp
 )
 
 add_library(miki_rhi STATIC ${MIKI_RHI_SOURCES})

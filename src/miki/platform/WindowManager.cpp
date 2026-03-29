@@ -31,6 +31,7 @@ namespace miki::platform {
         core::EnumFlags<WindowFlags> flags = WindowFlags::None;
         bool alive = true;
         bool minimized = false;
+        bool maximized = false;
     };
 
     // ===========================================================================
@@ -292,6 +293,8 @@ namespace miki::platform {
         auto* node = impl_->Find(iHandle);
         if (node && node->alive && node->nativeToken) {
             impl_->backend->MaximizeWindow(node->nativeToken);
+            node->maximized = true;
+            node->minimized = false;
         }
     }
 
@@ -303,6 +306,7 @@ namespace miki::platform {
         if (node && node->alive && node->nativeToken) {
             impl_->backend->RestoreWindow(node->nativeToken);
             node->minimized = false;
+            node->maximized = false;
         }
     }
 
@@ -397,6 +401,7 @@ namespace miki::platform {
             .flags = n->flags,
             .alive = n->alive,
             .minimized = n->minimized,
+            .maximized = n->maximized,
         };
     }
 

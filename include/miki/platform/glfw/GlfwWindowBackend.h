@@ -106,6 +106,8 @@ namespace miki::platform {
         static auto CharCallback(GLFWwindow* w, unsigned int codepoint) -> void;
         static auto WindowFocusCallback(GLFWwindow* w, int focused) -> void;
         static auto WindowCloseCallback(GLFWwindow* w) -> void;
+        static auto WindowIconifyCallback(GLFWwindow* w, int iconified) -> void;
+        static auto WindowMaximizeCallback(GLFWwindow* w, int maximized) -> void;
 
        public:
         // --- Key/mouse mapping (from GlfwBridge) ---

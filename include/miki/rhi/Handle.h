@@ -125,7 +125,7 @@ namespace miki::rhi {
         HandlePool() {
             for (size_t i = 0; i < Capacity; ++i) {
                 slots_[i].nextFree = static_cast<uint32_t>(i + 1);
-                slots_[i].generation = 0;
+                slots_[i].generation = 1;  // Start at 1: Pack(1,0,0,0)!=0, so IsValid() is never false for slot 0
                 slots_[i].alive = false;
             }
             slots_[Capacity - 1].nextFree = kInvalidIndex;

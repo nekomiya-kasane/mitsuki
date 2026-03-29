@@ -242,6 +242,12 @@ namespace neko::platform {
         bool focused = false;
     };
 
+    /** @brief Window was minimized (iconified). */
+    struct Minimized {};
+
+    /** @brief Window was restored from minimized or maximized state. */
+    struct Restored {};
+
     /** @brief DPI / content scale change. */
     struct DpiChanged {
         float scale = 1.0f;
@@ -262,7 +268,7 @@ namespace neko::platform {
 
     /** @brief Canonical input event — std::variant of all subtypes. */
     using Event = std::variant<
-        CloseRequested, Resize, MouseMove, MouseButton, KeyDown, KeyUp, Scroll, TextInput, Focus, DpiChanged,
-        ContinuousInput>;
+        CloseRequested, Resize, Minimized, Restored, MouseMove, MouseButton, KeyDown, KeyUp, Scroll, TextInput, Focus,
+        DpiChanged, ContinuousInput>;
 
 }  // namespace neko::platform

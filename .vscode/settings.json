@@ -35,7 +35,7 @@
         "--fallback-style=LLVM",
         "--log=info",
         "--pretty",
-        "--compile-commands-dir=c:\\mitsuki\\build\\debug-webgpu"
+        "--compile-commands-dir=c:\\mitsuki\\build\\debug-vulkan"
     ],
     "clangd.checkUpdates": false,
     "clangd.onConfigChanged": "restart",

@@ -47,7 +47,9 @@ namespace miki::platform {
     // ---------------------------------------------------------------------------
 
     GlfwWindowBackend::GlfwWindowBackend(miki::rhi::BackendType iBackendType, bool iVisible)
-        : backendType_(iBackendType), visible_(iVisible) {}
+        : backendType_(iBackendType), visible_(iVisible) {
+        InitGlfw();
+    }
 
     GlfwWindowBackend::~GlfwWindowBackend() {
         for (auto& [token, data] : windowData_) {
@@ -59,6 +61,10 @@ namespace miki::platform {
 
         if (sGlfwRefCount.fetch_sub(1) == 1) {
             glfwTerminate();
+        } else {
+            // Flush pending Win32 WM_DESTROY messages so subsequent
+            // glfwCreateWindow calls from other backends succeed immediately.
+            glfwPollEvents();
         }
     }
 
@@ -69,10 +75,6 @@ namespace miki::platform {
     auto GlfwWindowBackend::CreateNativeWindow(
         const miki::platform::WindowDesc& iDesc, void* iParentToken, void*& oNativeToken
     ) -> miki::core::Result<miki::rhi::NativeWindowHandle> {
-        if (!InitGlfw()) {
-            return std::unexpected(miki::core::ErrorCode::DeviceNotReady);
-        }
-
         glfwDefaultWindowHints();
 
         // WindowFlags → GLFW hints
@@ -162,6 +164,10 @@ namespace miki::platform {
         glfwSetCharCallback(window, CharCallback);
         glfwSetWindowFocusCallback(window, WindowFocusCallback);
         glfwSetWindowCloseCallback(window, WindowCloseCallback);
+        glfwSetWindowIconifyCallback(window, WindowIconifyCallback);
+#ifndef __EMSCRIPTEN__
+        glfwSetWindowMaximizeCallback(window, WindowMaximizeCallback);
+#endif
 
 #ifdef __EMSCRIPTEN__
         data.canvasSelector = std::move(selector);
@@ -666,6 +672,32 @@ namespace miki::platform {
         }
 
         data->owner->pendingEvents_.push_back({data->handle, neko::platform::CloseRequested{}});
+    }
+
+    auto GlfwWindowBackend::WindowIconifyCallback(GLFWwindow* w, int iconified) -> void {
+        auto* data = static_cast<PerWindowData*>(glfwGetWindowUserPointer(w));
+        if (!data || !data->owner) {
+            return;
+        }
+
+        if (iconified) {
+            data->owner->pendingEvents_.push_back({data->handle, neko::platform::Minimized{}});
+        } else {
+            data->owner->pendingEvents_.push_back({data->handle, neko::platform::Restored{}});
+        }
+    }
+
+    auto GlfwWindowBackend::WindowMaximizeCallback(GLFWwindow* w, int maximized) -> void {
+        auto* data = static_cast<PerWindowData*>(glfwGetWindowUserPointer(w));
+        if (!data || !data->owner) {
+            return;
+        }
+
+        if (!maximized) {
+            data->owner->pendingEvents_.push_back({data->handle, neko::platform::Restored{}});
+        }
+        // Maximize itself doesn't get a special event — it's detected via Resize.
+        // The WindowManager tracks maximized state internally via MaximizeWindow().
     }
 
 }  // namespace miki::platform

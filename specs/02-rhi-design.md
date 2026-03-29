@@ -295,6 +295,66 @@ Each backend maintains a `HandlePool<T, Capacity>` — a slot array with free-li
 - **O(1)** lookup (index + generation check)
 - No heap allocation after init (pre-allocated fixed-size pool)
 
+### 3.4 Behavioral Contract
+
+The following invariants are enforced by the handle system and verified by tests (`test_rhi_handle.cpp`):
+
+**Handle value semantics:**
+
+| Rule | Description                                                                                                             |
+| ---- | ----------------------------------------------------------------------------------------------------------------------- |
+| H-1  | Default-constructed `Handle<T>{}` has `value == 0` and `IsValid() == false`                                             |
+| H-2  | Any handle with `value != 0` returns `IsValid() == true`                                                                |
+| H-3  | Equality: two handles compare equal iff their `value` fields are identical                                              |
+| H-4  | Three-way comparison (`<=>`) is defined and consistent with `value` ordering                                            |
+| H-5  | Different tag types (`Handle<TagA>` vs `Handle<TagB>`) are distinct C++ types; cross-type comparison is a compile error |
+
+**Bit packing (`Handle::Pack`):**
+
+| Rule | Description                                                                                                                                               |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HP-1 | `Pack(generation, index, typeTag, backendTag)` round-trips: all fields extractable via `GetIndex()`, `GetGeneration()`, `GetTypeTag()`, `GetBackendTag()` |
+| HP-2 | Index field supports at least 2^20 - 1 = 1,048,575 entries                                                                                                |
+| HP-3 | Generation field supports full `uint16_t` range (0..65535)                                                                                                |
+| HP-4 | Handles with any differing field produce distinct `value`                                                                                                 |
+
+**HandlePool lifecycle:**
+
+| Rule | Description                                                                                                          |
+| ---- | -------------------------------------------------------------------------------------------------------------------- |
+| PL-1 | `Allocate()` returns a valid handle and non-null payload pointer                                                     |
+| PL-2 | `Lookup(h)` on an allocated handle returns the same payload                                                          |
+| PL-3 | `Lookup(Handle{})` (invalid handle) returns `nullptr`                                                                |
+| PL-4 | After `Free(h)`, `Lookup(h)` returns `nullptr`                                                                       |
+| PL-5 | After `Free(h)`, the slot may be reused; if reused, the new handle has a **strictly higher generation** than the old |
+| PL-6 | Stale handles (pre-free generation) are always rejected by `Lookup`, even if the slot was reused                     |
+| PL-7 | All slots up to `Capacity` can be allocated; the (Capacity+1)-th allocation returns an invalid handle                |
+| PL-8 | After freeing all slots, all slots can be re-allocated successfully                                                  |
+| PL-9 | Rapid alloc/free cycles (500+ iterations on a single slot) must not corrupt state                                    |
+
+**Deferred destruction (MarkDead / Reclaim):**
+
+| Rule | Description                                                                                     |
+| ---- | ----------------------------------------------------------------------------------------------- |
+| DD-1 | `MarkDead(h)` invalidates normal `Lookup(h)` (returns `nullptr`) but returns a slot index       |
+| DD-2 | `LookupDead(slotIdx)` accesses the payload of a marked-dead slot (for backend deferred destroy) |
+| DD-3 | `Reclaim(slotIdx)` invalidates `LookupDead(slotIdx)` — the slot is fully freed                  |
+| DD-4 | A marked-dead slot is **not reusable** by `Allocate()` until `Reclaim` is called                |
+| DD-5 | After `Reclaim`, the slot re-enters the free list and can be allocated again                    |
+| DD-6 | Multiple handles can be in the marked-dead state simultaneously; batch `Reclaim` frees all      |
+
+**Thread safety (§17.1.2):**
+
+| Rule | Description                                                                                            |
+| ---- | ------------------------------------------------------------------------------------------------------ |
+| TS-1 | Concurrent `Allocate()` + `Free()` from multiple threads must not corrupt pool state (mutex-protected) |
+| TS-2 | Concurrent `Allocate()` from N threads produces N distinct handles (no duplicates)                     |
+| TS-3 | Concurrent `Free()` of disjoint handles from N threads leaves all freed handles invalid                |
+
+**Type aliases:**
+
+All 18 RHI handle types (`BufferHandle`, `TextureHandle`, `TextureViewHandle`, `SamplerHandle`, `PipelineHandle`, `PipelineLayoutHandle`, `PipelineCacheHandle`, `DescriptorLayoutHandle`, `DescriptorSetHandle`, `ShaderModuleHandle`, `CommandBufferHandle`, `FenceHandle`, `SemaphoreHandle`, `SwapchainHandle`, `QueryPoolHandle`, `AccelStructHandle`, `DeviceMemoryHandle`, `PipelineLibraryPartHandle`) are distinct C++ types. All default-construct to invalid.
+
 ---
 
 ## 4. Device & Capability System
@@ -388,6 +448,61 @@ Vulkan 1.1 + ¬mesh_shader                                                      
 WebGPU (Dawn/wgpu)                                                                  → T3
 OpenGL 4.3+                                                                         → T4
 ```
+
+### 4.4 Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_device.cpp`):
+
+**DeviceHandle:**
+
+| Rule | Description                                                                                                       |
+| ---- | ----------------------------------------------------------------------------------------------------------------- |
+| DH-1 | Default-constructed `DeviceHandle` is invalid (`IsValid() == false`) with `GetBackendType() == BackendType::Mock` |
+| DH-2 | After `Destroy()`, `IsValid()` returns false and `GetBackendType()` resets to `BackendType::Mock`                 |
+| DH-3 | A device created via `CreateDevice` is valid and its `GetBackendType()` matches the requested backend             |
+
+**Capability profile:**
+
+| Rule | Description                                                                                                                                                          |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CP-1 | `GpuCapabilityProfile::backendType` matches the device's `GetBackendType()`                                                                                          |
+| CP-2 | `deviceName` is non-empty; `vendorId` is non-zero                                                                                                                    |
+| CP-3 | `maxTextureSize2D >= 4096`, `maxColorAttachments >= 4`, `maxBoundDescriptorSets >= 4` on all tiers                                                                   |
+| CP-4 | `maxComputeWorkGroupSize[0..2]` are all > 0 on all tiers                                                                                                             |
+| CP-5 | Tier is consistent with backend: `Vulkan14 → Tier1_Vulkan`, `D3D12 → Tier1_D3D12`, `VulkanCompat → Tier2_Compat`, `WebGPU → Tier3_WebGPU`, `OpenGL43 → Tier4_OpenGL` |
+| CP-6 | `SupportsTier(self.tier)` always returns true                                                                                                                        |
+| CP-7 | Tier1 devices support all lower tiers: `SupportsTier(Tier2) == true`, `SupportsTier(Tier3) == true`, `SupportsTier(Tier4) == true`                                   |
+| CP-8 | Tier1 required features: `hasMeshShader`, `hasTimelineSemaphore`, `hasBindless` all true; `maxPushConstantSize >= 128`                                               |
+
+**DeviceFeatureSet (pure CPU):**
+
+| Rule | Description                                                                           |
+| ---- | ------------------------------------------------------------------------------------- |
+| FS-1 | Default-constructed is empty: `IsEmpty() == true`, `Count() == 0`                     |
+| FS-2 | `Add(f)` makes `Has(f)` return true; `Count()` increments                             |
+| FS-3 | `Remove(f)` makes `Has(f)` return false; `Count()` decrements                         |
+| FS-4 | Initializer-list construction sets all listed features                                |
+| FS-5 | `ContainsAll(subset)` returns true iff every feature in `subset` is present in `this` |
+| FS-6 | `Intersection(other)` returns only features present in both sets                      |
+| FS-7 | `Union(other)` returns features present in either set                                 |
+| FS-8 | `ForEach(callback)` iterates over exactly the set features                            |
+| FS-9 | Equality: two sets are equal iff they contain exactly the same features               |
+
+**Feature consistency:**
+
+| Rule | Description                                                                                                                                                                                              |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FC-1 | Boolean flags (`hasMeshShader`, `hasTimelineSemaphore`, `hasAsyncCompute`, `hasSparseBinding`, `hasVariableRateShading`) are consistent with their corresponding query methods (`HasMeshShader()`, etc.) |
+| FC-2 | If `hasMeshShader == true`, then `maxMeshWorkGroupInvocations > 0`, `maxMeshOutputVertices > 0`, `maxMeshOutputPrimitives > 0`; if false, all three are 0                                                |
+
+**Format support:**
+
+| Rule  | Description                                                  |
+| ----- | ------------------------------------------------------------ |
+| FMT-1 | `RGBA8_UNORM` is supported on all backends                   |
+| FMT-2 | `BGRA8_SRGB` (swapchain format) is supported on all backends |
+| FMT-3 | `D32_FLOAT` (depth format) is supported on all backends      |
+| FMT-4 | `Format::Undefined` is never supported                       |
 
 ---
 
@@ -603,6 +718,85 @@ auto GetTextureMemoryRequirements(TextureHandle) -> MemoryRequirements;
 | `AliasBufferMemory`  | `vkBindBufferMemory2` to shared `VkDeviceMemory` | `CreatePlacedResource` in shared `ID3D12Heap` | Fallback: separate allocation |
 | `AliasTextureMemory` | `vkBindImageMemory2` to shared `VkDeviceMemory`  | `CreatePlacedResource` in shared `ID3D12Heap` | Fallback: separate allocation |
 
+### 5.7 Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_resource.cpp`):
+
+**Buffer creation:**
+
+| Rule  | Description                                                                                                              |
+| ----- | ------------------------------------------------------------------------------------------------------------------------ |
+| BUF-1 | `CreateBuffer` succeeds for all valid usage flags: `Vertex`, `Index`, `Uniform`, `Storage`, `TransferSrc \| TransferDst` |
+| BUF-2 | `CreateBuffer` succeeds for combined usage flags (e.g., `Vertex \| TransferDst \| Storage`)                              |
+| BUF-3 | `CreateBuffer` with `size == 0` returns an error                                                                         |
+| BUF-4 | `CreateBuffer` with `transient == true` succeeds (memory aliasing eligible)                                              |
+| BUF-5 | `CreateBuffer` with `memory == GpuToCpu` (readback) succeeds                                                             |
+| BUF-6 | The returned `BufferHandle` is valid (`IsValid() == true`)                                                               |
+| BUF-7 | 100 sequential buffer allocations must all succeed (pool capacity)                                                       |
+| BUF-8 | `BufferDesc.debugName` is accepted without error; backends may use it for debug labeling                                 |
+
+**Buffer destruction:**
+
+| Rule | Description                                                                                           |
+| ---- | ----------------------------------------------------------------------------------------------------- |
+| BD-1 | `DestroyBuffer(invalidHandle)` is a silent no-op (no crash)                                           |
+| BD-2 | Double `DestroyBuffer` on the same handle is a silent no-op (generation mismatch after first destroy) |
+
+**Texture creation:**
+
+| Rule  | Description                                                                        |
+| ----- | ---------------------------------------------------------------------------------- |
+| TEX-1 | `CreateTexture` succeeds for dimensions: `Tex2D`, `Tex3D`, `TexCube`, `Tex2DArray` |
+| TEX-2 | `CreateTexture` succeeds with mip chain (e.g., 256x256 with 9 mip levels)          |
+| TEX-3 | `CreateTexture` succeeds with MSAA (`sampleCount = 4`)                             |
+| TEX-4 | `CreateTexture` succeeds for depth format (`D32_FLOAT`) with `DepthStencil` usage  |
+| TEX-5 | `CreateTexture` succeeds for combined `ColorAttachment \| Sampled` usage           |
+| TEX-6 | `CreateTexture` with `width == 0 && height == 0` returns an error                  |
+| TEX-7 | `CreateTexture` with `transient == true` succeeds (memory aliasing eligible)       |
+
+**Texture view:**
+
+| Rule | Description                                                                |
+| ---- | -------------------------------------------------------------------------- |
+| TV-1 | `CreateTextureView` of a valid texture with default parameters succeeds    |
+| TV-2 | SRGB reinterpret view (`RGBA8_UNORM` texture → `RGBA8_SRGB` view) succeeds |
+| TV-3 | Mip subrange view (e.g., `baseMipLevel=2, mipLevelCount=3`) succeeds       |
+| TV-4 | Depth aspect view (`TextureAspect::Depth`) on a depth texture succeeds     |
+| TV-5 | `CreateTextureView` with an invalid `TextureHandle` returns an error       |
+| TV-6 | Destruction order: view must be destroyed before the parent texture        |
+
+**Sampler:**
+
+| Rule  | Description                                                                                         |
+| ----- | --------------------------------------------------------------------------------------------------- |
+| SAM-1 | Default `SamplerDesc{}` creates a valid sampler                                                     |
+| SAM-2 | Nearest, anisotropic (16x), and comparison samplers all create successfully                         |
+| SAM-3 | All `AddressMode` values (`Repeat`, `MirroredRepeat`, `ClampToEdge`, `ClampToBorder`) are supported |
+| SAM-4 | All `BorderColor` values (`TransparentBlack`, `OpaqueBlack`, `OpaqueWhite`) are supported           |
+
+**Memory requirements & aliasing:**
+
+| Rule  | Description                                                                                    |
+| ----- | ---------------------------------------------------------------------------------------------- |
+| MEM-1 | `GetBufferMemoryRequirements` returns `size > 0` and `alignment > 0`                           |
+| MEM-2 | `GetTextureMemoryRequirements` returns `size > 0` and `alignment > 0`                          |
+| MEM-3 | `CreateMemoryHeap` succeeds on T1/T2 backends; may return error on WebGPU/OpenGL (no aliasing) |
+| MEM-4 | `AliasBufferMemory` on a transient buffer to a shared heap succeeds (T2+)                      |
+
+**Sparse binding (T1 only):**
+
+| Rule | Description                                                                                                               |
+| ---- | ------------------------------------------------------------------------------------------------------------------------- |
+| SP-1 | `GetSparsePageSize()` returns `bufferPageSize > 0` and `imagePageSize > 0` when `DeviceFeature::SparseBinding` is present |
+
+**Memory statistics (§13.5):**
+
+| Rule | Description                                                                                                             |
+| ---- | ----------------------------------------------------------------------------------------------------------------------- |
+| MS-1 | `GetMemoryStats()` returns without error; `totalAllocatedBytes >= 0`                                                    |
+| MS-2 | After allocating a 1MB buffer, `totalAllocationCount` is >= previous value (when backend tracks)                        |
+| MS-3 | `GetMemoryHeapBudgets()` returns >= 1 heap on T1 backends, with at least one device-local heap having `budgetBytes > 0` |
+
 ---
 
 ## 6. Descriptor & Binding System
@@ -765,6 +959,49 @@ public:
 | Vulkan Compat | Large descriptor set with `VK_EXT_descriptor_indexing` (update-after-bind)              |
 | WebGPU        | Per-draw bind group with sampled textures (no true bindless)                            |
 | OpenGL        | `GL_ARB_bindless_texture` if available; else texture array + index                      |
+
+### 6.7 Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_descriptor.cpp`):
+
+**DescriptorLayout:**
+
+| Rule | Description                                                                                               |
+| ---- | --------------------------------------------------------------------------------------------------------- |
+| DL-1 | `CreateDescriptorLayout` with a single `UniformBuffer` binding succeeds and returns a valid handle        |
+| DL-2 | `CreateDescriptorLayout` with multiple bindings (`UniformBuffer` + `SampledTexture` + `Sampler`) succeeds |
+| DL-3 | `CreateDescriptorLayout` with `count = 0` (runtime-sized / bindless) succeeds on T1 backends              |
+| DL-4 | `CreateDescriptorLayout` with `pushDescriptor = true` succeeds on Vulkan backends                         |
+| DL-5 | `CreateDescriptorLayout` with empty bindings (`bindings.empty()`) succeeds (empty layout)                 |
+| DL-6 | `DestroyDescriptorLayout(invalidHandle)` is a silent no-op                                                |
+
+**PipelineLayout:**
+
+| Rule  | Description                                                                               |
+| ----- | ----------------------------------------------------------------------------------------- |
+| PLY-1 | `CreatePipelineLayout` with a single descriptor layout succeeds                           |
+| PLY-2 | `CreatePipelineLayout` with push constant ranges succeeds                                 |
+| PLY-3 | `CreatePipelineLayout` with multiple descriptor layouts (up to 4 sets) succeeds           |
+| PLY-4 | `CreatePipelineLayout` with empty descriptor layouts succeeds (push-constant-only layout) |
+| PLY-5 | `DestroyPipelineLayout(invalidHandle)` is a silent no-op                                  |
+
+**DescriptorSet:**
+
+| Rule | Description                                                                           |
+| ---- | ------------------------------------------------------------------------------------- |
+| DS-1 | `CreateDescriptorSet` with `UniformBuffer` binding succeeds                           |
+| DS-2 | `CreateDescriptorSet` with `SampledTexture` binding (texture view + sampler) succeeds |
+| DS-3 | `CreateDescriptorSet` with `StorageBuffer` binding succeeds                           |
+| DS-4 | `UpdateDescriptorSet` after creation updates the binding in-place                     |
+| DS-5 | Multiple descriptor sets can be created from the same layout                          |
+| DS-6 | `DestroyDescriptorSet(invalidHandle)` is a silent no-op                               |
+
+**Destruction order:**
+
+| Rule | Description                                                                   |
+| ---- | ----------------------------------------------------------------------------- |
+| DO-1 | Descriptor sets must be destroyed before their parent layout                  |
+| DO-2 | Pipeline layouts must be destroyed before their referenced descriptor layouts |
 
 ---
 
@@ -978,6 +1215,77 @@ void Present(SwapchainHandle, SemaphoreHandle renderFinished);
 
 Queue creation and family selection are internal to the device — no explicit `GetQueue()` API. This keeps the public interface thin while the backend selects optimal queue families at `CreateDevice` time. Timeline semaphores (`SemaphoreSubmitInfo::value`) synchronize work across different queue types.
 
+### 7.5 Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_command_buffer.cpp`, `test_rhi_integration.cpp`):
+
+**CommandBuffer lifecycle:**
+
+| Rule | Description                                                                                 |
+| ---- | ------------------------------------------------------------------------------------------- |
+| CB-1 | `CreateCommandBuffer({.type = Graphics})` succeeds and returns a valid handle               |
+| CB-2 | `CreateCommandBuffer({.type = Compute})` succeeds and returns a valid handle                |
+| CB-3 | `CreateCommandBuffer({.type = Transfer})` succeeds and returns a valid handle               |
+| CB-4 | `DestroyCommandBuffer(invalidHandle)` is a silent no-op                                     |
+| CB-5 | 100 command buffers (mixed queue types) can be created and destroyed in batch without error |
+
+**CommandBufferDesc defaults (pure CPU):**
+
+| Rule  | Description                                                                                |
+| ----- | ------------------------------------------------------------------------------------------ |
+| CBD-1 | Default `CommandBufferDesc{}` has `.type == QueueType::Graphics` and `.secondary == false` |
+
+**SubmitDesc defaults (pure CPU):**
+
+| Rule | Description                                                                                                                    |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------ |
+| SD-1 | Default `SubmitDesc{}` has empty `commandBuffers`, empty `waitSemaphores`, empty `signalSemaphores`, and invalid `signalFence` |
+
+**BufferBarrierDesc defaults (pure CPU):**
+
+| Rule  | Description                                                                           |
+| ----- | ------------------------------------------------------------------------------------- |
+| BBD-1 | Default `BufferBarrierDesc{}` has `srcStage == TopOfPipe`, `dstStage == BottomOfPipe` |
+| BBD-2 | Default `BufferBarrierDesc{}` has `srcAccess == None`, `dstAccess == None`            |
+| BBD-3 | Default `BufferBarrierDesc{}` has `offset == 0`, `size == kWholeSize`                 |
+
+**TextureBarrierDesc defaults (pure CPU):**
+
+| Rule  | Description                                                                           |
+| ----- | ------------------------------------------------------------------------------------- |
+| TBD-1 | Default `TextureBarrierDesc{}` has `oldLayout == Undefined`, `newLayout == Undefined` |
+| TBD-2 | Default `TextureBarrierDesc{}` has `srcQueue == Graphics`, `dstQueue == Graphics`     |
+
+**BufferTextureCopyRegion defaults (pure CPU):**
+
+| Rule  | Description                                                                                                   |
+| ----- | ------------------------------------------------------------------------------------------------------------- |
+| BTC-1 | Default `BufferTextureCopyRegion{}` has `bufferOffset == 0`, `bufferRowLength == 0`, `bufferImageHeight == 0` |
+| BTC-2 | Default `BufferTextureCopyRegion{}` has `textureOffset == {0,0,0}`, `textureExtent == {0,0,0}`                |
+
+**Submission:**
+
+| Rule  | Description                                                                              |
+| ----- | ---------------------------------------------------------------------------------------- |
+| SUB-1 | `Submit(QueueType::Graphics, {})` (empty submit) succeeds without error                  |
+| SUB-2 | `Submit` with `signalFence` followed by `WaitFence` completes without deadlock           |
+| SUB-3 | Sequential submits with separate fences maintain ordering: fence1 signals before fence2  |
+| SUB-4 | `WaitIdle()` after multiple submits (Graphics + Compute) drains all queues without error |
+
+**Buffer mapping (integration):**
+
+| Rule  | Description                                                         |
+| ----- | ------------------------------------------------------------------- |
+| MAP-1 | `MapBuffer` on a `CpuToGpu` buffer returns a valid non-null pointer |
+| MAP-2 | `UnmapBuffer` after `MapBuffer` succeeds without error              |
+
+**Stress tests:**
+
+| Rule  | Description                                                                                         |
+| ----- | --------------------------------------------------------------------------------------------------- |
+| STR-1 | 500 rapid buffer create/destroy cycles must all succeed                                             |
+| STR-2 | 50 mixed resource create/destroy cycles (buffer + texture + sampler per iteration) must all succeed |
+
 ---
 
 ## 8. Pipeline System
@@ -1142,6 +1450,84 @@ auto LinkGraphicsPipeline(const LinkedPipelineDesc&) -> Result<PipelineHandle>;
 
 **Usage pattern**: RenderGraph pre-compiles vertex input and fragment output parts at startup (these are shared across many materials). Per-material fragment shader parts compile on first use. Linking combines 4 cached parts with near-zero latency.
 
+### 8.6 Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_pipeline.cpp`):
+
+**Pipeline cache:**
+
+| Rule | Description                                                                                                                          |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| PC-1 | `CreatePipelineCache({})` (empty initial data) succeeds and returns a valid handle                                                   |
+| PC-2 | `GetPipelineCacheData` on an empty cache returns without crash (may return empty or small header blob)                               |
+| PC-3 | `CreatePipelineCache(blob)` from previously exported data succeeds if the blob is valid; may fail gracefully if blob is incompatible |
+| PC-4 | `DestroyPipelineCache` followed by handle invalidation                                                                               |
+
+**GraphicsPipelineDesc defaults (pure CPU):**
+
+| Rule   | Description                                                                 |
+| ------ | --------------------------------------------------------------------------- |
+| GPD-1  | `topology == PrimitiveTopology::TriangleList`                               |
+| GPD-2  | `polygonMode == PolygonMode::Fill`                                          |
+| GPD-3  | `cullMode == CullMode::Back`                                                |
+| GPD-4  | `frontFace == FrontFace::CounterClockwise`                                  |
+| GPD-5  | `depthTestEnable == true`, `depthWriteEnable == true`                       |
+| GPD-6  | `depthCompareOp == CompareOp::Less`                                         |
+| GPD-7  | `stencilTestEnable == false`                                                |
+| GPD-8  | `sampleCount == 1`, `viewMask == 0`                                         |
+| GPD-9  | `IsMeshShaderPipeline() == false` when `meshShader` is invalid              |
+| GPD-10 | `IsMeshShaderPipeline() == true` when `meshShader` is set to a valid handle |
+
+**VertexInputState (pure CPU):**
+
+| Rule  | Description                                                                               |
+| ----- | ----------------------------------------------------------------------------------------- |
+| VIS-1 | Default `VertexInputState{}` has empty `bindings` and `attributes`                        |
+| VIS-2 | Single binding + single attribute configuration is representable                          |
+| VIS-3 | Interleaved layout (1 binding, 3 attributes at different offsets) is representable        |
+| VIS-4 | Separate streams (2 bindings: `PerVertex` + `PerInstance`, 2 attributes) is representable |
+
+**ColorAttachmentBlend (pure CPU):**
+
+| Rule | Description                                                                                        |
+| ---- | -------------------------------------------------------------------------------------------------- |
+| BL-1 | Default `ColorAttachmentBlend{}` has `blendEnable == false` and `writeMask == ColorWriteMask::All` |
+| BL-2 | Alpha blend preset (`SrcAlpha / OneMinusSrcAlpha / Add`) is representable                          |
+| BL-3 | Additive blend preset (`One / One / Add`) is representable                                         |
+
+**ComputePipelineDesc defaults (pure CPU):**
+
+| Rule  | Description                                                                              |
+| ----- | ---------------------------------------------------------------------------------------- |
+| CPD-1 | Default `ComputePipelineDesc{}` has invalid `computeShader` and invalid `pipelineLayout` |
+
+**RayTracingPipelineDesc defaults (pure CPU):**
+
+| Rule  | Description                                                     |
+| ----- | --------------------------------------------------------------- |
+| RPD-1 | Default `RayTracingPipelineDesc{}` has `maxRecursionDepth == 1` |
+
+**Dynamic rendering descriptors (pure CPU):**
+
+| Rule  | Description                                                                                                 |
+| ----- | ----------------------------------------------------------------------------------------------------------- |
+| RND-1 | Default `RenderingAttachment{}` has `loadOp == Clear` and `storeOp == Store`                                |
+| RND-2 | Default `RenderingDesc{}` has `viewMask == 0`, `depthAttachment == nullptr`, `stencilAttachment == nullptr` |
+
+**Pipeline library (split compilation, pure CPU):**
+
+| Rule  | Description                                                                                                                              |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| PLL-1 | Default `PipelineLibraryPartDesc{}` has `part == PipelineLibraryPart::VertexInput`                                                       |
+| PLL-2 | Default `LinkedPipelineDesc{}` has all four part handles (`vertexInput`, `preRasterization`, `fragmentShader`, `fragmentOutput`) invalid |
+
+**Work graph descriptors (pure CPU):**
+
+| Rule | Description                                                                                                                              |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| WG-1 | Default `WorkGraphDesc{}` has invalid `workGraphPipeline`, invalid `backingMemory`, `backingMemoryOffset == 0`, `backingMemorySize == 0` |
+| WG-2 | Default `DispatchGraphDesc{}` has invalid `inputRecords` and `numRecords == 0`                                                           |
+
 ---
 
 ## 9. Synchronization Primitives
@@ -1219,6 +1605,50 @@ struct PipelineBarrierDesc {
 
 The D3D12 backend detects Enhanced Barriers support at init (`ID3D12Device10::CheckFeatureSupport`) and falls back to legacy `ResourceBarrier` if unavailable. The RHI public API remains unchanged — the mapping is internal to the D3D12 backend.
 
+### 9.5 Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_sync.cpp`, `test_rhi_integration.cpp`):
+
+**Fence (CPU-GPU):**
+
+| Rule | Description                                                                 |
+| ---- | --------------------------------------------------------------------------- |
+| FN-1 | `CreateFence(false)` succeeds; the returned handle is valid                 |
+| FN-2 | `CreateFence(true)` succeeds; `GetFenceStatus` returns `true` (signaled)    |
+| FN-3 | `GetFenceStatus` on an unsignaled fence returns `false`                     |
+| FN-4 | `ResetFence` on a signaled fence makes `GetFenceStatus` return `false`      |
+| FN-5 | `WaitFence(signaled, timeout=0)` returns immediately without error          |
+| FN-6 | `WaitFence(unsignaled, timeout=0)` returns immediately (timeout, not error) |
+| FN-7 | 10 fences can be created and destroyed in sequence without error            |
+| FN-8 | `DestroyFence(invalidHandle)` is a silent no-op                             |
+
+**Semaphore (GPU-GPU):**
+
+| Rule  | Description                                                                                                                                  |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| SEM-1 | `CreateSemaphore({.type = Binary})` succeeds and returns a valid handle                                                                      |
+| SEM-2 | `CreateSemaphore({.type = Timeline, .initialValue = V})` succeeds (requires `DeviceFeature::TimelineSemaphore`)                              |
+| SEM-3 | `GetSemaphoreValue` on a freshly created timeline semaphore returns the `initialValue`                                                       |
+| SEM-4 | `SignalSemaphore(sem, V)` from CPU advances the timeline; `GetSemaphoreValue >= V` afterward                                                 |
+| SEM-5 | `WaitSemaphore(sem, V, timeout=0)` returns immediately if current value >= V                                                                 |
+| SEM-6 | Timeline semaphore values are monotonically increasing: signaling 1..10 in sequence always yields `GetSemaphoreValue >= v` after each signal |
+| SEM-7 | 10 binary semaphores can be created and destroyed in sequence without error                                                                  |
+
+**Timeline semaphore multi-queue sync (integration):**
+
+| Rule  | Description                                                                                                                                            |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| TMS-1 | Transfer queue submit signals timeline value=1; Graphics queue submit waits on value=1 and signals value=2; after fence wait, `GetSemaphoreValue >= 2` |
+| TMS-2 | `SemaphoreSubmitInfo` correctly propagates `stageMask` for wait/signal stages                                                                          |
+
+**Barrier descriptor defaults (pure CPU):**
+
+| Rule | Description                                                                                                                                                       |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BR-1 | Default `BufferBarrierDesc{}`: `srcStage == TopOfPipe`, `dstStage == BottomOfPipe`, `srcAccess == None`, `dstAccess == None`, `offset == 0`, `size == kWholeSize` |
+| BR-2 | Default `TextureBarrierDesc{}`: `oldLayout == Undefined`, `newLayout == Undefined`, `srcQueue == Graphics`, `dstQueue == Graphics`                                |
+| BR-3 | Default `PipelineBarrierDesc{}`: `srcStage == TopOfPipe`, `dstStage == BottomOfPipe`                                                                              |
+
 ---
 
 ## 10. Acceleration Structure (T1 Only)
@@ -1283,13 +1713,109 @@ void CmdBuildTLAS(AccelStructHandle, BufferHandle scratch);
 void CmdUpdateBLAS(AccelStructHandle, BufferHandle scratch);  // Refit
 ```
 
+### 10.1 Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_accel_struct.cpp`):
+
+**AccelStructInstance layout (compile-time):**
+
+| Rule  | Description                                                                                                           |
+| ----- | --------------------------------------------------------------------------------------------------------------------- |
+| ASI-1 | `sizeof(AccelStructInstance) == 64` (matches `VkAccelerationStructureInstanceKHR` / `D3D12_RAYTRACING_INSTANCE_DESC`) |
+
+**Descriptor defaults (pure CPU):**
+
+| Rule  | Description                                                                                                                         |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| AGD-1 | Default `AccelStructGeometryDesc{}` has `type == Triangles`, `vertexFormat == RGBA32_FLOAT`, `indexType == Uint32`, `flags == None` |
+| AGD-2 | Default `BLASDesc{}` has `flags == PreferFastTrace`                                                                                 |
+| AGD-3 | Default `TLASDesc{}` has `flags == PreferFastTrace`, `instanceCount == 0`                                                           |
+| AGD-4 | Default `AccelStructBuildSizes{}` has all three sizes == 0                                                                          |
+| AGD-5 | Default `DecompressBufferDesc{}` has `format == GDeflate`                                                                           |
+
+**BLAS build size query (T1, requires `DeviceFeature::AccelerationStructure`):**
+
+| Rule  | Description                                                                                                         |
+| ----- | ------------------------------------------------------------------------------------------------------------------- |
+| BBS-1 | `GetBLASBuildSizes` with valid triangle geometry returns `accelerationStructureSize > 0` and `buildScratchSize > 0` |
+
+**TLAS build size query (T1):**
+
+| Rule  | Description                                                                                                     |
+| ----- | --------------------------------------------------------------------------------------------------------------- |
+| TBS-1 | `GetTLASBuildSizes` with `instanceCount > 0` returns `accelerationStructureSize > 0` and `buildScratchSize > 0` |
+
+**BLAS/TLAS creation (T1):**
+
+| Rule | Description                                                                           |
+| ---- | ------------------------------------------------------------------------------------- |
+| AC-1 | `CreateBLAS` with valid geometry returns a valid `AccelStructHandle`                  |
+| AC-2 | `CreateTLAS` with valid instance buffer and count returns a valid `AccelStructHandle` |
+| AC-3 | `DestroyAccelStruct(invalidHandle)` is a silent no-op                                 |
+
 ---
 
-## 11. Swapchain & Multi-Window Surface Management
+## 11. Query Pool
+
+Query pools provide GPU-side measurement for timestamps, occlusion, and pipeline statistics. Command-level operations (`CmdBeginQuery`, `CmdEndQuery`, `CmdWriteTimestamp`, `CmdResetQueryPool`) are defined in §7.2.
+
+```cpp
+enum class QueryType : uint8_t {
+    Timestamp,
+    Occlusion,
+    PipelineStatistics,   // Requires DeviceFeature::PipelineStatistics
+};
+
+struct QueryPoolDesc {
+    QueryType type;
+    uint32_t  count;      // Number of query slots
+};
+
+auto CreateQueryPool(const QueryPoolDesc&) -> Result<QueryPoolHandle>;
+void DestroyQueryPool(QueryPoolHandle);
+auto GetTimestampPeriod() -> double;  // Nanoseconds per timestamp tick
+```
+
+**Backend mapping**:
+
+| RHI                  | Vulkan 1.4                                | D3D12                                       | OpenGL                       |
+| -------------------- | ----------------------------------------- | ------------------------------------------- | ---------------------------- |
+| `CreateQueryPool`    | `vkCreateQueryPool`                       | `ID3D12Device::CreateQueryHeap`             | `glGenQueries`               |
+| `GetTimestampPeriod` | `VkPhysicalDeviceLimits::timestampPeriod` | `ID3D12CommandQueue::GetTimestampFrequency` | `GL_TIMESTAMP` (ns directly) |
+
+### Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_query.cpp`):
+
+**QueryPoolDesc defaults (pure CPU):**
+
+| Rule | Description                                                                   |
+| ---- | ----------------------------------------------------------------------------- |
+| QD-1 | Default `QueryPoolDesc{}` has `type == QueryType::Timestamp` and `count == 0` |
+
+**Query pool creation:**
+
+| Rule | Description                                                                                                         |
+| ---- | ------------------------------------------------------------------------------------------------------------------- |
+| QP-1 | `CreateQueryPool({.type = Timestamp, .count = 64})` succeeds and returns a valid handle                             |
+| QP-2 | `CreateQueryPool({.type = Occlusion, .count = 16})` succeeds                                                        |
+| QP-3 | `CreateQueryPool({.type = PipelineStatistics, .count = 8})` succeeds (requires `DeviceFeature::PipelineStatistics`) |
+| QP-4 | `CreateQueryPool({.type = Timestamp, .count = 0})` returns an error (zero-count pool is invalid)                    |
+| QP-5 | `DestroyQueryPool(invalidHandle)` is a silent no-op                                                                 |
+
+**Timestamp period:**
+
+| Rule | Description                                                                         |
+| ---- | ----------------------------------------------------------------------------------- |
+| TP-1 | `GetTimestampPeriod()` returns a value > 0.0 (nanoseconds per tick) on all backends |
+
+---
+
+## 12. Swapchain & Multi-Window Surface Management
 
 > **Companion document**: `specs/01-window-manager.md` — tree-structured multi-window lifecycle, `SurfaceManager`, cascade destruction protocol, GPU resource sharing model.
 
-### 11.1 Low-Level Swapchain API (Device-Level)
+### 12.1 Low-Level Swapchain API (Device-Level)
 
 The raw swapchain API lives on the device. Higher-level abstractions (`RenderSurface`, `SurfaceManager`) wrap these calls.
 
@@ -1317,7 +1843,7 @@ auto GetSwapchainTexture(SwapchainHandle, uint32_t imageIndex) -> TextureHandle;
 void Present(SwapchainHandle, std::span<const SemaphoreHandle> waitSemaphores);
 ```
 
-### 11.2 Multi-Window Architecture
+### 12.2 Multi-Window Architecture
 
 Multi-window rendering uses three decoupled subsystems (see companion document for full API):
 
@@ -1334,9 +1860,57 @@ Multi-window rendering uses three decoupled subsystems (see companion document f
 - **Three-concern separation**: `WindowManager` never touches GPU; `SurfaceManager` never creates OS windows; events flow through `WindowManager` and are dispatched by application code
 - **Runtime backend switching**: `SurfaceManager` detach/reattach cycle preserves OS windows while swapping GPU backend (§1.4)
 
+### 12.3 Behavioral Contract
+
+The following invariants are verified by tests (`test_rhi_swapchain.cpp`):
+
+> **Note**: Actual swapchain creation requires a window (`NativeWindowHandle`). GPU-dependent swapchain tests live in `test_surface_integration.cpp`. The tests below validate struct defaults and enum layouts only.
+
+**SwapchainDesc defaults (pure CPU):**
+
+| Rule  | Description                                                         |
+| ----- | ------------------------------------------------------------------- |
+| SWD-1 | `width == 0`, `height == 0` (must be set by caller before creation) |
+| SWD-2 | `preferredFormat == Format::BGRA8_SRGB`                             |
+| SWD-3 | `presentMode == PresentMode::Fifo`                                  |
+| SWD-4 | `colorSpace == SurfaceColorSpace::SRGB`                             |
+| SWD-5 | `imageCount == 2` (double buffering default)                        |
+| SWD-6 | `allowTearing == false`                                             |
+| SWD-7 | `debugName == nullptr`                                              |
+
+**SwapchainDesc custom values (pure CPU):**
+
+| Rule  | Description                                                                                                                                           |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SWC-1 | All fields can be set via designated initializers: width/height, `RGBA16_FLOAT`, `Mailbox`, `scRGBLinear`, imageCount=3, allowTearing=true, debugName |
+
+**RenderSurfaceConfig defaults (pure CPU):**
+
+| Rule  | Description                             |
+| ----- | --------------------------------------- |
+| RSC-1 | `presentMode == PresentMode::Fifo`      |
+| RSC-2 | `colorSpace == SurfaceColorSpace::SRGB` |
+| RSC-3 | `preferredFormat == Format::BGRA8_SRGB` |
+| RSC-4 | `vrrMode == VRRMode::Off`               |
+| RSC-5 | `imageCount == ImageCountHint::Auto`    |
+
+**RenderSurfaceConfig HDR10 preset (pure CPU):**
+
+| Rule  | Description                                                                                                       |
+| ----- | ----------------------------------------------------------------------------------------------------------------- |
+| RSH-1 | `HDR10_ST2084` color space, `RGBA16_FLOAT` format, `AdaptiveSync` VRR, `Triple` image count are all representable |
+
+**Enum value stability (ABI contract):**
+
+| Enum                | Values                                               |
+| ------------------- | ---------------------------------------------------- |
+| `SurfaceColorSpace` | `SRGB == 0`, `HDR10_ST2084 == 1`, `scRGBLinear == 2` |
+| `VRRMode`           | `Off == 0`, `AdaptiveSync == 1`, `GSync == 2`        |
+| `ImageCountHint`    | `Auto == 0`, `Minimal == 1`, `Triple == 2`           |
+
 ---
 
-## 12. Shader Module
+## 13. Shader Module
 
 ```cpp
 enum class ShaderStage : uint32_t {
@@ -1365,7 +1939,7 @@ struct ShaderModuleDesc {
 auto CreateShaderModule(const ShaderModuleDesc&) -> Result<ShaderModuleHandle>;
 ```
 
-### 12.1 Slang Integration Protocol
+### 13.1 Slang Integration Protocol
 
 miki uses **Slang** as the single shader source language. The RHI accepts pre-compiled blobs; Slang compilation is external to the RHI but follows a well-defined integration protocol.
 
@@ -1390,7 +1964,7 @@ miki uses **Slang** as the single shader source language. The RHI accepts pre-co
 1. **Slang layer**: Rewrites `[vk::push_constant]` declarations to target-appropriate form (WGSL `var<uniform>`, GLSL UBO)
 2. **RHI layer**: Runtime protection — validates push constant size ≤ `maxPushConstantSize`, asserts no overflow
 
-### 12.2 Shader Cache Architecture (Dual-Layer)
+### 13.2 Shader Cache Architecture (Dual-Layer)
 
 miki employs a **dual-layer caching strategy** to minimize shader compilation latency:
 
@@ -1459,9 +2033,9 @@ The RHI exposes `PipelineCacheHandle` (§8.4) which wraps:
 
 ---
 
-## 13. Memory Management Strategy
+## 14. Memory Management Strategy
 
-### 13.1 Allocator Architecture
+### 14.1 Allocator Architecture
 
 ```
 ┌────────────────────────────────────────────────┐
@@ -1480,7 +2054,7 @@ The RHI exposes `PipelineCacheHandle` (§8.4) which wraps:
 | WebGPU        | API-managed                      | `createBuffer` / `createTexture` (no explicit memory)                                 |
 | OpenGL        | API-managed                      | `glBufferStorage` / `glTexStorage2D` (immutable)                                      |
 
-### 13.2 Staging Ring Buffer
+### 14.2 Staging Ring Buffer
 
 Per-frame ring buffer for CPU→GPU uploads:
 
@@ -1505,7 +2079,7 @@ class StagingRing {
 };
 ```
 
-### 13.3 Readback Ring Buffer
+### 14.3 Readback Ring Buffer
 
 Per-frame ring buffer for GPU→CPU readback (symmetric to `StagingRing`). Used by `GpuProfiler` (timestamp results), `ShaderPrintf` (SSBO readback), `GpuBreadcrumbs` (marker state), and `Telemetry`.
 
@@ -1536,7 +2110,7 @@ class ReadbackRing {
 | WebGPU         | `mapAsync(GPUMapMode::READ)` on staging buffer (async callback)      |
 | OpenGL         | `glGetBufferSubData` or persistent-mapped `GL_MAP_READ_BIT` (GL 4.4) |
 
-### 13.4 Transient Resource Pool (RenderGraph-Owned)
+### 14.4 Transient Resource Pool (RenderGraph-Owned)
 
 RenderGraph allocates transient textures (GBuffer, HiZ, etc.) from a pool that aliases non-overlapping lifetimes:
 
@@ -1555,7 +2129,7 @@ The RHI provides the primitives (see §5.6 Transient & Memory Aliasing API):
 
 Aliasing policy (lifetime analysis, group assignment, heap sizing) is entirely in RenderGraph — RHI provides primitives only.
 
-### 13.5 Memory Statistics API
+### 14.5 Memory Statistics API
 
 Debug and profiling layers (`MemProfiler`, `Telemetry`) need GPU memory budget and usage data. Without an RHI-level query, these layers would bypass the abstraction and call VMA / D3D12MA / DXGI directly — violating the Thin Abstraction boundary.
 
@@ -1588,9 +2162,11 @@ struct MemoryStats {
 
 **Frequency**: These are **not** hot-path calls. Expected usage: once per frame by `MemProfiler::Snapshot()` (~1us). No caching needed at the RHI level.
 
+**Behavioral contract**: See §5.7 rules MS-1 through MS-3 for memory statistics invariants verified by tests.
+
 ---
 
-## 14. Error Handling
+## 15. Error Handling
 
 All fallible operations return `std::expected<T, RhiError>`:
 
@@ -1617,9 +2193,9 @@ No exceptions in hot paths. `DeviceLost` triggers graceful recovery (re-create d
 
 ---
 
-## 15. Debug & Profiling Integration
+## 16. Debug & Profiling Integration
 
-### 15.1 Object Naming
+### 16.1 Object Naming
 
 All `*Desc` structs have `const char* debugName`. Backends forward to:
 
@@ -1630,7 +2206,7 @@ All `*Desc` structs have `const char* debugName`. Backends forward to:
 | OpenGL  | `glObjectLabel`                |
 | WebGPU  | `label` field                  |
 
-### 15.2 Debug Labels
+### 16.2 Debug Labels
 
 `CmdBeginDebugLabel` / `CmdEndDebugLabel` map to:
 
@@ -1641,7 +2217,7 @@ All `*Desc` structs have `const char* debugName`. Backends forward to:
 | OpenGL  | `glPushDebugGroup` / `glPopDebugGroup` |
 | WebGPU  | `pushDebugGroup` / `popDebugGroup`     |
 
-### 15.3 GPU Timestamps
+### 16.3 GPU Timestamps
 
 ```cpp
 auto CreateQueryPool(QueryType type, uint32_t count) -> Result<QueryPoolHandle>;
@@ -1651,9 +2227,9 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 
 ---
 
-## 16. Per-Tier Optimization Paths
+## 17. Per-Tier Optimization Paths
 
-### 16.1 Tier1 Vulkan 1.4 — Maximum Performance Path
+### 17.1 Tier1 Vulkan 1.4 — Maximum Performance Path
 
 | Feature            | Implementation                                                                                                                                                                      |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1670,7 +2246,7 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 | Sparse binding     | `VkSparseBufferMemoryBindInfo` for streaming pages                                                                                                                                  |
 | Subgroup ops       | `VK_KHR_shader_subgroup_extended_types` (core 1.2)                                                                                                                                  |
 
-### 16.2 Tier1 D3D12 — Maximum Performance Path
+### 17.2 Tier1 D3D12 — Maximum Performance Path
 
 | Feature            | Implementation                                                |
 | ------------------ | ------------------------------------------------------------- |
@@ -1686,7 +2262,7 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 | VRS                | `RSSetShadingRate` + `RSSetShadingRateImage`                  |
 | Work graphs        | `DispatchGraph` for GPU-driven work (future)                  |
 
-### 16.3 Tier2 Vulkan Compat — Broad Compatibility
+### 17.3 Tier2 Vulkan Compat — Broad Compatibility
 
 | Feature            | Implementation                                                        |
 | ------------------ | --------------------------------------------------------------------- |
@@ -1698,7 +2274,7 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 | No async compute   | Single queue                                                          |
 | No ray tracing     | CPU BVH fallback                                                      |
 
-### 16.4 Tier3 WebGPU — Browser Target
+### 17.4 Tier3 WebGPU — Browser Target
 
 | Feature            | Implementation                                        |
 | ------------------ | ----------------------------------------------------- |
@@ -1711,7 +2287,7 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 | Shader             | WGSL (Slang → WGSL)                                   |
 | Single queue       | No async compute                                      |
 
-### 16.5 Tier4 OpenGL 4.3 — Legacy / VM Target
+### 17.5 Tier4 OpenGL 4.3 — Legacy / VM Target
 
 | Feature            | Implementation                                                     |
 | ------------------ | ------------------------------------------------------------------ |
@@ -1725,7 +2301,7 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 
 ---
 
-## 17. Thread Safety Model
+## 18. Thread Safety Model
 
 | Operation                     | Thread Safety                                         |
 | ----------------------------- | ----------------------------------------------------- |
@@ -1742,9 +2318,9 @@ auto GetTimestampPeriod() -> double;  // Nanoseconds per tick
 
 ---
 
-## 17.1 Implementation Suggestions
+### 18.1 Implementation Suggestions
 
-### 17.1.1 CRTP Compile-Time Optimization
+#### 18.1.1 CRTP Compile-Time Optimization
 
 The CRTP design eliminates virtual dispatch overhead but can increase compile time due to template instantiation. Recommended mitigation:
 
@@ -1776,7 +2352,7 @@ extern template class DeviceBase<OpenGLDevice>;
 - Explicit instantiation prevents code bloat in translation units
 - Backend selection remains compile-time (no vtable)
 
-### 17.1.2 Handle Pool Lock Strategy
+#### 18.1.2 Handle Pool Lock Strategy
 
 Resource creation is **not** hot path (startup / level load). Use a simple `std::mutex` for
 correctness and simplicity. A lock-free free-list with bare `atomic<uint32_t>` head pointer
@@ -1813,7 +2389,7 @@ public:
 contention is unmeasurable (<1μs/frame). `Lookup` is lock-free — only a generation check on
 a stable slot, safe for concurrent reads. This avoids ABA entirely with zero complexity cost.
 
-### 17.1.3 Command Buffer Recording Validation
+#### 18.1.3 Command Buffer Recording Validation
 
 In debug builds, add lightweight state validation:
 
@@ -1831,9 +2407,9 @@ void CommandBuffer::CmdDraw(uint32_t vertexCount, uint32_t instanceCount) {
 
 ---
 
-## 18. Extension & Future-Proofing
+## 19. Extension & Future-Proofing
 
-### 18.1 Vulkan Extension Negotiation
+### 19.1 Vulkan Extension Negotiation
 
 ```cpp
 struct VulkanDeviceExtensions {
@@ -1851,7 +2427,7 @@ struct VulkanDeviceExtensions {
 };
 ```
 
-### 18.2 Future Extensions
+### 19.2 Future Extensions
 
 | Feature            | Vulkan                                                      | D3D12                         | RHI Impact                                               |
 | ------------------ | ----------------------------------------------------------- | ----------------------------- | -------------------------------------------------------- |
@@ -1892,7 +2468,7 @@ void CmdDecompressBuffer(const DecompressBufferDesc&);
 
 ---
 
-## 19. Naming Conventions & Code Style
+## 20. Naming Conventions & Code Style
 
 ```
 Namespace:        miki::rhi
@@ -1907,7 +2483,7 @@ Files:            PascalCase.h / PascalCase.cpp
 
 ---
 
-## 20. Summary: Design Decisions & Rationale
+## 21. Summary: Design Decisions & Rationale
 
 | Decision                                                                   | Alternatives Considered                                                         | Rationale                                                                                                                                                                                                                                                                                          |
 | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
