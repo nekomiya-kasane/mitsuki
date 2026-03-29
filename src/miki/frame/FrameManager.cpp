@@ -408,6 +408,113 @@ namespace miki::frame {
         return EndFrame(std::span<const rhi::CommandBufferHandle>{cmds});
     }
 
+    auto FrameManager::EndFrameSplit(std::span<const SubmitBatch> iBatches) -> core::Result<void> {
+        assert(impl_ && "FrameManager used after move");
+        if (iBatches.empty()) {
+            return EndFrame(std::span<const rhi::CommandBufferHandle>{});
+        }
+
+        auto& slot = impl_->slots[impl_->frameIndex];
+        uint64_t lastTimelineValue = impl_->currentTimelineValue;
+
+        for (size_t i = 0; i < iBatches.size(); ++i) {
+            bool isFirst = (i == 0);
+            bool isLast = (i == iBatches.size() - 1);
+            auto& batch = iBatches[i];
+
+            std::vector<rhi::SemaphoreSubmitInfo> waits;
+            std::vector<rhi::SemaphoreSubmitInfo> signals;
+
+            if (impl_->IsTimeline()) {
+                // First batch: wait on swapchain acquire + cross-queue sync points
+                if (isFirst) {
+                    if (impl_->surface && slot.imageAvail.IsValid()) {
+                        waits.push_back(
+                            {.semaphore = slot.imageAvail,
+                             .value = 0,
+                             .stageMask = rhi::PipelineStage::ColorAttachmentOutput}
+                        );
+                    }
+                    if (impl_->transferSync.semaphore.IsValid() && impl_->transferSync.value > 0) {
+                        waits.push_back(
+                            {.semaphore = impl_->transferSync.semaphore,
+                             .value = impl_->transferSync.value,
+                             .stageMask = rhi::PipelineStage::Transfer}
+                        );
+                    }
+                }
+
+                // Non-last batches that wait on compute: inject compute wait
+                if (isLast && impl_->computeSync.semaphore.IsValid() && impl_->computeSync.value > 0) {
+                    waits.push_back(
+                        {.semaphore = impl_->computeSync.semaphore,
+                         .value = impl_->computeSync.value,
+                         .stageMask = rhi::PipelineStage::ComputeShader}
+                    );
+                }
+
+                // Signal partial timeline if requested (or always on last)
+                if (batch.signalPartialTimeline || isLast) {
+                    uint64_t nextValue = ++lastTimelineValue;
+                    signals.push_back(
+                        {.semaphore = impl_->graphicsTimeline,
+                         .value = nextValue,
+                         .stageMask = rhi::PipelineStage::AllCommands}
+                    );
+                }
+
+                // Last batch: also signal renderDone binary for present
+                if (isLast && impl_->surface && slot.renderDone.IsValid()) {
+                    signals.push_back(
+                        {.semaphore = slot.renderDone, .value = 0, .stageMask = rhi::PipelineStage::AllCommands}
+                    );
+                }
+            } else if (impl_->IsFenceBased()) {
+                // T2: all batches merged into first+last (single submit effectively)
+                if (isFirst && impl_->surface && slot.imageAvail.IsValid()) {
+                    waits.push_back(
+                        {.semaphore = slot.imageAvail,
+                         .value = 0,
+                         .stageMask = rhi::PipelineStage::ColorAttachmentOutput}
+                    );
+                }
+                if (isLast && impl_->surface && slot.renderDone.IsValid()) {
+                    signals.push_back(
+                        {.semaphore = slot.renderDone, .value = 0, .stageMask = rhi::PipelineStage::AllCommands}
+                    );
+                }
+            }
+
+            rhi::SubmitDesc submitDesc{
+                .commandBuffers = batch.commandBuffers,
+                .waitSemaphores = waits,
+                .signalSemaphores = signals,
+                .signalFence = (isLast && impl_->IsFenceBased()) ? slot.fence : rhi::FenceHandle{},
+            };
+            impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, submitDesc); });
+        }
+
+        // Update slot tracking
+        slot.timelineValue = lastTimelineValue;
+        impl_->currentTimelineValue = lastTimelineValue;
+        if (impl_->IsFenceBased()) {
+            slot.timelineValue = impl_->frameNumber;
+        }
+
+        // Present
+        if (impl_->surface) {
+            auto presentResult = impl_->surface->Present();
+            if (!presentResult) {
+                return std::unexpected(core::ErrorCode::SwapchainOutOfDate);
+            }
+        }
+
+        impl_->transferSync.value = 0;
+        impl_->computeSync.value = 0;
+        impl_->frameIndex = (impl_->frameIndex + 1) % impl_->framesInFlight;
+        return {};
+    }
+
     // =========================================================================
     // Async compute / transfer integration
     // =========================================================================

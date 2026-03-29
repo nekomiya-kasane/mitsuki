@@ -82,13 +82,25 @@ namespace miki::frame {
         /// Acquires swapchain image (windowed) or advances offscreen slot.
         [[nodiscard]] auto BeginFrame() -> core::Result<FrameContext>;
 
-        /// @brief Submit recorded command buffers and present.
-        /// Multi-submit: accepts multiple command buffers for multi-threaded recording.
+        /// @brief Submit recorded command buffers and present (single submit).
         /// Pass the bufferHandle from CommandListAcquisition (NOT the listHandle).
         [[nodiscard]] auto EndFrame(std::span<const rhi::CommandBufferHandle> iCmdBuffers) -> core::Result<void>;
 
         /// @brief Single command buffer convenience overload.
         [[nodiscard]] auto EndFrame(rhi::CommandBufferHandle iCmd) -> core::Result<void>;
+
+        /// @brief A batch of command buffers for split-submit (specs/03-sync.md §5.3).
+        /// Each batch becomes a separate vkQueueSubmit2 with its own timeline signal.
+        /// The last batch additionally signals renderDone binary sem for present.
+        struct SubmitBatch {
+            std::span<const rhi::CommandBufferHandle> commandBuffers;
+            bool signalPartialTimeline = true;  ///< Allocate + signal a timeline value after this batch
+        };
+
+        /// @brief Split-submit EndFrame: multiple graphics queue submits per frame.
+        /// Enables async compute to start after early batches (e.g., geometry done)
+        /// without waiting for the full frame. Last batch handles present sync.
+        [[nodiscard]] auto EndFrameSplit(std::span<const SubmitBatch> iBatches) -> core::Result<void>;
 
         // ── Async compute integration ───────────────────────────────
 
