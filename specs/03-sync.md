@@ -348,26 +348,32 @@ sequenceDiagram
 
 关键优化：一帧内 Graphics Queue 的工作被分为多次 Submit，每次 Submit 可以推进 timeline 到不同的中间值。这让 Async Compute 可以更早开始工作。
 
+**Timeline values 由 `SyncScheduler::AllocateSignal()` 全局分配**，而非按 `2*frameNum` 编码。这在多窗口场景下是必需的——多个 FrameManager 交替向同一 graphics queue 提交（§8.3），per-frame-number 编码会产生冲突。
+
 ```
-Graphics Queue submits for Frame N:
+Graphics Queue submits for Frame N (single-window example):
   Submit #1: DepthPrePass + HiZ + Culling + Geometry
-    Signal: G.timeline = 2*N    (even = "geometry done")
+    Signal: G.timeline = V      (V = SyncScheduler::AllocateSignal(Graphics))
 
   Submit #2: Deferred Resolve + Post + Present
-    Wait:   C.timeline >= N     (compute results ready)
+    Wait:   C.timeline >= Vc    (compute results ready)
     Wait:   acquireSem          (swapchain image ready)
     Signal: renderDoneSem       (for present)
-    Signal: G.timeline = 2*N+1  (odd = "frame done")
+    Signal: G.timeline = V+1    (V+1 = SyncScheduler::AllocateSignal(Graphics))
 
 Async Compute submit for Frame N:
-  Wait: G.timeline >= 2*N      (geometry done, depth available)
-  Signal: C.timeline = N
+  Wait: G.timeline >= V         (geometry done, depth available)
+  Signal: C.timeline = Vc       (Vc = SyncScheduler::AllocateSignal(Compute))
 
-CPU BeginFrame(N+2) waits:
-  G.timeline >= 2*(N+2) - 2*framesInFlight + 1 = 2*N + 1 (frame N done)
+CPU BeginFrame waits:
+  G.timeline >= slot[oldest].lastSignaledValue
 ```
 
+FrameManager 在每个 slot 中记录 `lastSignaledValue`（该 slot 上一次 EndFrame 的最终 timeline value）。BeginFrame 等待该 slot 的 `lastSignaledValue` 被 GPU 完成，而非依赖 frame number 计算。
+
 这种 split-submit 模式让 Async Compute 在 Graphics 完成 geometry 后立即启动，而不必等待整帧完成。GTAO 和 Material Resolve 与 VSM Shadow rendering 并行执行。
+
+**多窗口兼容性**：由于 timeline value 由 SyncScheduler 全局单调分配，Window A 和 Window B 的 split-submit 值自然交错，不存在编码冲突。
 
 ### 5.4 Tier2: Single Queue + Binary Semaphore
 
@@ -473,7 +479,7 @@ private:
         rhi::TimelineSyncPoint completionPoint; // {computeTimeline, value}
     };
     std::vector<TaskEntry> activeTasks_;
-    rhi::TimelineSemaphore computeTimeline_;  // Shared with SyncScheduler
+    SyncScheduler* scheduler_ = nullptr;  // Timeline values allocated via scheduler_->AllocateSignal(Compute)
     uint64_t nextTaskId_ = 1;
 };
 
@@ -690,16 +696,16 @@ D3D12 映射：
 
 ```
 Graphics Queue:
-  Submit #1: [DepthPrePass 0.5ms] → Signal G.timeline = 2*N (geometry partial)
+  Submit #1: [DepthPrePass 0.5ms] → Signal G.timeline = V (via SyncScheduler::AllocateSignal)
 
 Compute Queue:
   [Wavelet DWT decode 1-3ms]
   No wait on Graphics — decode starts immediately at frame begin
-  Signal C.timeline = C_decode
+  Signal C.timeline = Vc (via SyncScheduler::AllocateSignal)
 
 Graphics Queue:
   Submit #2: [GPU Culling]
-  Wait: C.timeline >= C_decode (decoded vertex positions ready)
+  Wait: C.timeline >= Vc (decoded vertex positions ready)
   [Task→Mesh→VisBuffer (reads decoded positions)]
   ...
 ```
@@ -719,57 +725,47 @@ GPU 可能仍在引用 CPU 已标记为"销毁"的资源。传统方案：
 
 ### 6.2 Solution: Frame-Tagged Destruction Queue
 
+**实现选择**：当前实现使用 per-slot bin ring（每个 frame-in-flight slot 一个 bin），而非 frame-number-tagged queue。这更简单且 cache-friendly。
+
 ```cpp
 class DeferredDestructor {
 public:
-    /// @brief Queue a resource for deferred destruction.
-    /// Resource will be destroyed when frame `tagFrame + latency` completes.
-    template <typename HandleT>
-    auto Enqueue(HandleT handle, uint64_t tagFrame) -> void;
+    /// @brief Enqueue a resource into the CURRENT frame's bin.
+    /// Resource will be destroyed when this slot's GPU work completes
+    /// (i.e., framesInFlight frames later, when BeginFrame reuses this slot).
+    auto Destroy(BufferHandle handle) -> void;
+    auto Destroy(TextureHandle handle) -> void;
+    // ... overloads for all handle types ...
 
-    /// @brief Drain all resources tagged for frames <= completedFrame.
-    /// Called by FrameManager at BeginFrame after CPU wait confirms
-    /// GPU has finished the target frame.
-    auto Drain(uint64_t completedFrame) -> void;
+    /// @brief Set the current bin index (called by FrameManager at BeginFrame).
+    auto SetCurrentBin(uint32_t binIndex) -> void;
 
-    /// @brief Drain ALL pending resources (shutdown path).
+    /// @brief Drain a specific bin — destroy all resources queued in it.
+    /// Called by FrameManager::BeginFrame AFTER CPU wait confirms
+    /// GPU has finished the frame that was using this slot.
+    auto DrainBin(uint32_t binIndex) -> void;
+
+    /// @brief Drain ALL bins (shutdown path).
     auto DrainAll() -> void;
-
-private:
-    static constexpr uint32_t kDestructionLatency = 2; // frames
-
-    struct PendingDestruction {
-        uint64_t    targetFrame;    // Destroy when GPU finishes this frame
-        HandleType  handleType;     // Buffer, Texture, Pipeline, etc.
-        uint64_t    handleValue;    // Raw handle bits
-    };
-
-    // Per-frame-slot ring buffer (lock-free single-producer for main thread)
-    std::vector<PendingDestruction> pending_;
-    DeviceHandle device_;
 };
 ```
 
-### 6.3 Destruction Timing Diagram
+### 6.3 Destruction Timing Diagram (bin-based, framesInFlight = 2)
 
 ```
-Frame N:   User calls DestroyBuffer(h)
-           → h enqueued with targetFrame = N + kDestructionLatency = N+2
-
-Frame N+1: GPU may still be executing Frame N (using h)
-           → h still alive
-
-Frame N+2: GPU may still be executing Frame N+1
-           → h still alive
-
-Frame N+3: BeginFrame(N+3) waits for GPU frame N+1 complete
-           → Drain(N+1): nothing (h.targetFrame = N+2 > N+1)
-
-Frame N+4: BeginFrame(N+4) waits for GPU frame N+2 complete
-           → Drain(N+2): destroy h (h.targetFrame = N+2 <= N+2) ✓
+Frame 0 (slot 0):  User calls Destroy(h) → enqueued into bin[0]
+Frame 1 (slot 1):  GPU executing Frame 0; bin[0] untouched
+Frame 2 (slot 0):  BeginFrame waits for Frame 0 GPU complete
+                   → DrainBin(0): destroy h ✓
+                   → SetCurrentBin(0): new destructions go to bin[0]
 ```
 
-With `framesInFlight = 2` and `kDestructionLatency = 2`, destruction is guaranteed safe: the GPU has finished all commands referencing the resource.
+**关键不变量**：destruction latency = `framesInFlight`，不需要独立的 `kDestructionLatency` 常量。BeginFrame 在 CPU wait 确认 GPU 完成该 slot 的所有工作后才 drain，因此安全性由 frame-in-flight ring 本身保证。
+
+**为什么不用 `kDestructionLatency` 独立常量**：如果 `kDestructionLatency != framesInFlight`，会出现两种问题：
+
+- `kDestructionLatency < framesInFlight` → use-after-free（GPU 仍在引用）
+- `kDestructionLatency > framesInFlight` → 不必要的延迟，浪费内存
 
 ### 6.4 Integration with FrameManager
 
@@ -1054,21 +1050,22 @@ Per-surface wait is safe because of the **cross-window content sharing rule** (0
 ### 10.1 Tier1 Vulkan 1.4 — Maximum Performance
 
 ```cpp
-struct Tier1SyncState {
-    VkSemaphore graphicsTimeline;     // VK_SEMAPHORE_TYPE_TIMELINE
+// Device-level (shared across all windows):
+struct Tier1DeviceSyncState {
+    VkSemaphore graphicsTimeline;     // VK_SEMAPHORE_TYPE_TIMELINE (registered in HandlePool)
     VkSemaphore computeTimeline;      // VK_SEMAPHORE_TYPE_TIMELINE
     VkSemaphore transferTimeline;     // VK_SEMAPHORE_TYPE_TIMELINE
-
-    // Per-surface swapchain sync (binary, Vulkan spec mandates)
-    struct PerSurface {
-        VkSemaphore acquireSem[kMaxFramesInFlight];    // Binary
-        VkSemaphore renderDoneSem[kMaxFramesInFlight]; // Binary
-    };
-
-    uint64_t graphicsCounter = 0;
-    uint64_t computeCounter = 0;
-    uint64_t transferCounter = 0;
+    // Exposed via DeviceBase::GetQueueTimelines() → QueueTimelines{graphics, compute, transfer}
 };
+
+// Per-window (owned by FrameManager, injected into RenderSurface via SetSubmitSyncInfo):
+struct PerSlotSyncState {
+    VkSemaphore acquireSem;       // Binary: swapchain acquire → submit wait
+    VkSemaphore renderDoneSem;    // Binary: submit signal → present wait
+    // T2 only:
+    VkFence     inFlightFence;    // CPU↔GPU: wait before slot reuse
+};
+// One PerSlotSyncState per frame-in-flight slot (typically 2-3).
 ```
 
 **Submit pattern (Tier1 Vulkan)**:
@@ -1577,19 +1574,19 @@ Sync points (●=signal, ○=wait):
 
 ## 16. File Map
 
-| File                                         | Namespace     | Responsibility                                                                           |
-| -------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
-| `include/mitsuki/frame/FrameManager.h`       | `miki::frame` | Frame pacing: BeginFrame/EndFrame, timeline wait, surface integration                    |
-| `include/mitsuki/frame/FrameContext.h`       | `miki::frame` | Per-frame state: index, number, swapchain image, dimensions                              |
-| `include/mitsuki/frame/FrameOrchestrator.h`  | `miki::frame` | Multi-window frame orchestration, global deferred destruction                            |
-| `include/mitsuki/frame/SyncScheduler.h`      | `miki::frame` | Cross-queue timeline dependency resolution (arbitrary queue-pair, including T→C→G chain) |
-| `include/mitsuki/frame/AsyncTaskManager.h`   | `miki::frame` | Long-running cross-frame compute tasks (BLAS rebuild, GDeflate decode, GPU QEM)          |
-| `include/mitsuki/frame/DeferredDestructor.h` | `miki::frame` | Frame-tagged resource destruction queue                                                  |
-| `include/mitsuki/rhi/TimelineSyncPoint.h`    | `miki::rhi`   | `{SemaphoreHandle, uint64_t value}` pair                                                 |
-| `src/mitsuki/frame/FrameManager.cpp`         | —             | Impl: timeline wait, acquire, submit, present                                            |
-| `src/mitsuki/frame/SyncScheduler.cpp`        | —             | Impl: counter allocation, arbitrary queue-pair dependency tracking                       |
-| `src/mitsuki/frame/AsyncTaskManager.cpp`     | —             | Impl: compute task submit, non-blocking poll, batch splitting                            |
-| `src/mitsuki/frame/DeferredDestructor.cpp`   | —             | Impl: ring buffer drain                                                                  |
+| File                                      | Namespace     | Responsibility                                                                           |
+| ----------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
+| `include/miki/frame/FrameManager.h`       | `miki::frame` | Frame pacing: BeginFrame/EndFrame, timeline wait, surface integration                    |
+| `include/miki/frame/FrameContext.h`       | `miki::frame` | Per-frame state: index, number, swapchain image, dimensions                              |
+| `include/miki/frame/FrameOrchestrator.h`  | `miki::frame` | Multi-window frame orchestration, global deferred destruction                            |
+| `include/miki/frame/SyncScheduler.h`      | `miki::frame` | Cross-queue timeline dependency resolution (arbitrary queue-pair, including T→C→G chain) |
+| `include/miki/frame/AsyncTaskManager.h`   | `miki::frame` | Long-running cross-frame compute tasks (BLAS rebuild, GDeflate decode, GPU QEM)          |
+| `include/miki/frame/DeferredDestructor.h` | `miki::frame` | Frame-tagged resource destruction queue                                                  |
+| `include/miki/rhi/Sync.h`                 | `miki::rhi`   | `QueueTimelines`, `TimelineSyncPoint` (in FrameManager.h), sync descriptors              |
+| `src/miki/frame/FrameManager.cpp`         | —             | Impl: timeline wait, acquire, submit, present                                            |
+| `src/miki/frame/SyncScheduler.cpp`        | —             | Impl: counter allocation, arbitrary queue-pair dependency tracking                       |
+| `src/miki/frame/AsyncTaskManager.cpp`     | —             | Impl: compute task submit, non-blocking poll, batch splitting                            |
+| `src/miki/frame/DeferredDestructor.cpp`   | —             | Impl: ring buffer drain                                                                  |
 
 ---
 
