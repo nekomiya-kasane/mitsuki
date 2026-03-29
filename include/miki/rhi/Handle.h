@@ -29,28 +29,42 @@ namespace miki::rhi {
 
     template <typename Tag>
     struct Handle {
+        static constexpr uint64_t kGenerationBits = 16;
+        static constexpr uint64_t kIndexBits = 32;
+        static constexpr uint64_t kTypeBits = 8;
+        static constexpr uint64_t kBackendBits = 8;
+
+        static constexpr uint64_t kGenerationShift = 48;
+        static constexpr uint64_t kIndexShift = 16;
+        static constexpr uint64_t kTypeShift = 8;
+        static constexpr uint64_t kBackendShift = 0;
+
+        static constexpr uint64_t kIndexMask = (uint64_t{1} << kIndexBits) - 1;
+        static constexpr uint64_t kTypeMask = (uint64_t{1} << kTypeBits) - 1;
+        static constexpr uint64_t kBackendMask = (uint64_t{1} << kBackendBits) - 1;
+
         uint64_t value = 0;
 
         [[nodiscard]] constexpr auto IsValid() const noexcept -> bool { return value != 0; }
         constexpr auto operator<=>(const Handle&) const = default;
 
         [[nodiscard]] constexpr auto GetGeneration() const noexcept -> uint16_t {
-            return static_cast<uint16_t>(value >> 48);
+            return static_cast<uint16_t>(value >> kGenerationShift);
         }
         [[nodiscard]] constexpr auto GetIndex() const noexcept -> uint32_t {
-            return static_cast<uint32_t>((value >> 16) & 0xFFFFFFFF);
+            return static_cast<uint32_t>((value >> kIndexShift) & kIndexMask);
         }
         [[nodiscard]] constexpr auto GetTypeTag() const noexcept -> uint8_t {
-            return static_cast<uint8_t>((value >> 8) & 0xFF);
+            return static_cast<uint8_t>((value >> kTypeShift) & kTypeMask);
         }
         [[nodiscard]] constexpr auto GetBackendTag() const noexcept -> uint8_t {
-            return static_cast<uint8_t>(value & 0xFF);
+            return static_cast<uint8_t>((value >> kBackendShift) & kBackendMask);
         }
 
         static constexpr auto Pack(uint16_t gen, uint32_t idx, uint8_t type, uint8_t backend) noexcept -> Handle {
             return Handle{
-                (static_cast<uint64_t>(gen) << 48) | (static_cast<uint64_t>(idx) << 16)
-                | (static_cast<uint64_t>(type) << 8) | static_cast<uint64_t>(backend)
+                (static_cast<uint64_t>(gen) << kGenerationShift) | (static_cast<uint64_t>(idx) << kIndexShift)
+                | (static_cast<uint64_t>(type) << kTypeShift) | (static_cast<uint64_t>(backend) << kBackendShift)
             };
         }
     };

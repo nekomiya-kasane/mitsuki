@@ -36,6 +36,7 @@ Diagnostics:
       - bugprone-easily-swappable-parameters # too noisy for handle-heavy APIs
       - cppcoreguidelines-pro-bounds-pointer-arithmetic # Low-level GPU code needs pointer arithmetic
       - cppcoreguidelines-avoid-do-while
+      - misc-non-private-member-variables-in-classes
     CheckOptions:
       readability-identifier-naming.ClassCase: CamelCase
       readability-identifier-naming.FunctionCase: CamelCase

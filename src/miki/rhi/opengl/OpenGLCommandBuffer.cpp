@@ -226,11 +226,7 @@ namespace miki::rhi {
                     break;
                 case BindingType::StorageTexture:
                     if (res.texture) {
-                        // Look up actual internal format from texture pool
-                        GLenum imgFormat = GL_RGBA8;
-                        auto& texPool = device_->GetTexturePool();
-                        // Search by GL name — iterate is acceptable since descriptor bind is not per-draw hot path
-                        gl->BindImageTexture(glBinding, res.texture, 0, GL_FALSE, 0, GL_READ_WRITE, imgFormat);
+                        gl->BindImageTexture(glBinding, res.texture, 0, GL_FALSE, 0, GL_READ_WRITE, res.imageFormat);
                     }
                     break;
                 case BindingType::Sampler:

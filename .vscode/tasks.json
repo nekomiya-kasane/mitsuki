@@ -11,7 +11,7 @@
                 "8888"
             ],
             "options": {
-                "cwd": "${workspaceFolder}/build-wasm"
+                "cwd": "${workspaceFolder}/build/wasm"
             },
             "isBackground": true,
             "problemMatcher": {
@@ -35,9 +35,63 @@
             "command": "cmake",
             "args": [
                 "--build",
-                "build-wasm",
-                "--target",
-                "window_manager_demo"
+                "${workspaceFolder}/build/wasm"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "configure-wasm",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "wasm-emscripten"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "build-debug-vulkan",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}/build/debug-vulkan"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "build-debug-d3d12",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}/build/debug-d3d12"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "build-debug-webgpu",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}/build/debug-webgpu"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

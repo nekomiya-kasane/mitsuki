@@ -47,6 +47,7 @@ include(cmake/targets/miki_opengl.cmake)
 include(cmake/targets/miki_webgpu.cmake)
 include(cmake/targets/miki_glfw_backend.cmake)
 include(cmake/targets/miki_debug.cmake)
+include(cmake/targets/miki_shader.cmake)
 
 # ---------------------------------------------------------------------------
 # Tests and demos

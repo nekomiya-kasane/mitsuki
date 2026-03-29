@@ -15,7 +15,13 @@
 
 #include "miki/rhi/backend/BackendStub.h"
 
+#pragma warning(push)
+#pragma warning(disable : 4199)  // MSVC warning for language extension tokens
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wlanguage-extension-token"
 #include <glad/gl.h>
+#pragma clang diagnostic pop
+#pragma warning(pop)
 
 #include <string>
 #include <vector>
@@ -150,6 +156,7 @@ namespace miki::rhi {
             uint64_t range = 0;
             GLuint texture = 0;
             GLuint sampler = 0;
+            GLenum imageFormat = GL_RGBA8;  // Cached internalFormat for StorageTexture (glBindImageTexture)
         };
         std::vector<BoundResource> resources;
     };

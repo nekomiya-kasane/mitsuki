@@ -119,6 +119,13 @@ namespace miki::rhi {
                             auto* viewData = textureViews_.Lookup(texBinding->view);
                             if (viewData) {
                                 res.texture = viewData->viewTexture;
+                                // Cache internalFormat for StorageTexture (glBindImageTexture needs it)
+                                if (res.type == BindingType::StorageTexture) {
+                                    auto* texData = textures_.Lookup(viewData->parentTexture);
+                                    if (texData) {
+                                        res.imageFormat = texData->internalFormat;
+                                    }
+                                }
                             }
                         }
                         if (texBinding->sampler.IsValid()) {

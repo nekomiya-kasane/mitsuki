@@ -94,6 +94,20 @@
       }
     },
     {
+      "name": "debug-full",
+      "inherits": "debug",
+      "displayName": "Debug + Full (win-x64-clang)",
+      "binaryDir": "${sourceDir}/build/debug-full",
+      "cacheVariables": {
+        "MIKI_BUILD_VULKAN": "ON",
+        "MIKI_BUILD_D3D12": "ON",
+        "MIKI_BUILD_OPENGL": "ON",
+        "MIKI_BUILD_WEBGPU": "ON",
+        "Vulkan_INCLUDE_DIR": "$env{VULKAN_SDK}/Include",
+        "Vulkan_LIBRARY": "$env{VULKAN_SDK}/Lib/vulkan-1.lib"
+      }
+    },
+    {
       "name": "asan",
       "inherits": "debug",
       "displayName": "Debug + ASAN (win-x64-clang)",
