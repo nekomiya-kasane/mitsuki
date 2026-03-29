@@ -19,7 +19,7 @@ namespace miki::rhi {
     // =========================================================================
 
     namespace {
-        auto ToDxgiFormat(Format fmt) -> DXGI_FORMAT {
+        [[maybe_unused]] auto ToDxgiFormat(Format fmt) -> DXGI_FORMAT {
             switch (fmt) {
                 case Format::R8_UNORM: return DXGI_FORMAT_R8_UNORM;
                 case Format::RGBA8_UNORM: return DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -38,7 +38,7 @@ namespace miki::rhi {
             }
         }
 
-        auto ToD3D12PrimitiveTopology(PrimitiveTopology topo) -> D3D_PRIMITIVE_TOPOLOGY {
+        [[maybe_unused]] auto ToD3D12PrimitiveTopology(PrimitiveTopology topo) -> D3D_PRIMITIVE_TOPOLOGY {
             switch (topo) {
                 case PrimitiveTopology::PointList: return D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
                 case PrimitiveTopology::LineList: return D3D_PRIMITIVE_TOPOLOGY_LINELIST;
@@ -157,7 +157,7 @@ namespace miki::rhi {
         }
 
         // Legacy barrier fallback: TextureLayout -> D3D12_RESOURCE_STATES
-        auto ToD3D12ResourceState(TextureLayout layout) -> D3D12_RESOURCE_STATES {
+        [[maybe_unused]] auto ToD3D12ResourceState(TextureLayout layout) -> D3D12_RESOURCE_STATES {
             switch (layout) {
                 case TextureLayout::Undefined: return D3D12_RESOURCE_STATE_COMMON;
                 case TextureLayout::General: return D3D12_RESOURCE_STATE_COMMON;

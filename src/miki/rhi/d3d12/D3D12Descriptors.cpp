@@ -33,7 +33,7 @@ namespace miki::rhi {
             return D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         }
 
-        auto IsSamplerBinding(BindingType type) -> bool {
+        [[maybe_unused]] auto IsSamplerBinding(BindingType type) -> bool {
             return type == BindingType::Sampler;
         }
     }  // namespace
@@ -165,7 +165,6 @@ namespace miki::rhi {
         if (FAILED(hr)) {
             return std::unexpected(RhiError::PipelineCreationFailed);
         }
-
         ComPtr<ID3D12RootSignature> rootSig;
         hr = device_->CreateRootSignature(
             0, serialized->GetBufferPointer(), serialized->GetBufferSize(), IID_PPV_ARGS(&rootSig)

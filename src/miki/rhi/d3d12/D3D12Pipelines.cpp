@@ -433,7 +433,6 @@ namespace miki::rhi {
         } else {
             hr = device_->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&library));
         }
-
         if (SUCCEEDED(hr)) {
             data->library = std::move(library);
         }

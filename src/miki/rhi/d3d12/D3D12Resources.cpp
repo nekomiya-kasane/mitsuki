@@ -8,7 +8,21 @@
 
 #include "miki/rhi/backend/D3D12Device.h"
 
+#if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wnested-anon-types"
+#elif defined(_MSC_VER)
+#    pragma warning(push)
+#    pragma warning(disable : 4201)  // nonstandard extension used: nameless struct/union
+#endif
+
 #include <D3D12MemAlloc.h>
+
+#if defined(__clang__)
+#    pragma clang diagnostic pop
+#elif defined(_MSC_VER)
+#    pragma warning(pop)
+#endif
 
 #include <cassert>
 #include <cstring>
@@ -702,10 +716,9 @@ namespace miki::rhi {
         if (!data) {
             return {};
         }
-
         D3D12_RESOURCE_DESC resDesc = data->resource->GetDesc();
         D3D12_RESOURCE_ALLOCATION_INFO info = device_->GetResourceAllocationInfo(0, 1, &resDesc);
-        return {info.SizeInBytes, info.Alignment, UINT32_MAX};
+        return {.size = info.SizeInBytes, .alignment = info.Alignment, .memoryTypeBits = UINT32_MAX};
     }
 
     auto D3D12Device::GetTextureMemoryRequirementsImpl(TextureHandle h) -> MemoryRequirements {
@@ -716,7 +729,7 @@ namespace miki::rhi {
 
         D3D12_RESOURCE_DESC resDesc = data->resource->GetDesc();
         D3D12_RESOURCE_ALLOCATION_INFO info = device_->GetResourceAllocationInfo(0, 1, &resDesc);
-        return {info.SizeInBytes, info.Alignment, UINT32_MAX};
+        return {.size = info.SizeInBytes, .alignment = info.Alignment, .memoryTypeBits = UINT32_MAX};
     }
 
     // =========================================================================
@@ -724,7 +737,10 @@ namespace miki::rhi {
     // =========================================================================
 
     auto D3D12Device::GetSparsePageSizeImpl() const -> SparsePageSize {
-        return {D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES, D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES};
+        return {
+            .bufferPageSize = D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES,
+            .imagePageSize = D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES
+        };
     }
 
     void D3D12Device::SubmitSparseBindsImpl(
