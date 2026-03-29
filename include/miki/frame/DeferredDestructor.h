@@ -48,20 +48,22 @@ namespace miki::frame {
 
         // ── Deferred destroy ────────────────────────────────────────
 
-        /// @brief Enqueue a buffer for deferred destruction.
         auto Destroy(rhi::BufferHandle iHandle) -> void;
-        /// @brief Enqueue a texture for deferred destruction.
         auto Destroy(rhi::TextureHandle iHandle) -> void;
-        /// @brief Enqueue a texture view for deferred destruction.
         auto Destroy(rhi::TextureViewHandle iHandle) -> void;
-        /// @brief Enqueue a sampler for deferred destruction.
         auto Destroy(rhi::SamplerHandle iHandle) -> void;
-        /// @brief Enqueue a pipeline for deferred destruction.
         auto Destroy(rhi::PipelineHandle iHandle) -> void;
-        /// @brief Enqueue a descriptor set for deferred destruction.
         auto Destroy(rhi::DescriptorSetHandle iHandle) -> void;
-        /// @brief Enqueue a shader module for deferred destruction.
         auto Destroy(rhi::ShaderModuleHandle iHandle) -> void;
+        auto Destroy(rhi::FenceHandle iHandle) -> void;
+        auto Destroy(rhi::SemaphoreHandle iHandle) -> void;
+        auto Destroy(rhi::AccelStructHandle iHandle) -> void;
+        auto Destroy(rhi::PipelineLayoutHandle iHandle) -> void;
+        auto Destroy(rhi::DescriptorLayoutHandle iHandle) -> void;
+        auto Destroy(rhi::PipelineCacheHandle iHandle) -> void;
+        auto Destroy(rhi::QueryPoolHandle iHandle) -> void;
+        auto Destroy(rhi::CommandBufferHandle iHandle) -> void;
+        auto Destroy(rhi::DeviceMemoryHandle iHandle) -> void;
 
         // ── Bin management ──────────────────────────────────────────
 

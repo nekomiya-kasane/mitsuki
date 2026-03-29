@@ -30,6 +30,15 @@ namespace miki::frame {
         Pipeline,
         DescriptorSet,
         ShaderModule,
+        Fence,
+        Semaphore,
+        AccelStruct,
+        PipelineLayout,
+        DescriptorLayout,
+        PipelineCache,
+        QueryPool,
+        CommandBuffer,
+        DeviceMemory,
     };
 
     // =========================================================================
@@ -96,6 +105,60 @@ namespace miki::frame {
                         dev.DestroyShaderModule(h);
                         break;
                     }
+                    case DeferredHandleType::Fence: {
+                        rhi::FenceHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroyFence(h);
+                        break;
+                    }
+                    case DeferredHandleType::Semaphore: {
+                        rhi::SemaphoreHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroySemaphore(h);
+                        break;
+                    }
+                    case DeferredHandleType::AccelStruct: {
+                        rhi::AccelStructHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroyAccelStruct(h);
+                        break;
+                    }
+                    case DeferredHandleType::PipelineLayout: {
+                        rhi::PipelineLayoutHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroyPipelineLayout(h);
+                        break;
+                    }
+                    case DeferredHandleType::DescriptorLayout: {
+                        rhi::DescriptorLayoutHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroyDescriptorLayout(h);
+                        break;
+                    }
+                    case DeferredHandleType::PipelineCache: {
+                        rhi::PipelineCacheHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroyPipelineCache(h);
+                        break;
+                    }
+                    case DeferredHandleType::QueryPool: {
+                        rhi::QueryPoolHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroyQueryPool(h);
+                        break;
+                    }
+                    case DeferredHandleType::CommandBuffer: {
+                        rhi::CommandBufferHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroyCommandBuffer(h);
+                        break;
+                    }
+                    case DeferredHandleType::DeviceMemory: {
+                        rhi::DeviceMemoryHandle h;
+                        h.value = entry.rawValue;
+                        dev.DestroyMemoryHeap(h);
+                        break;
+                    }
                 }
             });
         }
@@ -128,40 +191,114 @@ namespace miki::frame {
 
     auto DeferredDestructor::Destroy(rhi::BufferHandle iHandle) -> void {
         assert(impl_ && "DeferredDestructor used after move");
-        if (iHandle.IsValid()) impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Buffer, iHandle.value});
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Buffer, iHandle.value});
+        }
     }
 
     auto DeferredDestructor::Destroy(rhi::TextureHandle iHandle) -> void {
         assert(impl_ && "DeferredDestructor used after move");
-        if (iHandle.IsValid()) impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Texture, iHandle.value});
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Texture, iHandle.value});
+        }
     }
 
     auto DeferredDestructor::Destroy(rhi::TextureViewHandle iHandle) -> void {
         assert(impl_ && "DeferredDestructor used after move");
-        if (iHandle.IsValid())
+        if (iHandle.IsValid()) {
             impl_->bins[impl_->currentBin].push_back({DeferredHandleType::TextureView, iHandle.value});
+        }
     }
 
     auto DeferredDestructor::Destroy(rhi::SamplerHandle iHandle) -> void {
         assert(impl_ && "DeferredDestructor used after move");
-        if (iHandle.IsValid()) impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Sampler, iHandle.value});
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Sampler, iHandle.value});
+        }
     }
 
     auto DeferredDestructor::Destroy(rhi::PipelineHandle iHandle) -> void {
         assert(impl_ && "DeferredDestructor used after move");
-        if (iHandle.IsValid()) impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Pipeline, iHandle.value});
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Pipeline, iHandle.value});
+        }
     }
 
     auto DeferredDestructor::Destroy(rhi::DescriptorSetHandle iHandle) -> void {
         assert(impl_ && "DeferredDestructor used after move");
-        if (iHandle.IsValid())
+        if (iHandle.IsValid()) {
             impl_->bins[impl_->currentBin].push_back({DeferredHandleType::DescriptorSet, iHandle.value});
+        }
     }
 
     auto DeferredDestructor::Destroy(rhi::ShaderModuleHandle iHandle) -> void {
         assert(impl_ && "DeferredDestructor used after move");
-        if (iHandle.IsValid())
+        if (iHandle.IsValid()) {
             impl_->bins[impl_->currentBin].push_back({DeferredHandleType::ShaderModule, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::FenceHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Fence, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::SemaphoreHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::Semaphore, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::AccelStructHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::AccelStruct, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::PipelineLayoutHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::PipelineLayout, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::DescriptorLayoutHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::DescriptorLayout, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::PipelineCacheHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::PipelineCache, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::QueryPoolHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::QueryPool, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::CommandBufferHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::CommandBuffer, iHandle.value});
+        }
+    }
+
+    auto DeferredDestructor::Destroy(rhi::DeviceMemoryHandle iHandle) -> void {
+        assert(impl_ && "DeferredDestructor used after move");
+        if (iHandle.IsValid()) {
+            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::DeviceMemory, iHandle.value});
+        }
     }
 
     // =========================================================================
@@ -193,7 +330,9 @@ namespace miki::frame {
     }
 
     auto DeferredDestructor::PendingCount() const noexcept -> uint32_t {
-        if (!impl_) return 0;
+        if (!impl_) {
+            return 0;
+        }
         uint32_t total = 0;
         for (uint32_t i = 0; i < impl_->binCount; ++i) {
             total += static_cast<uint32_t>(impl_->bins[i].size());
