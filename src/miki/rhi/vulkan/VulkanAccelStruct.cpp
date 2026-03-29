@@ -13,6 +13,7 @@
 #if defined(__clang__)
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wnullability-extension"
+#    pragma clang diagnostic ignored "-Wnullability-completeness"
 #elif defined(_MSC_VER)
 #    pragma warning(push)
 #    pragma warning(disable : 5105)
