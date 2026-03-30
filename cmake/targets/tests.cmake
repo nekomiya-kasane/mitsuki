@@ -97,3 +97,10 @@ if(TARGET test_frame_manager)
     target_include_directories(test_frame_manager PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
     set_tests_properties(test_frame_manager PROPERTIES TIMEOUT 300)
 endif()
+
+# §17.18 CommandPoolAllocator
+miki_add_test(test_command_pool_allocator tests/frame/test_command_pool_allocator.cpp)
+if(TARGET test_command_pool_allocator)
+    target_include_directories(test_command_pool_allocator PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_command_pool_allocator PROPERTIES TIMEOUT 120)
+endif()

@@ -20,6 +20,7 @@ set(MIKI_RHI_SOURCES
     src/miki/rhi/DeviceFactory.cpp
     src/miki/rhi/mock/MockRenderSurface.cpp
     src/miki/frame/FrameManager.cpp
+    src/miki/frame/CommandPoolAllocator.cpp
     src/miki/frame/DeferredDestructor.cpp
     src/miki/frame/SyncScheduler.cpp
     src/miki/frame/AsyncTaskManager.cpp
