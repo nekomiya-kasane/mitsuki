@@ -37,7 +37,6 @@ namespace miki::frame {
         DescriptorLayout,
         PipelineCache,
         QueryPool,
-        CommandBuffer,
         DeviceMemory,
     };
 
@@ -145,12 +144,6 @@ namespace miki::frame {
                         rhi::QueryPoolHandle h;
                         h.value = entry.rawValue;
                         dev.DestroyQueryPool(h);
-                        break;
-                    }
-                    case DeferredHandleType::CommandBuffer: {
-                        rhi::CommandBufferHandle h;
-                        h.value = entry.rawValue;
-                        dev.DestroyCommandBuffer(h);
                         break;
                     }
                     case DeferredHandleType::DeviceMemory: {
@@ -284,13 +277,6 @@ namespace miki::frame {
         assert(impl_ && "DeferredDestructor used after move");
         if (iHandle.IsValid()) {
             impl_->bins[impl_->currentBin].push_back({DeferredHandleType::QueryPool, iHandle.value});
-        }
-    }
-
-    auto DeferredDestructor::Destroy(rhi::CommandBufferHandle iHandle) -> void {
-        assert(impl_ && "DeferredDestructor used after move");
-        if (iHandle.IsValid()) {
-            impl_->bins[impl_->currentBin].push_back({DeferredHandleType::CommandBuffer, iHandle.value});
         }
     }
 

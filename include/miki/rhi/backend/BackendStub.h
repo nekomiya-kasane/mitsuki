@@ -102,14 +102,6 @@
     auto LinkGraphicsPipelineImpl(const LinkedPipelineDesc&) -> RhiResult<PipelineHandle> {                            \
         return std::unexpected(RhiError::NotImplemented); }                                                            \
                                                                                                                        \
-    /* --- Command buffers --- */                                                                                      \
-    auto CreateCommandBufferImpl(const CommandBufferDesc&) -> RhiResult<CommandBufferHandle> {                         \
-        return std::unexpected(RhiError::NotImplemented); }                                                            \
-    void DestroyCommandBufferImpl(CommandBufferHandle) {}                                                              \
-    auto AcquireCommandListImpl(QueueType) -> RhiResult<CommandListAcquisition> {                                      \
-        return std::unexpected(RhiError::NotImplemented); }                                                            \
-    void ReleaseCommandListImpl(const CommandListAcquisition&) {}                                                      \
-                                                                                                                       \
     /* --- Command pools (§19) --- */                                                                                  \
     auto CreateCommandPoolImpl(const CommandPoolDesc&) -> RhiResult<CommandPoolHandle> {                               \
         return std::unexpected(RhiError::NotImplemented); }                                                            \

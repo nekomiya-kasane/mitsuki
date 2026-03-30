@@ -59,7 +59,7 @@ class FrameManagerTest : public RhiTest {
             auto ctx = fm.BeginFrame();
             ASSERT_TRUE(ctx.has_value()) << "BeginFrame failed at frame " << i;
 
-            auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+            auto acq = fm.AcquireCommandList(QueueType::Graphics);
             ASSERT_TRUE(acq.has_value()) << "AcquireCommandList failed at frame " << i;
 
             acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
@@ -67,8 +67,6 @@ class FrameManagerTest : public RhiTest {
 
             auto endResult = fm.EndFrame(acq->bufferHandle);
             ASSERT_TRUE(endResult.has_value()) << "EndFrame failed at frame " << i;
-
-            Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
         }
     }
 };
@@ -160,12 +158,11 @@ TEST_P(FrameManagerTest, FL01_FirstBeginFrame) {
     EXPECT_FALSE(ctx->swapchainImage.IsValid());  // Offscreen: no swapchain
 
     // Cleanup: EndFrame to avoid dangling frame
-    auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
     EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
 }
 
 // FM-FL-02: GIVEN FM after BeginFrame WHEN EndFrame THEN frameIndex advances
@@ -195,12 +192,11 @@ TEST_P(FrameManagerTest, FL03_FrameRingWraps) {
     EXPECT_EQ(ctx->frameNumber, 3u);
 
     // Cleanup
-    auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
     EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
 }
 
 // FM-FL-07: GIVEN FM WHEN EndFrame(singleCmd) overload THEN succeeds
@@ -212,7 +208,7 @@ TEST_P(FrameManagerTest, FL07_SingleCmdEndFrame) {
     auto ctx = fm.BeginFrame();
     ASSERT_TRUE(ctx.has_value());
 
-    auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
@@ -220,7 +216,6 @@ TEST_P(FrameManagerTest, FL07_SingleCmdEndFrame) {
     // Single-cmd overload
     auto endResult = fm.EndFrame(acq->bufferHandle);
     EXPECT_TRUE(endResult.has_value());
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
 }
 
 // ============================================================================
@@ -300,12 +295,11 @@ TEST_P(FrameManagerTest, TX03_FlushTransfersNoRingsNoop) {
     // FlushTransfers with no rings — no-op, no crash
     fm.FlushTransfers();
 
-    auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
     EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
 }
 
 // FM-TX-04: GIVEN FM WHEN FlushTransfers called twice THEN no crash (idempotent)
@@ -320,12 +314,11 @@ TEST_P(FrameManagerTest, TX04_FlushTransfersIdempotent) {
     fm.FlushTransfers();
     fm.FlushTransfers();  // Second call — should be no-op
 
-    auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
     EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
 }
 
 // ============================================================================
@@ -360,8 +353,8 @@ TEST_P(FrameManagerTest, SS01_SplitSubmitTwoBatches) {
     uint64_t baseTimeline = fm.CurrentTimelineValue();
 
     // Create 2 command buffers for 2 batches
-    auto acq1 = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
-    auto acq2 = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+    auto acq1 = fm.AcquireCommandList(QueueType::Graphics);
+    auto acq2 = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq1.has_value());
     ASSERT_TRUE(acq2.has_value());
 
@@ -383,9 +376,6 @@ TEST_P(FrameManagerTest, SS01_SplitSubmitTwoBatches) {
 
     // Timeline should advance by 2 (one per batch)
     EXPECT_EQ(fm.CurrentTimelineValue(), baseTimeline + 2);
-
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq1); });
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq2); });
 }
 
 // ============================================================================
@@ -414,7 +404,7 @@ TEST_P(FrameManagerTest, XQ01_ComputeSyncPointConsumed) {
         fm.SetComputeSyncPoint({.semaphore = timelines.compute, .value = 42});
     }
 
-    auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
@@ -422,7 +412,6 @@ TEST_P(FrameManagerTest, XQ01_ComputeSyncPointConsumed) {
     // EndFrame should internally wait on compute sync
     auto endResult = fm.EndFrame(acq->bufferHandle);
     EXPECT_TRUE(endResult.has_value());
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
 }
 
 // FM-XQ-04: GIVEN T1 FM, no sync points WHEN EndFrame THEN succeeds
@@ -487,12 +476,11 @@ TEST_P(FrameManagerTest, RS03_OffscreenResize) {
     EXPECT_EQ(ctx->width, 3840u);
     EXPECT_EQ(ctx->height, 2160u);
 
-    auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
     EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
-    Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
 }
 
 // FM-RS-04: GIVEN offscreen FM WHEN Reconfigure THEN InvalidState
@@ -613,12 +601,11 @@ TEST_P(FrameManagerTest, MF02_ThreeFrameRing) {
         ASSERT_TRUE(ctx.has_value());
         EXPECT_EQ(ctx->frameIndex, i % 3) << "Wrong frameIndex at frame " << (i + 1);
 
-        auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
         acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
         EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
-        Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
     }
 
     EXPECT_EQ(fm.FrameNumber(), 10u);
@@ -639,12 +626,11 @@ TEST_P(FrameManagerTest, MF03_AlternatingFlushTransfers) {
             fm.FlushTransfers();  // Odd frames: eager path
         }
 
-        auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
         acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
         EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
-        Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
     }
 
     EXPECT_EQ(fm.FrameNumber(), 10u);
@@ -673,12 +659,11 @@ TEST_P(FrameManagerTest, MF04_ComputeSyncEveryFrame) {
         Dev().Dispatch([&](auto& dev) { dev.SignalSemaphore(timelines.compute, computeVal); });
         fm.SetComputeSyncPoint({.semaphore = timelines.compute, .value = computeVal});
 
-        auto acq = Dev().Dispatch([](auto& dev) { return dev.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
         acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
         EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
-        Dev().Dispatch([&](auto& dev) { dev.ReleaseCommandList(*acq); });
     }
 }
 
@@ -1116,12 +1101,11 @@ TEST_P(FrameManagerTest, CTDD01_BinDrainAcrossFrames) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         dd.Destroy(BufferHandle::Pack(1, 1, 0, 0));
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(dd.PendingCount(), 1u);
 
@@ -1130,12 +1114,11 @@ TEST_P(FrameManagerTest, CTDD01_BinDrainAcrossFrames) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         dd.Destroy(TextureHandle::Pack(1, 2, 0, 0));
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(dd.PendingCount(), 2u);
 
@@ -1144,12 +1127,11 @@ TEST_P(FrameManagerTest, CTDD01_BinDrainAcrossFrames) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         EXPECT_EQ(dd.PendingCount(), 1u);
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
 
     fm.SetDeferredDestructor(nullptr);
@@ -1167,12 +1149,11 @@ TEST_P(FrameManagerTest, CTDD02_ThreeFrameBinCycling) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         dd.Destroy(BufferHandle::Pack(1, i + 1, 0, 0));
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_LE(dd.PendingCount(), 3u);
     fm.SetDeferredDestructor(nullptr);
@@ -1192,12 +1173,11 @@ TEST_P(FrameManagerTest, CTDD04_DestroyInvalidHandleFiltered) {
     EXPECT_EQ(dd.PendingCount(), 0u);
     dd.Destroy(BufferHandle::Pack(1, 1, 0, 0));
     EXPECT_EQ(dd.PendingCount(), 1u);
-    auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
     acq->listHandle.Dispatch([](auto& c) { c.End(); });
     (void)fm.EndFrame(acq->bufferHandle);
-    Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     fm.SetDeferredDestructor(nullptr);
     dd.DrainAll();
 }
@@ -1231,12 +1211,11 @@ TEST_P(FrameManagerTest, CTXQ01_ComputeSyncConsumedAndReset) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         fm.SetComputeSyncPoint({.semaphore = fakeSem, .value = 10});
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     // Frame 2: no sync
     RunFrames(fm, 1);
@@ -1256,24 +1235,22 @@ TEST_P(FrameManagerTest, CTXQ02_BothSyncPointsThenPartial) {
         ASSERT_TRUE(ctx.has_value());
         fm.SetComputeSyncPoint({.semaphore = csem, .value = 5});
         fm.SetTransferSyncPoint({.semaphore = tsem, .value = 3});
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     // Frame 2: compute only
     {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         fm.SetComputeSyncPoint({.semaphore = csem, .value = 10});
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(fm.FrameNumber(), 2u);
 }
@@ -1289,12 +1266,11 @@ TEST_P(FrameManagerTest, CTXQ03_AlternatingComputeSync) {
         if (i % 2 == 1) {
             fm.SetComputeSyncPoint({.semaphore = csem, .value = i});
         }
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(fm.FrameNumber(), 10u);
     EXPECT_EQ(fm.CurrentTimelineValue(), 10u);
@@ -1407,12 +1383,11 @@ TEST_P(FrameManagerTest, CTMV02_MoveWithDD) {
         auto ctx = result->BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         dd.Destroy(BufferHandle::Pack(1, 1, 0, 0));
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = result->AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)result->EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(dd.PendingCount(), 1u);
     auto moved = std::move(*result);
@@ -1441,8 +1416,8 @@ TEST_P(FrameManagerTest, CTSP02_SplitThenSingleTimelineContinuity) {
     {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
-        auto acqA = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
-        auto acqB = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acqA = fm.AcquireCommandList(QueueType::Graphics);
+        auto acqB = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acqA && acqB);
         acqA->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acqA->listHandle.Dispatch([](auto& c) { c.End(); });
@@ -1452,8 +1427,6 @@ TEST_P(FrameManagerTest, CTSP02_SplitThenSingleTimelineContinuity) {
             = {FrameManager::SubmitBatch{std::span(&acqA->bufferHandle, 1), true},
                FrameManager::SubmitBatch{std::span(&acqB->bufferHandle, 1), true}};
         EXPECT_TRUE(fm.EndFrameSplit(batches).has_value());
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acqA); });
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acqB); });
     }
     auto tlAfterSplit = fm.CurrentTimelineValue();
     // Frame 2: single EndFrame
@@ -1472,8 +1445,8 @@ TEST_P(FrameManagerTest, CTSP03_InterleaveEndFrameAndSplit) {
     {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
-        auto acqA = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
-        auto acqB = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acqA = fm.AcquireCommandList(QueueType::Graphics);
+        auto acqB = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acqA && acqB);
         acqA->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acqA->listHandle.Dispatch([](auto& c) { c.End(); });
@@ -1483,8 +1456,6 @@ TEST_P(FrameManagerTest, CTSP03_InterleaveEndFrameAndSplit) {
             = {FrameManager::SubmitBatch{std::span(&acqA->bufferHandle, 1), true},
                FrameManager::SubmitBatch{std::span(&acqB->bufferHandle, 1), true}};
         EXPECT_TRUE(fm.EndFrameSplit(batches).has_value());
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acqA); });
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acqB); });
     }
     // Frame 5: back to normal
     RunFrames(fm, 1);
@@ -1505,12 +1476,11 @@ TEST_P(FrameManagerTest, CTBC01_TenFrameBinCycling) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         dd.Destroy(BufferHandle::Pack(1, i + 1, 0, 0));
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_LE(dd.PendingCount(), 2u);
     fm.WaitAll();
@@ -1531,12 +1501,11 @@ TEST_P(FrameManagerTest, CTBC02_ThreeFrameThreeBin) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         dd.Destroy(BufferHandle::Pack(1, i + 1, 0, 0));
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(dd.PendingCount(), 3u);
     // Frame 4: drains bin 0
@@ -1544,36 +1513,33 @@ TEST_P(FrameManagerTest, CTBC02_ThreeFrameThreeBin) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         EXPECT_EQ(dd.PendingCount(), 2u);
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     // Frame 5: drains bin 1
     {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         EXPECT_EQ(dd.PendingCount(), 1u);
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     // Frame 6: drains bin 2
     {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         EXPECT_EQ(dd.PendingCount(), 0u);
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     fm.SetDeferredDestructor(nullptr);
 }
@@ -1592,12 +1558,11 @@ TEST_P(FrameManagerTest, CTBC03_BulkDestroyPerFrame) {
         for (uint32_t i = 1; i <= 100; ++i) {
             dd.Destroy(BufferHandle::Pack(1, i, 0, 0));
         }
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(dd.PendingCount(), 100u);
     // Frame 2: 100 more
@@ -1607,12 +1572,11 @@ TEST_P(FrameManagerTest, CTBC03_BulkDestroyPerFrame) {
         for (uint32_t i = 101; i <= 200; ++i) {
             dd.Destroy(BufferHandle::Pack(1, i, 0, 0));
         }
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(dd.PendingCount(), 200u);
     // Frame 3: drains bin 0 (100 resources)
@@ -1620,12 +1584,11 @@ TEST_P(FrameManagerTest, CTBC03_BulkDestroyPerFrame) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         EXPECT_EQ(dd.PendingCount(), 100u);
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     fm.SetDeferredDestructor(nullptr);
     dd.DrainAll();
@@ -1667,12 +1630,11 @@ TEST_P(FrameManagerTest, CTEDGE05_SingleFrameInFlight) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         EXPECT_EQ(fm.FrameIndex(), 0u);
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     }
     EXPECT_EQ(fm.FrameNumber(), 10u);
     EXPECT_EQ(fm.CurrentTimelineValue(), 10u);
@@ -1688,12 +1650,11 @@ TEST_P(FrameManagerTest, CTEDGE07_SyncPointBeforeBeginFrame) {
     fm.SetComputeSyncPoint({.semaphore = csem, .value = 42});
     auto ctx = fm.BeginFrame();
     ASSERT_TRUE(ctx.has_value());
-    auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
     acq->listHandle.Dispatch([](auto& c) { c.End(); });
     (void)fm.EndFrame(acq->bufferHandle);
-    Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
     EXPECT_EQ(fm.CurrentTimelineValue(), 1u);
     // Sync point should be consumed (reset to 0) — verify via next frame with no sync
     RunFrames(fm, 1);
@@ -1721,12 +1682,11 @@ TEST_P(FrameManagerTest, CTE2E01_FullLoopWithDDAndSS) {
             fm.SetComputeSyncPoint({.semaphore = csem, .value = i});
         }
         dd.Destroy(BufferHandle::Pack(1, i, 0, 0));
-        auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
         (void)fm.EndFrame(acq->bufferHandle);
-        Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
         sched.CommitSubmit(QueueType::Graphics);
     }
     EXPECT_EQ(fm.FrameNumber(), 20u);
@@ -1754,8 +1714,8 @@ TEST_P(FrameManagerTest, CTE2E02_AlternatingEndFrameAndSplit) {
 
         if (i % 2 == 0) {
             // Split submit
-            auto acqA = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
-            auto acqB = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+            auto acqA = fm.AcquireCommandList(QueueType::Graphics);
+            auto acqB = fm.AcquireCommandList(QueueType::Graphics);
             ASSERT_TRUE(acqA && acqB);
             acqA->listHandle.Dispatch([](auto& c) { c.Begin(); });
             acqA->listHandle.Dispatch([](auto& c) { c.End(); });
@@ -1765,15 +1725,12 @@ TEST_P(FrameManagerTest, CTE2E02_AlternatingEndFrameAndSplit) {
                 = {FrameManager::SubmitBatch{std::span(&acqA->bufferHandle, 1), true},
                    FrameManager::SubmitBatch{std::span(&acqB->bufferHandle, 1), true}};
             EXPECT_TRUE(fm.EndFrameSplit(batches).has_value());
-            Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acqA); });
-            Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acqB); });
         } else {
-            auto acq = Dev().Dispatch([](auto& d) { return d.AcquireCommandList(QueueType::Graphics); });
+            auto acq = fm.AcquireCommandList(QueueType::Graphics);
             ASSERT_TRUE(acq.has_value());
             acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
             acq->listHandle.Dispatch([](auto& c) { c.End(); });
             (void)fm.EndFrame(acq->bufferHandle);
-            Dev().Dispatch([&](auto& d) { d.ReleaseCommandList(*acq); });
         }
         EXPECT_GT(fm.CurrentTimelineValue(), prevTl) << "Timeline not monotonic at frame " << i;
         prevTl = fm.CurrentTimelineValue();

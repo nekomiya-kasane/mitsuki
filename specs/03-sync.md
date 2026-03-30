@@ -4118,14 +4118,23 @@ Composite tests: §18.13–§18.17 (17 tests in `tests/frame/test_frame_manager.
 
 See §17.19 and §18.18 for coverage matrices.
 
-### 19.11 Migration Plan
+### 19.11 Migration Status
 
-| Phase       | Scope                    | Changes                                                                                                                                                      | Risk                        |
-| ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- |
-| **Phase 1** | Internal to FrameManager | Create `CommandPoolAllocator`; replace FrameManager's internal `AcquireCommandList`/`ReleaseCommandList` calls with `commandPoolAllocator.Acquire`/`Release` | Low — no public API change  |
-| **Phase 2** | Application-facing       | Add `FrameManager::AcquireCommandList(QueueType)` that delegates to CPA                                                                                      | Low — additive API          |
-| **Phase 3** | Deprecation              | Deprecate `DeviceBase::AcquireCommandList`; update all demos/tests                                                                                           | Medium — breaking change    |
-| **Phase 4** | Multi-thread             | Add `threadIndex` parameter; integrate with RenderGraph                                                                                                      | High — requires thread pool |
+The old 1:1 `CreateCommandBuffer`/`DestroyCommandBuffer` and legacy `AcquireCommandList`/`ReleaseCommandList` APIs have been fully removed from `DeviceBase` and all backend implementations. All command buffer lifecycle is now managed exclusively through the pool-level API:
+
+- **`CommandPoolAllocator`** manages per-frame pools internally within `FrameManager`.
+- **`FrameManager::AcquireCommandList(QueueType)`** is the application-facing API for per-frame command buffers.
+- **`CreateCommandPool` / `AllocateFromPool` / `FreeFromPool` / `ResetCommandPool` / `DestroyCommandPool`** remain on `DeviceBase` for direct pool management (tests, tools).
+- **`DeferredDestructor`** no longer handles `CommandBufferHandle` — pool-level cleanup is managed by `CommandPoolAllocator` and `ResetCommandPool`.
+
+| Milestone                                  | Status    |
+| ------------------------------------------ | --------- |
+| CPA implementation + FrameManager internal | Completed |
+| `FrameManager::AcquireCommandList` public  | Completed |
+| Old API removed from DeviceBase            | Completed |
+| Old `*Impl` removed from all 5 backends    | Completed |
+| All demos/tests migrated to pool-level API | Completed |
+| Multi-thread extension (`threadIndex`)     | Completed |
 
 ### 19.12 Files
 
@@ -4311,7 +4320,7 @@ Retained command buffers are **not** managed by the frame-rotating pool — they
 void ReleaseRetained(const rhi::CommandListAcquisition& acq);
 ```
 
-**Note**: Retained buffers are a Phase 2+ feature. §19.11 Phase 1 focuses on transient frame pools only.
+**Note**: Retained buffers are a future extension. Current implementation covers transient per-frame pools only.
 
 ### 19.17 Updated Invariants (Addendum)
 

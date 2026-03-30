@@ -6,10 +6,9 @@
 // submit with sync, multi-queue timeline semaphore operations,
 // deferred destruction patterns, stress tests for handle pool.
 //
-// NOTE: Command recording tests (barriers, copy, draw, dispatch) require
-// CommandBufferBase CRTP access. DeviceBase only exposes opaque
-// CommandBufferHandle. Tests here focus on resource management, sync, and
-// submission orchestration — not command recording internals.
+// All command buffer lifecycle tests use the pool-level API:
+//   CreateCommandPool -> AllocateFromPool -> FreeFromPool -> DestroyCommandPool
+// The old 1:1 CreateCommandBuffer/DestroyCommandBuffer API has been removed.
 
 #include <gtest/gtest.h>
 
@@ -52,9 +51,11 @@ TEST_P(RhiIntegrationTest, BufferStagingLifecycle) {
         Dev().Dispatch([&](auto& dev) { dev.UnmapBuffer(*staging); });
     }
 
-    // Create command buffer + fence for transfer
-    CommandBufferDesc cbDesc{.type = QueueType::Transfer};
-    auto cb = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandBuffer(cbDesc); });
+    // Create command pool + allocate from pool for transfer
+    CommandPoolDesc poolDesc{.queue = QueueType::Transfer, .transient = false};
+    auto pool = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandPool(poolDesc); });
+    ASSERT_TRUE(pool.has_value());
+    auto cb = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
     ASSERT_TRUE(cb.has_value());
 
     auto fence = Dev().Dispatch([&](auto& dev) { return dev.CreateFence(false); });
@@ -68,7 +69,7 @@ TEST_P(RhiIntegrationTest, BufferStagingLifecycle) {
     // Cleanup
     Dev().Dispatch([&](auto& dev) {
         dev.DestroyFence(*fence);
-        dev.DestroyCommandBuffer(*cb);
+        dev.DestroyCommandPool(*pool);
         dev.DestroyBuffer(*staging);
         dev.DestroyBuffer(*gpu);
     });
@@ -159,9 +160,11 @@ TEST_P(RhiIntegrationTest, TimelineSemaphoreTransferToGraphics) {
     auto dst = Dev().Dispatch([&](auto& dev) { return dev.CreateBuffer(dstDesc); });
     ASSERT_TRUE(src.has_value() && dst.has_value());
 
-    // Transfer command buffer
-    CommandBufferDesc transferCbDesc{.type = QueueType::Transfer};
-    auto transferCb = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandBuffer(transferCbDesc); });
+    // Transfer command pool + allocation
+    CommandPoolDesc transferPoolDesc{.queue = QueueType::Transfer, .transient = false};
+    auto transferPool = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandPool(transferPoolDesc); });
+    ASSERT_TRUE(transferPool.has_value());
+    auto transferCb = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*transferPool, false); });
     ASSERT_TRUE(transferCb.has_value());
 
     // Submit transfer with signal semaphore value=1
@@ -169,9 +172,11 @@ TEST_P(RhiIntegrationTest, TimelineSemaphoreTransferToGraphics) {
     SubmitDesc transferSubmit{.signalSemaphores = std::span{&signalInfo, 1}};
     Dev().Dispatch([&](auto& dev) { dev.Submit(QueueType::Transfer, transferSubmit); });
 
-    // Graphics command buffer (waits on semaphore value=1)
-    CommandBufferDesc gfxCbDesc{.type = QueueType::Graphics};
-    auto gfxCb = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandBuffer(gfxCbDesc); });
+    // Graphics command pool + allocation (waits on semaphore value=1)
+    CommandPoolDesc gfxPoolDesc{.queue = QueueType::Graphics, .transient = false};
+    auto gfxPool = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandPool(gfxPoolDesc); });
+    ASSERT_TRUE(gfxPool.has_value());
+    auto gfxCb = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*gfxPool, false); });
     ASSERT_TRUE(gfxCb.has_value());
 
     // Submit graphics with wait semaphore value=1, signal value=2
@@ -195,8 +200,8 @@ TEST_P(RhiIntegrationTest, TimelineSemaphoreTransferToGraphics) {
     // Cleanup
     Dev().Dispatch([&](auto& dev) {
         dev.DestroyFence(*fence);
-        dev.DestroyCommandBuffer(*transferCb);
-        dev.DestroyCommandBuffer(*gfxCb);
+        dev.DestroyCommandPool(*transferPool);
+        dev.DestroyCommandPool(*gfxPool);
         dev.DestroyBuffer(*src);
         dev.DestroyBuffer(*dst);
         dev.DestroySemaphore(*sem);
@@ -273,17 +278,22 @@ TEST_P(RhiIntegrationTest, MixedResourceCreateDestroy) {
     }
 }
 
-TEST_P(RhiIntegrationTest, BulkCommandBufferCreateDestroy) {
-    std::vector<CommandBufferHandle> cbs;
-    for (int i = 0; i < 100; ++i) {
-        auto qt = (i % 3 == 0) ? QueueType::Compute : (i % 3 == 1) ? QueueType::Transfer : QueueType::Graphics;
-        CommandBufferDesc desc{.type = qt};
-        auto r = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandBuffer(desc); });
-        ASSERT_TRUE(r.has_value()) << "Failed at cb " << i;
-        cbs.push_back(*r);
-    }
-    for (auto& cb : cbs) {
-        Dev().Dispatch([&](auto& dev) { dev.DestroyCommandBuffer(cb); });
+TEST_P(RhiIntegrationTest, BulkPoolAllocateAndFree) {
+    // Create one pool per queue type, allocate multiple from each
+    for (auto qt : {QueueType::Graphics, QueueType::Compute, QueueType::Transfer}) {
+        CommandPoolDesc poolDesc{.queue = qt, .transient = false};
+        auto pool = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandPool(poolDesc); });
+        ASSERT_TRUE(pool.has_value());
+        std::vector<CommandListAcquisition> acqs;
+        for (int i = 0; i < 33; ++i) {
+            auto acq = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
+            ASSERT_TRUE(acq.has_value()) << "Failed at allocation " << i << " for QueueType " << static_cast<int>(qt);
+            acqs.push_back(*acq);
+        }
+        for (auto& a : acqs) {
+            Dev().Dispatch([&](auto& dev) { dev.FreeFromPool(*pool, a); });
+        }
+        Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
     }
 }
 

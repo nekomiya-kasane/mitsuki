@@ -5,7 +5,8 @@
  *  indexed by [frameSlot][queueType]. Pools are created once at initialization
  *  and reset in bulk at BeginFrame after GPU completion.
  *
- *  Thread safety: single-threaded per queue (v1). See §19.8 for multi-thread extension.
+ *  Thread safety: lock-free when each thread uses its own threadIndex (§19.8).
+ *  Each (frameSlot, queueType, threadIndex) triple maps to a unique native pool.
  *
  *  Namespace: miki::frame
  */
@@ -28,7 +29,8 @@ namespace miki::frame {
     class CommandPoolAllocator {
        public:
         static constexpr uint32_t kMaxFramesInFlight = 4;
-        static constexpr uint32_t kMaxQueueTypes = 3;  // Graphics, Compute, Transfer
+        static constexpr uint32_t kMaxQueueTypes = 3;         // Graphics, Compute, Transfer
+        static constexpr uint32_t kMaxRecordingThreads = 16;  // §19.8
 
         struct Desc {
             rhi::DeviceHandle device;
@@ -37,6 +39,7 @@ namespace miki::frame {
             bool hasAsyncTransfer = false;
             uint32_t initialArenaCapacity = 16;
             bool enableHwmShrink = false;
+            uint32_t recordingThreadCount = 1;  ///< >1 enables per-thread pools (§19.8)
         };
 
         struct PoolStats {
@@ -44,6 +47,7 @@ namespace miki::frame {
             uint32_t currentAcquired = 0;
             uint32_t highWaterMark = 0;
             bool hwmShrinkEnabled = false;
+            uint32_t recordingThreadCount = 1;
         };
 
         struct PooledAcquisition {
@@ -63,15 +67,20 @@ namespace miki::frame {
 
         void ResetSlot(uint32_t frameSlot);
 
-        [[nodiscard]] auto Acquire(uint32_t frameSlot, rhi::QueueType queue) -> core::Result<PooledAcquisition>;
+        [[nodiscard]] auto Acquire(uint32_t frameSlot, rhi::QueueType queue, uint32_t threadIndex = 0)
+            -> core::Result<PooledAcquisition>;
 
-        void Release(uint32_t frameSlot, rhi::QueueType queue, uint32_t arenaIndex);
+        [[nodiscard]] auto AcquireSecondary(uint32_t frameSlot, rhi::QueueType queue, uint32_t threadIndex = 0)
+            -> core::Result<PooledAcquisition>;
+
+        void Release(uint32_t frameSlot, rhi::QueueType queue, uint32_t arenaIndex, uint32_t threadIndex = 0);
 
         [[nodiscard]] auto GetAcquiredCount(uint32_t frameSlot) const -> uint32_t;
         [[nodiscard]] auto GetPoolCount() const -> uint32_t;
         [[nodiscard]] auto GetStats() const -> PoolStats;
         void DumpStats(FILE* out = stderr) const;
-        void NotifyOom(uint32_t frameSlot, rhi::QueueType queue);
+        [[nodiscard]] auto GetRecordingThreadCount() const -> uint32_t;
+        void NotifyOom(uint32_t frameSlot, rhi::QueueType queue, uint32_t threadIndex = 0);
 
        private:
         struct Impl;

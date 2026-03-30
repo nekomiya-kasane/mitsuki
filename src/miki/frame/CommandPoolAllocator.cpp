@@ -38,11 +38,13 @@ namespace miki::frame {
         bool hasAsyncTransfer = false;
         bool enableHwmShrink = false;
         uint32_t initialArenaCapacity = 16;
+        uint32_t recordingThreadCount = 1;
 
-        // PoolRing[frameSlot][queueIndex] — queueIndex: 0=Graphics, 1=Compute, 2=Transfer
+        // PoolRing[frameSlot][queueIndex][threadIndex]
         static constexpr uint32_t kMaxFrames = kMaxFramesInFlight;
         static constexpr uint32_t kMaxQueues = kMaxQueueTypes;
-        std::array<std::array<PoolSlot, kMaxQueues>, kMaxFrames> poolRing_{};
+        static constexpr uint32_t kMaxThreads = kMaxRecordingThreads;
+        std::array<std::array<std::array<PoolSlot, kMaxThreads>, kMaxQueues>, kMaxFrames> poolRing_{};
 
         uint32_t activeQueueCount = 1;
         uint32_t highWaterMark = 0;
@@ -72,10 +74,12 @@ namespace miki::frame {
         void DestroyAllPools() {
             for (uint32_t f = 0; f < framesInFlight; ++f) {
                 for (uint32_t q = 0; q < activeQueueCount; ++q) {
-                    auto& slot = poolRing_[f][q];
-                    if (slot.poolHandle.IsValid()) {
-                        device.Dispatch([&](auto& dev) { dev.DestroyCommandPool(slot.poolHandle); });
-                        slot.poolHandle = {};
+                    for (uint32_t t = 0; t < recordingThreadCount; ++t) {
+                        auto& slot = poolRing_[f][q][t];
+                        if (slot.poolHandle.IsValid()) {
+                            device.Dispatch([&](auto& dev) { dev.DestroyCommandPool(slot.poolHandle); });
+                            slot.poolHandle = {};
+                        }
                     }
                 }
             }
@@ -101,6 +105,9 @@ namespace miki::frame {
         if (!desc.device.IsValid() || desc.framesInFlight == 0 || desc.framesInFlight > kMaxFramesInFlight) {
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }
+        if (desc.recordingThreadCount == 0 || desc.recordingThreadCount > kMaxRecordingThreads) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
+        }
 
         CommandPoolAllocator cpa;
         cpa.impl_ = std::make_unique<Impl>();
@@ -111,6 +118,7 @@ namespace miki::frame {
         impl.hasAsyncTransfer = desc.hasAsyncTransfer;
         impl.enableHwmShrink = desc.enableHwmShrink;
         impl.initialArenaCapacity = desc.initialArenaCapacity;
+        impl.recordingThreadCount = desc.recordingThreadCount;
 
         impl.activeQueueCount = 1;
         if (desc.hasAsyncCompute) {
@@ -120,23 +128,25 @@ namespace miki::frame {
             impl.activeQueueCount++;
         }
 
-        // Create native pools for each (frameSlot, queue) pair
+        // Create native pools for each (frameSlot, queue, thread) triple
         static constexpr rhi::QueueType kQueues[]
             = {rhi::QueueType::Graphics, rhi::QueueType::Compute, rhi::QueueType::Transfer};
 
         for (uint32_t f = 0; f < impl.framesInFlight; ++f) {
             for (uint32_t q = 0; q < impl.activeQueueCount; ++q) {
-                auto& slot = impl.poolRing_[f][q];
-                slot.queue = kQueues[q];
+                for (uint32_t t = 0; t < impl.recordingThreadCount; ++t) {
+                    auto& slot = impl.poolRing_[f][q][t];
+                    slot.queue = kQueues[q];
 
-                rhi::CommandPoolDesc poolDesc{.queue = kQueues[q], .transient = true};
-                auto result = impl.device.Dispatch([&](auto& dev) { return dev.CreateCommandPool(poolDesc); });
-                if (!result) {
-                    impl.DestroyAllPools();
-                    return std::unexpected(core::ErrorCode::OutOfMemory);
+                    rhi::CommandPoolDesc poolDesc{.queue = kQueues[q], .transient = true};
+                    auto result = impl.device.Dispatch([&](auto& dev) { return dev.CreateCommandPool(poolDesc); });
+                    if (!result) {
+                        impl.DestroyAllPools();
+                        return std::unexpected(core::ErrorCode::OutOfMemory);
+                    }
+                    slot.poolHandle = *result;
+                    slot.arena.Reserve(desc.initialArenaCapacity);
                 }
-                slot.poolHandle = *result;
-                slot.arena.Reserve(desc.initialArenaCapacity);
             }
         }
 
@@ -152,20 +162,22 @@ namespace miki::frame {
         auto& impl = *impl_;
 
         for (uint32_t q = 0; q < impl.activeQueueCount; ++q) {
-            auto& slot = impl.poolRing_[frameSlot][q];
+            for (uint32_t t = 0; t < impl.recordingThreadCount; ++t) {
+                auto& slot = impl.poolRing_[frameSlot][q][t];
 
-            rhi::CommandPoolResetFlags flags = rhi::CommandPoolResetFlags::None;
-            if (impl.enableHwmShrink && slot.oomObserved) {
-                flags = rhi::CommandPoolResetFlags::ReleaseResources;
-                slot.oomObserved = false;
-                MIKI_LOG_INFO(
-                    ::miki::debug::LogCategory::Rhi, "CommandPoolAllocator: OOM shrink for slot={} queue={}", frameSlot,
-                    q
-                );
+                rhi::CommandPoolResetFlags flags = rhi::CommandPoolResetFlags::None;
+                if (impl.enableHwmShrink && slot.oomObserved) {
+                    flags = rhi::CommandPoolResetFlags::ReleaseResources;
+                    slot.oomObserved = false;
+                    MIKI_LOG_INFO(
+                        ::miki::debug::LogCategory::Rhi,
+                        "CommandPoolAllocator: OOM shrink for slot={} queue={} thread={}", frameSlot, q, t
+                    );
+                }
+
+                impl.device.Dispatch([&](auto& dev) { dev.ResetCommandPool(slot.poolHandle, flags); });
+                slot.arena.ResetAll();
             }
-
-            impl.device.Dispatch([&](auto& dev) { dev.ResetCommandPool(slot.poolHandle, flags); });
-            slot.arena.ResetAll();
         }
     }
 
@@ -173,19 +185,20 @@ namespace miki::frame {
     // Acquire
     // =========================================================================
 
-    auto CommandPoolAllocator::Acquire(uint32_t frameSlot, rhi::QueueType queue) -> core::Result<PooledAcquisition> {
+    auto CommandPoolAllocator::Acquire(uint32_t frameSlot, rhi::QueueType queue, uint32_t threadIndex)
+        -> core::Result<PooledAcquisition> {
         assert(impl_ && frameSlot < impl_->framesInFlight);
         auto& impl = *impl_;
+        assert(threadIndex < impl.recordingThreadCount && "threadIndex out of range");
         uint32_t qi = impl.QueueIndex(queue);
         assert(qi < impl.activeQueueCount && "Acquiring from inactive queue");
 
-        auto& slot = impl.poolRing_[frameSlot][qi];
+        auto& slot = impl.poolRing_[frameSlot][qi][threadIndex];
 
         auto result = impl.device.Dispatch([&](auto& dev) { return dev.AllocateFromPool(slot.poolHandle, false); });
-
         if (!result) {
             if (impl.enableHwmShrink) {
-                NotifyOom(frameSlot, queue);
+                NotifyOom(frameSlot, queue, threadIndex);
             }
             return std::unexpected(core::ErrorCode::OutOfMemory);
         }
@@ -193,10 +206,48 @@ namespace miki::frame {
         auto [arenaPtr, arenaIndex] = slot.arena.Acquire();
         *arenaPtr = *result;
 
-        // Track high water mark
+        // Track high water mark across all threads for this slot
         uint32_t total = 0;
         for (uint32_t q = 0; q < impl.activeQueueCount; ++q) {
-            total += impl.poolRing_[frameSlot][q].arena.GetAcquiredCount();
+            for (uint32_t t = 0; t < impl.recordingThreadCount; ++t) {
+                total += impl.poolRing_[frameSlot][q][t].arena.GetAcquiredCount();
+            }
+        }
+        impl.highWaterMark = std::max(impl.highWaterMark, total);
+
+        return PooledAcquisition{.acquisition = *result, .arenaIndex = arenaIndex};
+    }
+
+    // =========================================================================
+    // AcquireSecondary
+    // =========================================================================
+
+    auto CommandPoolAllocator::AcquireSecondary(uint32_t frameSlot, rhi::QueueType queue, uint32_t threadIndex)
+        -> core::Result<PooledAcquisition> {
+        assert(impl_ && frameSlot < impl_->framesInFlight);
+        auto& impl = *impl_;
+        assert(threadIndex < impl.recordingThreadCount && "threadIndex out of range");
+        uint32_t qi = impl.QueueIndex(queue);
+        assert(qi < impl.activeQueueCount && "Acquiring from inactive queue");
+
+        auto& slot = impl.poolRing_[frameSlot][qi][threadIndex];
+
+        auto result = impl.device.Dispatch([&](auto& dev) { return dev.AllocateFromPool(slot.poolHandle, true); });
+        if (!result) {
+            if (impl.enableHwmShrink) {
+                NotifyOom(frameSlot, queue, threadIndex);
+            }
+            return std::unexpected(core::ErrorCode::OutOfMemory);
+        }
+
+        auto [arenaPtr, arenaIndex] = slot.arena.Acquire();
+        *arenaPtr = *result;
+
+        uint32_t total = 0;
+        for (uint32_t q = 0; q < impl.activeQueueCount; ++q) {
+            for (uint32_t t = 0; t < impl.recordingThreadCount; ++t) {
+                total += impl.poolRing_[frameSlot][q][t].arena.GetAcquiredCount();
+            }
         }
         impl.highWaterMark = std::max(impl.highWaterMark, total);
 
@@ -207,11 +258,14 @@ namespace miki::frame {
     // Release
     // =========================================================================
 
-    void CommandPoolAllocator::Release(uint32_t frameSlot, rhi::QueueType queue, uint32_t arenaIndex) {
+    void CommandPoolAllocator::Release(
+        uint32_t frameSlot, rhi::QueueType queue, uint32_t arenaIndex, uint32_t threadIndex
+    ) {
         assert(impl_ && frameSlot < impl_->framesInFlight);
         auto& impl = *impl_;
+        assert(threadIndex < impl.recordingThreadCount);
         uint32_t qi = impl.QueueIndex(queue);
-        auto& slot = impl.poolRing_[frameSlot][qi];
+        auto& slot = impl.poolRing_[frameSlot][qi][threadIndex];
 
         auto* acq = slot.arena.Lookup(arenaIndex);
         if (acq) {
@@ -228,7 +282,9 @@ namespace miki::frame {
         assert(impl_ && frameSlot < impl_->framesInFlight);
         uint32_t count = 0;
         for (uint32_t q = 0; q < impl_->activeQueueCount; ++q) {
-            count += impl_->poolRing_[frameSlot][q].arena.GetAcquiredCount();
+            for (uint32_t t = 0; t < impl_->recordingThreadCount; ++t) {
+                count += impl_->poolRing_[frameSlot][q][t].arena.GetAcquiredCount();
+            }
         }
         return count;
     }
@@ -237,7 +293,7 @@ namespace miki::frame {
         if (!impl_) {
             return 0;
         }
-        return impl_->framesInFlight * impl_->activeQueueCount;
+        return impl_->framesInFlight * impl_->activeQueueCount * impl_->recordingThreadCount;
     }
 
     auto CommandPoolAllocator::GetStats() const -> PoolStats {
@@ -248,15 +304,25 @@ namespace miki::frame {
         uint32_t totalAcquired = 0;
         for (uint32_t f = 0; f < impl.framesInFlight; ++f) {
             for (uint32_t q = 0; q < impl.activeQueueCount; ++q) {
-                totalAcquired += impl.poolRing_[f][q].arena.GetAcquiredCount();
+                for (uint32_t t = 0; t < impl.recordingThreadCount; ++t) {
+                    totalAcquired += impl.poolRing_[f][q][t].arena.GetAcquiredCount();
+                }
             }
         }
         return PoolStats{
-            .framePoolCount = impl.framesInFlight * impl.activeQueueCount,
+            .framePoolCount = impl.framesInFlight * impl.activeQueueCount * impl.recordingThreadCount,
             .currentAcquired = totalAcquired,
             .highWaterMark = impl.highWaterMark,
             .hwmShrinkEnabled = impl.enableHwmShrink,
+            .recordingThreadCount = impl.recordingThreadCount,
         };
+    }
+
+    auto CommandPoolAllocator::GetRecordingThreadCount() const -> uint32_t {
+        if (!impl_) {
+            return 0;
+        }
+        return impl_->recordingThreadCount;
     }
 
     void CommandPoolAllocator::DumpStats(FILE* out) const {
@@ -267,12 +333,14 @@ namespace miki::frame {
         );
     }
 
-    void CommandPoolAllocator::NotifyOom(uint32_t frameSlot, rhi::QueueType queue) {
+    void CommandPoolAllocator::NotifyOom(uint32_t frameSlot, rhi::QueueType queue, uint32_t threadIndex) {
         assert(impl_ && frameSlot < impl_->framesInFlight);
+        assert(threadIndex < impl_->recordingThreadCount);
         uint32_t qi = impl_->QueueIndex(queue);
-        impl_->poolRing_[frameSlot][qi].oomObserved = true;
+        impl_->poolRing_[frameSlot][qi][threadIndex].oomObserved = true;
         MIKI_LOG_WARN(
-            ::miki::debug::LogCategory::Rhi, "CommandPoolAllocator: OOM observed for slot={} queue={}", frameSlot, qi
+            ::miki::debug::LogCategory::Rhi, "CommandPoolAllocator: OOM observed for slot={} queue={} thread={}",
+            frameSlot, qi, threadIndex
         );
     }
 

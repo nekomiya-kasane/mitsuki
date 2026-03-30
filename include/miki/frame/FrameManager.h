@@ -94,6 +94,16 @@ namespace miki::frame {
         /// without waiting for the full frame. Last batch handles present sync.
         [[nodiscard]] auto EndFrameSplit(std::span<const SubmitBatch> iBatches) -> core::Result<void>;
 
+        // ── Command buffer acquisition (pool-backed, §19) ────────────
+
+        /// @brief Acquire a command buffer from the current frame's pool.
+        /// The returned PooledAcquisition contains both the CommandListAcquisition
+        /// (bufferHandle + listHandle) and an arenaIndex for optional fine-grained release.
+        /// Caller must call Begin()/End() on listHandle, then pass bufferHandle to EndFrame.
+        /// Buffers are automatically reclaimed by ResetSlot at the next BeginFrame for this slot.
+        [[nodiscard]] auto AcquireCommandList(rhi::QueueType iQueue, uint32_t iThreadIndex = 0)
+            -> core::Result<rhi::CommandListAcquisition>;
+
         // ── Async compute integration ───────────────────────────────
 
         /// @brief Get a sync point for async compute to wait on.

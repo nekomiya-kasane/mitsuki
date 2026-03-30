@@ -35,7 +35,7 @@ class CPATest : public RhiTest {
    protected:
     [[nodiscard]] auto MakeCPA(
         uint32_t framesInFlight = 2, bool asyncCompute = false, bool asyncTransfer = false, uint32_t arenaCapacity = 16,
-        bool hwmShrink = false
+        bool hwmShrink = false, uint32_t recordingThreadCount = 1
     ) -> core::Result<CommandPoolAllocator> {
         CommandPoolAllocator::Desc desc{
             .device = Dev(),
@@ -44,6 +44,7 @@ class CPATest : public RhiTest {
             .hasAsyncTransfer = asyncTransfer,
             .initialArenaCapacity = arenaCapacity,
             .enableHwmShrink = hwmShrink,
+            .recordingThreadCount = recordingThreadCount,
         };
         return CommandPoolAllocator::Create(desc);
     }
@@ -689,6 +690,148 @@ TEST_P(CPATest, GS05_NotifyOom) {
 
     auto acq = cpa.Acquire(0, QueueType::Graphics);
     EXPECT_TRUE(acq.has_value());
+}
+
+// ============================================================================
+// §17.18.4 CPA-MT — Multi-Thread Extension Tests
+// ============================================================================
+
+// CPA-MT-01: GIVEN CPA with recordingThreadCount=4
+//            WHEN  Acquire(slot=0, Graphics, threadIndex=0) and Acquire(slot=0, Graphics, threadIndex=1)
+//            THEN  different native pools used (no contention)
+//            AND   GetPoolCount() == framesInFlight * queueCount * threadCount
+TEST_P(CPATest, MT01_MultiThreadDifferentPools) {
+    constexpr uint32_t kThreads = 4;
+    auto result = MakeCPA(2, false, false, 16, false, kThreads);
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    // Pool count = 2 frames * 1 queue * 4 threads = 8
+    EXPECT_EQ(cpa.GetPoolCount(), 2u * 1u * kThreads);
+    EXPECT_EQ(cpa.GetRecordingThreadCount(), kThreads);
+
+    // Acquire from different threads — each succeeds independently
+    auto acq0 = cpa.Acquire(0, QueueType::Graphics, 0);
+    auto acq1 = cpa.Acquire(0, QueueType::Graphics, 1);
+    auto acq2 = cpa.Acquire(0, QueueType::Graphics, 2);
+    auto acq3 = cpa.Acquire(0, QueueType::Graphics, 3);
+    ASSERT_TRUE(acq0.has_value());
+    ASSERT_TRUE(acq1.has_value());
+    ASSERT_TRUE(acq2.has_value());
+    ASSERT_TRUE(acq3.has_value());
+
+    // All 4 buffers should have distinct handles (from different pools)
+    EXPECT_NE(acq0->acquisition.bufferHandle, acq1->acquisition.bufferHandle);
+    EXPECT_NE(acq2->acquisition.bufferHandle, acq3->acquisition.bufferHandle);
+
+    EXPECT_EQ(cpa.GetAcquiredCount(0), 4u);
+}
+
+// CPA-MT-02: GIVEN CPA with recordingThreadCount=4
+//            WHEN  ResetSlot(0) called
+//            THEN  all 4 thread pools for slot 0 are reset
+//            AND   thread pools for slots 1+ are unaffected
+TEST_P(CPATest, MT02_ResetSlotResetsAllThreads) {
+    constexpr uint32_t kThreads = 4;
+    auto result = MakeCPA(2, false, false, 16, false, kThreads);
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    // Acquire from all threads in slot 0
+    for (uint32_t t = 0; t < kThreads; ++t) {
+        auto acq = cpa.Acquire(0, QueueType::Graphics, t);
+        ASSERT_TRUE(acq.has_value());
+    }
+    // Acquire from all threads in slot 1
+    for (uint32_t t = 0; t < kThreads; ++t) {
+        auto acq = cpa.Acquire(1, QueueType::Graphics, t);
+        ASSERT_TRUE(acq.has_value());
+    }
+    EXPECT_EQ(cpa.GetAcquiredCount(0), kThreads);
+    EXPECT_EQ(cpa.GetAcquiredCount(1), kThreads);
+
+    // Reset only slot 0
+    cpa.ResetSlot(0);
+    EXPECT_EQ(cpa.GetAcquiredCount(0), 0u);
+    EXPECT_EQ(cpa.GetAcquiredCount(1), kThreads);  // Unaffected
+}
+
+// CPA-MT-03: GIVEN CPA with recordingThreadCount=1 (default)
+//            WHEN  Acquire(slot=0, Graphics, threadIndex=0) called
+//            THEN  succeeds (single-thread mode backward compat)
+//            AND   GetPoolCount() == framesInFlight * queueCount * 1
+TEST_P(CPATest, MT03_SingleThreadDefault) {
+    auto result = MakeCPA(2);
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    EXPECT_EQ(cpa.GetRecordingThreadCount(), 1u);
+    EXPECT_EQ(cpa.GetPoolCount(), 2u);  // 2 frames * 1 queue * 1 thread
+
+    auto acq = cpa.Acquire(0, QueueType::Graphics, 0);
+    ASSERT_TRUE(acq.has_value());
+    EXPECT_EQ(cpa.GetAcquiredCount(0), 1u);
+}
+
+// CPA-MT-04: GIVEN invalid recordingThreadCount=0 WHEN Create THEN returns error
+TEST_P(CPATest, MT04_ZeroThreadCountReturnsError) {
+    CommandPoolAllocator::Desc desc{
+        .device = Dev(),
+        .framesInFlight = 2,
+        .recordingThreadCount = 0,
+    };
+    auto result = CommandPoolAllocator::Create(desc);
+    EXPECT_FALSE(result.has_value());
+}
+
+// CPA-MT-05: GIVEN recordingThreadCount > kMaxRecordingThreads WHEN Create THEN returns error
+TEST_P(CPATest, MT05_ExcessiveThreadCountReturnsError) {
+    CommandPoolAllocator::Desc desc{
+        .device = Dev(),
+        .framesInFlight = 2,
+        .recordingThreadCount = CommandPoolAllocator::kMaxRecordingThreads + 1,
+    };
+    auto result = CommandPoolAllocator::Create(desc);
+    EXPECT_FALSE(result.has_value());
+}
+
+// CPA-MT-06: GIVEN CPA with 4 threads, AcquireSecondary from different threads
+//            WHEN  AcquireSecondary(slot=0, Graphics, t) for t in [0..3]
+//            THEN  all succeed
+TEST_P(CPATest, MT06_AcquireSecondaryMultiThread) {
+    constexpr uint32_t kThreads = 4;
+    auto result = MakeCPA(2, false, false, 16, false, kThreads);
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    for (uint32_t t = 0; t < kThreads; ++t) {
+        auto acq = cpa.AcquireSecondary(0, QueueType::Graphics, t);
+        ASSERT_TRUE(acq.has_value()) << "AcquireSecondary failed for thread " << t;
+    }
+    EXPECT_EQ(cpa.GetAcquiredCount(0), kThreads);
+}
+
+// CPA-MT-07: GIVEN CPA with 4 threads, Release per-thread
+//            WHEN  Acquire then Release on each thread
+//            THEN  acquired count returns to 0
+TEST_P(CPATest, MT07_ReleasePerThread) {
+    constexpr uint32_t kThreads = 4;
+    auto result = MakeCPA(2, false, false, 16, false, kThreads);
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    std::vector<CommandPoolAllocator::PooledAcquisition> acqs;
+    for (uint32_t t = 0; t < kThreads; ++t) {
+        auto acq = cpa.Acquire(0, QueueType::Graphics, t);
+        ASSERT_TRUE(acq.has_value());
+        acqs.push_back(*acq);
+    }
+    EXPECT_EQ(cpa.GetAcquiredCount(0), kThreads);
+
+    for (uint32_t t = 0; t < kThreads; ++t) {
+        cpa.Release(0, QueueType::Graphics, acqs[t].arenaIndex, t);
+    }
+    EXPECT_EQ(cpa.GetAcquiredCount(0), 0u);
 }
 
 // ============================================================================

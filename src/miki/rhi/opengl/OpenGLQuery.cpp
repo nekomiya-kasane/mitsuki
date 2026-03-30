@@ -74,58 +74,6 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // Command buffer creation/destruction
-    // =========================================================================
-
-    auto OpenGLDevice::CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle> {
-        auto [handle, data] = commandBuffers_.Allocate();
-        if (!data) {
-            return std::unexpected(RhiError::TooManyObjects);
-        }
-        data->queueType = desc.type;
-        data->isSecondary = desc.secondary;
-        return handle;
-    }
-
-    void OpenGLDevice::DestroyCommandBufferImpl(CommandBufferHandle h) {
-        auto* data = commandBuffers_.Lookup(h);
-        if (!data) {
-            return;
-        }
-        commandBuffers_.Free(h);
-    }
-
-    // =========================================================================
-    // Command list acquisition (unified factory)
-    // =========================================================================
-
-    auto OpenGLDevice::AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition> {
-        CommandBufferDesc desc{.type = queue, .secondary = false};
-        auto bufResult = CreateCommandBufferImpl(desc);
-        if (!bufResult) {
-            return std::unexpected(bufResult.error());
-        }
-
-        auto bufHandle = *bufResult;
-        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<OpenGLCommandBuffer>());
-        cmdBuf->Init(this);
-
-        CommandListHandle listHandle(cmdBuf.get(), BackendType::OpenGL43);
-        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
-    }
-
-    void OpenGLDevice::ReleaseCommandListImpl(const CommandListAcquisition& acq) {
-        void* raw = acq.listHandle.GetRawPtr();
-        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
-            return p.get() == raw;
-        });
-        if (it != commandListArena_.end()) {
-            commandListArena_.erase(it);
-        }
-        DestroyCommandBufferImpl(acq.bufferHandle);
-    }
-
-    // =========================================================================
     // Command pool management (§19 — pool-level API, metadata-only for OpenGL)
     // =========================================================================
 
@@ -152,12 +100,12 @@ namespace miki::rhi {
         if (!poolData) {
             return std::unexpected(RhiError::InvalidHandle);
         }
-        CommandBufferDesc desc{.type = poolData->queueType, .secondary = false};
-        auto bufResult = CreateCommandBufferImpl(desc);
-        if (!bufResult) {
-            return std::unexpected(bufResult.error());
+        auto [bufHandle, bufData] = commandBuffers_.Allocate();
+        if (!bufData) {
+            return std::unexpected(RhiError::TooManyObjects);
         }
-        auto bufHandle = *bufResult;
+        bufData->queueType = poolData->queueType;
+        bufData->isSecondary = false;
         auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<OpenGLCommandBuffer>());
         cmdBuf->Init(this);
         CommandListHandle listHandle(cmdBuf.get(), BackendType::OpenGL43);
@@ -172,7 +120,9 @@ namespace miki::rhi {
         if (it != commandListArena_.end()) {
             commandListArena_.erase(it);
         }
-        DestroyCommandBufferImpl(acq.bufferHandle);
+        if (acq.bufferHandle.IsValid()) {
+            commandBuffers_.Free(acq.bufferHandle);
+        }
     }
 
 }  // namespace miki::rhi

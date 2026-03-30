@@ -467,6 +467,16 @@ namespace miki::frame {
         return ctx;
     }
 
+    auto FrameManager::AcquireCommandList(rhi::QueueType iQueue, uint32_t iThreadIndex)
+        -> core::Result<rhi::CommandListAcquisition> {
+        assert(impl_ && "FrameManager used after move");
+        auto pooled = impl_->commandPoolAllocator.Acquire(impl_->frameIndex, iQueue, iThreadIndex);
+        if (!pooled) {
+            return std::unexpected(pooled.error());
+        }
+        return pooled->acquisition;
+    }
+
     auto FrameManager::EndFrame(std::span<const rhi::CommandBufferHandle> iCmdBuffers) -> core::Result<void> {
         assert(impl_ && "FrameManager used after move");
 

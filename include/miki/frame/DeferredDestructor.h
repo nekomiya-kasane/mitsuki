@@ -62,7 +62,6 @@ namespace miki::frame {
         auto Destroy(rhi::DescriptorLayoutHandle iHandle) -> void;
         auto Destroy(rhi::PipelineCacheHandle iHandle) -> void;
         auto Destroy(rhi::QueryPoolHandle iHandle) -> void;
-        auto Destroy(rhi::CommandBufferHandle iHandle) -> void;
         auto Destroy(rhi::DeviceMemoryHandle iHandle) -> void;
 
         // ── Bin management ──────────────────────────────────────────

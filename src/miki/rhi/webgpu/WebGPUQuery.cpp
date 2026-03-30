@@ -13,35 +13,6 @@
 namespace miki::rhi {
 
     // =========================================================================
-    // Command buffer create / destroy
-    // =========================================================================
-
-    auto WebGPUDevice::CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle> {
-        auto [handle, data] = commandBuffers_.Allocate();
-        if (!handle.IsValid()) {
-            return std::unexpected(RhiError::TooManyObjects);
-        }
-
-        data->queueType = desc.type;
-        data->isSecondary = desc.secondary;
-        data->encoder = nullptr;  // Created lazily at Begin()
-
-        return handle;
-    }
-
-    void WebGPUDevice::DestroyCommandBufferImpl(CommandBufferHandle h) {
-        auto* data = commandBuffers_.Lookup(h);
-        if (!data) {
-            return;
-        }
-        if (data->encoder) {
-            wgpuCommandEncoderRelease(data->encoder);
-            data->encoder = nullptr;
-        }
-        commandBuffers_.Free(h);
-    }
-
-    // =========================================================================
     // Query pool
     // =========================================================================
 
@@ -187,36 +158,6 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // Command buffer creation/destruction (continued)
-    // =========================================================================
-
-    auto WebGPUDevice::AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition> {
-        CommandBufferDesc desc{.type = queue, .secondary = false};
-        auto bufResult = CreateCommandBufferImpl(desc);
-        if (!bufResult) {
-            return std::unexpected(bufResult.error());
-        }
-
-        auto bufHandle = *bufResult;
-        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<WebGPUCommandBuffer>());
-        cmdBuf->Init(this, bufHandle);
-
-        CommandListHandle listHandle(cmdBuf.get(), BackendType::WebGPU);
-        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
-    }
-
-    void WebGPUDevice::ReleaseCommandListImpl(const CommandListAcquisition& acq) {
-        void* raw = acq.listHandle.GetRawPtr();
-        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
-            return p.get() == raw;
-        });
-        if (it != commandListArena_.end()) {
-            commandListArena_.erase(it);
-        }
-        DestroyCommandBufferImpl(acq.bufferHandle);
-    }
-
-    // =========================================================================
     // Command pool management (§19 — pool-level API, metadata-only for WebGPU)
     // =========================================================================
 
@@ -243,12 +184,13 @@ namespace miki::rhi {
         if (!poolData) {
             return std::unexpected(RhiError::InvalidHandle);
         }
-        CommandBufferDesc desc{.type = poolData->queueType, .secondary = false};
-        auto bufResult = CreateCommandBufferImpl(desc);
-        if (!bufResult) {
-            return std::unexpected(bufResult.error());
+        auto [bufHandle, bufData] = commandBuffers_.Allocate();
+        if (!bufData) {
+            return std::unexpected(RhiError::TooManyObjects);
         }
-        auto bufHandle = *bufResult;
+        bufData->queueType = poolData->queueType;
+        bufData->isSecondary = false;
+        bufData->encoder = nullptr;
         auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<WebGPUCommandBuffer>());
         cmdBuf->Init(this, bufHandle);
         CommandListHandle listHandle(cmdBuf.get(), BackendType::WebGPU);
@@ -263,7 +205,14 @@ namespace miki::rhi {
         if (it != commandListArena_.end()) {
             commandListArena_.erase(it);
         }
-        DestroyCommandBufferImpl(acq.bufferHandle);
+        auto* bufData = commandBuffers_.Lookup(acq.bufferHandle);
+        if (bufData) {
+            if (bufData->encoder) {
+                wgpuCommandEncoderRelease(bufData->encoder);
+                bufData->encoder = nullptr;
+            }
+            commandBuffers_.Free(acq.bufferHandle);
+        }
     }
 
 }  // namespace miki::rhi

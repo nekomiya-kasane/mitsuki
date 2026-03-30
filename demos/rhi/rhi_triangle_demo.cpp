@@ -164,12 +164,13 @@ struct TriangleRenderer {
     ShaderModuleHandle fragShader;
     PipelineLayoutHandle pipelineLayout;
     PipelineHandle pipeline;
+    SurfaceManager* surfaceManager = nullptr;
+    WindowHandle window{};
 
-    // Command list acquired via AcquireCommandList (type-erased, no backend headers needed)
-    CommandListAcquisition cmdAcq;
-
-    auto Init(DeviceHandle dev, CompiledShaders& shaders) -> bool {
+    auto Init(DeviceHandle dev, CompiledShaders& shaders, SurfaceManager* sm, WindowHandle win) -> bool {
         device = dev;
+        surfaceManager = sm;
+        window = win;
 
         // Helper lambdas — explicit return type to avoid multi-backend type mismatch
         auto createShader = [&](const ShaderModuleDesc& sd) -> RhiResult<ShaderModuleHandle> {
@@ -237,27 +238,35 @@ struct TriangleRenderer {
         }
         pipeline = *pso;
 
-        // Command list — one call replaces the per-backend switch-case
-        auto acqResult = device.Dispatch([](auto& d) -> RhiResult<CommandListAcquisition> {
-            return d.AcquireCommandList(QueueType::Graphics);
-        });
-        if (!acqResult) {
-            std::println("[demo] AcquireCommandList failed");
-            return false;
-        }
-        cmdAcq.bufferHandle = acqResult->bufferHandle;
-        cmdAcq.listHandle = acqResult->listHandle;
-
         return true;
     }
 
-    void RecordFrame(TextureHandle colorTex, uint32_t w, uint32_t h) {
+    /// @brief Acquire a per-frame command list from FrameManager's pool.
+    auto AcquireCommandList() -> std::optional<CommandListAcquisition> {
+        auto* fm = surfaceManager->GetFrameManager(window);
+        if (!fm) {
+            return std::nullopt;
+        }
+        auto acq = fm->AcquireCommandList(QueueType::Graphics);
+        if (!acq) {
+            return std::nullopt;
+        }
+        return *acq;
+    }
+
+    auto RecordFrame(TextureHandle colorTex, uint32_t w, uint32_t h) -> std::optional<CommandBufferHandle> {
+        auto cmdAcqOpt = AcquireCommandList();
+        if (!cmdAcqOpt) {
+            return std::nullopt;
+        }
+        auto cmdAcq = *cmdAcqOpt;
+
         auto tvRes = device.Dispatch([&](auto& d) -> RhiResult<TextureViewHandle> {
             TextureViewDesc tvd{.texture = colorTex};
             return d.CreateTextureView(tvd);
         });
         if (!tvRes) {
-            return;
+            return std::nullopt;
         }
         TextureViewHandle colorView = *tvRes;
 
@@ -322,14 +331,12 @@ struct TriangleRenderer {
             d.DestroyTextureView(colorView);
             return 0;
         });
+        return cmdAcq.bufferHandle;
     }
 
     void Cleanup() {
         (void)device.Dispatch([&](auto& d) {
             d.WaitIdle();
-            if (cmdAcq.bufferHandle.IsValid()) {
-                d.ReleaseCommandList(cmdAcq);
-            }
             if (pipeline.IsValid()) {
                 d.DestroyPipeline(pipeline);
             }
@@ -392,11 +399,14 @@ static void MainLoopIteration() {
     }
     auto& frame = *frameResult;
 
-    // Record rendering commands
-    g_renderer->RecordFrame(frame.swapchainImage, frame.width, frame.height);
+    // Record rendering commands (acquires per-frame cmd buffer from pool)
+    auto cmdBuf = g_renderer->RecordFrame(frame.swapchainImage, frame.width, frame.height);
+    if (!cmdBuf) {
+        return;
+    }
 
     // EndFrame: submits command buffer with correct sync, then presents
-    (void)g_sm->EndFrame(g_mainWindow, g_renderer->cmdAcq.bufferHandle);
+    (void)g_sm->EndFrame(g_mainWindow, *cmdBuf);
 }
 
 // ============================================================================
@@ -482,7 +492,7 @@ int main(int argc, char** argv) {
     // 5. Initialize renderer (only pipeline resources + command list)
     TriangleRenderer renderer;
     g_renderer = &renderer;
-    if (!renderer.Init(device.GetHandle(), *shaders)) {
+    if (!renderer.Init(device.GetHandle(), *shaders, &sm, g_mainWindow)) {
         std::println("[demo] Renderer init failed");
         return 1;
     }

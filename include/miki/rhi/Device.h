@@ -189,12 +189,6 @@ namespace miki::rhi {
             return Self().LinkGraphicsPipelineImpl(desc);
         }
 
-        // --- Command buffers ---
-        [[nodiscard]] auto CreateCommandBuffer(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle> {
-            return Self().CreateCommandBufferImpl(desc);
-        }
-        void DestroyCommandBuffer(CommandBufferHandle h) { Self().DestroyCommandBufferImpl(h); }
-
         // --- Command pool management (§19 — pool-level API for CommandPoolAllocator) ---
         [[nodiscard]] auto CreateCommandPool(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle> {
             return Self().CreateCommandPoolImpl(desc);
@@ -210,13 +204,6 @@ namespace miki::rhi {
         void FreeFromPool(CommandPoolHandle pool, const CommandListAcquisition& acq) {
             Self().FreeFromPoolImpl(pool, acq);
         }
-
-        // --- Command list acquisition (unified factory — legacy, delegates internally) ---
-        using CommandListAcquisition = rhi::CommandListAcquisition;
-        [[nodiscard]] auto AcquireCommandList(QueueType queue) -> RhiResult<CommandListAcquisition> {
-            return Self().AcquireCommandListImpl(queue);
-        }
-        void ReleaseCommandList(const CommandListAcquisition& acq) { Self().ReleaseCommandListImpl(acq); }
 
         // --- Synchronization ---
         [[nodiscard]] auto CreateFence(bool signaled = false) -> RhiResult<FenceHandle> {
