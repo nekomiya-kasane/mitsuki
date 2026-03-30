@@ -24,7 +24,7 @@
 
 - **RenderGraph pass scheduling**: RenderGraph decides pass ordering. This document covers frame-level pipelining, not intra-frame pass dependencies.
 - **Barrier insertion**: RenderGraph's responsibility. FrameManager provides sync primitives; barrier placement is external.
-- **Command buffer pooling**: Separate concern (CommandBufferAllocator), not covered here.
+- **Command buffer pooling**: See §19 (CommandPoolAllocator) for the full specification.
 
 ---
 
@@ -34,24 +34,24 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                      Application / RenderGraph                    │
+│                      Application / RenderGraph                   │
 │   "Record frame N+1 while GPU executes frame N"                  │
 ├──────────────────────────────────────────────────────────────────┤
-│                        FrameOrchestrator                          │
-│   Per-window FrameManager + global deferred destruction           │
-│   + StagingRing lifecycle + ReadbackRing lifecycle                │
+│                        FrameOrchestrator                         │
+│   Per-window FrameManager + global deferred destruction          │
+│   + StagingRing lifecycle + ReadbackRing lifecycle               │
 ├──────────────────────────────────────────────────────────────────┤
-│                         FrameManager                              │
-│   Timeline-first frame pacing: BeginFrame / EndFrame              │
-│   Windowed (RenderSurface) or Offscreen (timeline-only)           │
+│                         FrameManager                             │
+│   Timeline-first frame pacing: BeginFrame / EndFrame             │
+│   Windowed (RenderSurface) or Offscreen (timeline-only)          │
 ├──────────────────────────────────────────────────────────────────┤
-│                        SyncScheduler                              │
-│   Multi-queue timeline semaphore DAG                              │
-│   Graphics ↔ AsyncCompute ↔ Transfer dependency resolution       │
+│                        SyncScheduler                             │
+│   Multi-queue timeline semaphore DAG                             │
+│   Graphics ↔ AsyncCompute ↔ Transfer dependency resolution     │
 ├──────────────────────────────────────────────────────────────────┤
-│                     RHI Sync Primitives                           │
-│   TimelineSemaphore · BinarySemaphore · Fence (compat only)       │
-│   QueueSubmit · QueuePresent                                      │
+│                     RHI Sync Primitives                          │
+│   TimelineSemaphore · BinarySemaphore · Fence (compat only)      │
+│   QueueSubmit · QueuePresent                                     │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -93,9 +93,9 @@ Timeline semaphores (Vulkan 1.2 core, D3D12 `ID3D12Fence` native) are strictly s
 
 ```cpp
 struct QueueTimelines {
-    TimelineSemaphore graphics;      // Monotonic counter for graphics queue
-    TimelineSemaphore asyncCompute;  // Monotonic counter for async compute queue
-    TimelineSemaphore transfer;      // Monotonic counter for transfer/DMA queue
+    SemaphoreHandle graphics;   // Monotonic counter for graphics queue
+    SemaphoreHandle compute;    // Monotonic counter for async compute queue
+    SemaphoreHandle transfer;   // Monotonic counter for transfer/DMA queue
 };
 ```
 
@@ -197,14 +197,31 @@ public:
     /// Then acquires swapchain image (windowed) or advances offscreen slot.
     [[nodiscard]] auto BeginFrame() -> core::Result<FrameContext>;
 
-    /// @brief Submit recorded command buffers and present.
-    /// Multi-submit variant: accepts multiple command buffers for
-    /// multi-threaded recording (one per recording thread).
-    [[nodiscard]] auto EndFrame(std::span<rhi::CommandListHandle> cmdBuffers)
+    /// @brief Submit recorded command buffers and present (single submit).
+    /// Pass the bufferHandle from CommandListAcquisition (NOT the listHandle).
+    /// If StagingRing/ReadbackRing have pending copies, FrameManager automatically
+    /// dispatches them — on the dedicated transfer queue (T1 + hasAsyncTransfer)
+    /// or prepended to the graphics batch (fallback).
+    [[nodiscard]] auto EndFrame(std::span<const rhi::CommandBufferHandle> iCmdBuffers)
         -> core::Result<void>;
 
     /// @brief Single command buffer convenience overload.
-    [[nodiscard]] auto EndFrame(rhi::CommandListHandle cmd)
+    [[nodiscard]] auto EndFrame(rhi::CommandBufferHandle iCmd)
+        -> core::Result<void>;
+
+    /// @brief A batch of command buffers for split-submit (§5.3).
+    /// Each batch becomes a separate vkQueueSubmit2 with its own timeline signal.
+    /// The last batch additionally signals renderDone binary sem for present.
+    struct SubmitBatch {
+        std::span<const rhi::CommandBufferHandle> commandBuffers;
+        bool signalPartialTimeline = true;  ///< Allocate + signal a timeline value after this batch
+    };
+
+    /// @brief Split-submit EndFrame: multiple graphics queue submits per frame.
+    /// Enables async compute to start after early batches (e.g., geometry done)
+    /// without waiting for the full frame. Last batch handles present sync.
+    /// Transfer copy dispatch is identical to EndFrame (prepended to first batch).
+    [[nodiscard]] auto EndFrameSplit(std::span<const SubmitBatch> iBatches)
         -> core::Result<void>;
 
     // ── Async compute integration ───────────────────────────────
@@ -221,6 +238,15 @@ public:
     auto SetComputeSyncPoint(rhi::TimelineSyncPoint point) noexcept -> void;
 
     // ── Transfer queue integration ──────────────────────────────
+
+    /// @brief Eagerly dispatch pending StagingRing/ReadbackRing copies NOW.
+    /// Call after CPU-side memcpy is done but BEFORE EndFrame — the transfer
+    /// queue runs in parallel with command buffer recording (~2ms overlap).
+    /// If not called, EndFrame will dispatch transfers itself (zero overlap).
+    /// Safe to call multiple times per frame (no-op if already flushed).
+    /// T1 + hasAsyncTransfer: submits to dedicated transfer queue.
+    /// Fallback (T2/T3/T4): no-op — defers to EndFrame graphics prepend path.
+    auto FlushTransfers() -> void;
 
     /// @brief Register a transfer completion for this frame.
     /// Graphics queue will wait on this at the appropriate stage.
@@ -895,23 +921,148 @@ Frame lifecycle:
   2 frames later: CPU reads data from readback ring via futureHandle.Resolve()
 ```
 
-### 7.3 Transfer Queue Async Upload Path (Tier1)
+### 7.3 Transfer Queue Routing in FrameManager
+
+FrameManager dispatches pending StagingRing/ReadbackRing copies via **two mutually exclusive entry points per frame**. The eager path (`FlushTransfers`) is the recommended default for T1 — it overlaps DMA with CPU command recording for ~2ms savings.
 
 ```
-Tier1 optimization: buffer copies routed through dedicated transfer queue.
-Texture copies stay on graphics queue (layout transitions needed).
+                    ┌──────────────────────────────────────────────┐
+                    │              Per-Frame Transfer Flow          │
+                    └──────────────────────────────────────────────┘
 
-Timeline semaphore ensures graphics queue waits for transfer completion:
+  BeginFrame()
+       │  resets transfersFlushed = false
+       ▼
+  ┌─ CPU memcpy scene patches → StagingRing ─┐
+  │                                           │
+  ▼                                           │
+  FlushTransfers()  ◄── EAGER path            │  (recommended call site)
+  │  T1 + hasAsyncTransfer?                   │
+  │  ├─ YES: SubmitTransferCopies()           │
+  │  │       set transfersFlushed = true       │
+  │  │       transfer queue runs in parallel ──┼──► overlap with cmd recording
+  │  └─ NO:  no-op (defer to EndFrame)        │
+  │                                           │
+  ▼                                           │
+  Record command buffers (parallel, ~2ms) ◄───┘
+       │
+       ▼
+  EndFrame / EndFrameSplit  ◄── LAZY fallback
+       │
+       ├─ hasAsyncTransfer && !transfersFlushed && pending?
+       │   └─ SubmitTransferCopies() (same as FlushTransfers, zero overlap)
+       │
+       ├─ !hasAsyncTransfer && !transfersFlushed && pending?
+       │   └─ AcquireCommandList(Graphics)
+       │       ├─ RecordTransfersOnGraphics (FlushFrame + record)
+       │       └─ Prepend to user's cmd batch in same submit
+       │
+       ├─ transfersFlushed?
+       │   └─ skip (SubmitTransferCopies already called FlushFrame)
+       │
+       └─ no pending copies?
+           └─ FlushFrame only (lifecycle bookkeeping)
+```
 
+**Performance comparison** (T1 Realistic, 10M tri, 4K):
+
+| Path                                          | Transfer dispatch time | Overlap with cmd recording          | Effective cost |
+| :-------------------------------------------- | :--------------------- | :---------------------------------- | :------------- |
+| **Eager** (`FlushTransfers` before recording) | 1.0ms                  | 1.0ms hidden behind 2.0ms recording | **0ms**        |
+| **Lazy** (`EndFrame` auto-dispatch)           | 1.0ms                  | 0ms (serial)                        | **1.0ms**      |
+
+#### 7.3.1 `hasAsyncTransfer` Capability
+
+`GpuCapabilityProfile::hasAsyncTransfer` indicates a dedicated transfer/DMA queue:
+
+| Backend       | Value      | Rationale                                               |
+| ------------- | ---------- | ------------------------------------------------------- |
+| Vulkan 1.4    | `true`     | If `queueFamilies_.transfer != queueFamilies_.graphics` |
+| D3D12         | `true`     | D3D12 always exposes a dedicated copy command queue     |
+| Vulkan Compat | per-device | Same check as T1                                        |
+| WebGPU        | `false`    | Single queue                                            |
+| OpenGL        | `false`    | Single queue                                            |
+
+FrameManager additionally requires `hasTimelineSemaphore` for the async path — without timeline semaphores there is no way to express cross-queue GPU→GPU waits. The effective condition is `hasAsyncTransfer && hasTimelineSemaphore`.
+
+#### 7.3.2 Async Transfer Path (T1)
+
+```
 Transfer Queue:
   CmdCopyBuffer(staging → gpu)   ×N
-  Submit → Signal T.timeline = frameNum
+  Submit → Signal T.timeline = nextTransferValue
 
 Graphics Queue:
-  Pipeline barrier (QFOT acquire: Transfer → Graphics)
-  Wait T.timeline >= frameNum at PipelineStage::Transfer
+  Wait T.timeline >= nextTransferValue at PipelineStage::Transfer
+  Pipeline barrier (QFOT acquire: Transfer → Graphics)  [Vulkan only]
   ... normal rendering ...
 ```
+
+The `transferSync` is auto-set by `SubmitTransferCopies()` — callers (RenderGraph, application) do NOT need to call `SetTransferSyncPoint()` for ring-managed copies. The `transfersFlushed` flag prevents double-dispatch if `FlushTransfers()` was already called.
+
+#### 7.3.3 Graphics Fallback Path (T2/T3/T4 or no dedicated transfer queue)
+
+When `hasAsyncTransfer` is false, `FlushTransfers()` is a no-op — the graphics fallback path cannot eagerly dispatch because it needs to prepend a graphics command buffer to the user's batch, which isn't available until `EndFrame`. Copies are recorded into a separate graphics command buffer prepended to the user's batch in the same `vkQueueSubmit2`. No cross-queue sync or QFOT needed — everything executes in graphics queue submission order.
+
+For `EndFrameSplit`, the transfer cmd is prepended to the **first** batch.
+
+#### 7.3.4 Recommended Call Pattern
+
+```cpp
+auto ctx = frameManager.BeginFrame();
+// ... CPU memcpy scene patches into StagingRing ...
+frameManager.FlushTransfers();  // <-- eager: DMA starts NOW
+// ... record command buffers (transfer runs in parallel) ...
+frameManager.EndFrame(cmdBuffers);  // <-- skips transfer (already flushed)
+```
+
+### 7.4 Cross-Frame Compute Overlap Safety
+
+Timeline semaphores enable Frame N's async compute to overlap with Frame N+1's graphics Submit #1. This is safe **only if resources do not alias across frames**. The following table documents per-resource safety:
+
+#### 7.4.1 Resource Overlap Safety Matrix
+
+| Resource               | Scope               | Frame N Compute writes?   | Frame N+1 Sub#1 reads?              | Cross-frame safe? | Rationale                                              |
+| :--------------------- | :------------------ | :------------------------ | :---------------------------------- | :---------------- | :----------------------------------------------------- |
+| `GBuffer[slot]`        | Per-slot            | YES (Material Resolve)    | NO (different slot)                 | **Safe**          | `framesInFlight >= 2` guarantees slot isolation        |
+| `DepthTarget[slot]`    | Per-slot            | NO (read-only in compute) | YES (HiZ from prev frame)           | **Safe**          | Compute reads Frame N depth; Sub#1 reads Frame N-1 HiZ |
+| `GTAO texture[slot]`   | Per-slot            | YES                       | NO (consumed by Frame N Sub#2)      | **Safe**          | Per-slot, never cross-consumed                         |
+| `HiZ pyramid`          | Device-global       | NO                        | YES (GPU Culling reads prev frame)  | **Safe**          | Graphics-only resource, compute never writes           |
+| `SceneBuffer` SSBO     | Device-global       | NO                        | YES (GPU Culling reads)             | **Safe**          | CPU-written, timeline-protected by transfer wait       |
+| `DDGI probe grid`      | Device-global       | **YES** (probe update)    | YES (IBL sampling in Sub#2)         | **UNSAFE**        | Single shared grid — write/read race                   |
+| `ReSTIR reservoirs`    | Per-pixel per-frame | YES                       | NO (temporal reuse reads Frame N-1) | **Safe**          | Reservoirs are ping-pong double-buffered               |
+| `VSM page table`       | Device-global       | NO (graphics-only)        | NO                                  | **Safe**          | Not touched by compute                                 |
+| `ClusterDAG residency` | Device-global       | Possible (async BLAS)     | YES (mesh shader reads)             | **Conditional**   | Safe if async task completes before use (polled)       |
+
+#### 7.4.2 DDGI Probe Double-Buffer Requirement
+
+DDGI probe irradiance/visibility grids are device-global shared state updated by an async compute pass (#85). If Frame N's DDGI update overlaps with Frame N+1's Deferred Resolve (#18) reading the same grid, a write/read race occurs.
+
+**Solution**: double-buffer the probe grid.
+
+```
+ProbeGrid[0] ← Frame N compute writes
+ProbeGrid[1] ← Frame N+1 Deferred Resolve reads (Frame N-1 data, still valid)
+
+Swap index at frame boundary:
+  readIndex  = frameNumber % 2
+  writeIndex = (frameNumber + 1) % 2
+```
+
+VRAM cost: 2 × probe grid. For 32×16×32 probes × (irradiance 6×6 oct R11G11B10 + visibility 16×16 R16G16) = 2 × ~12MB = ~24MB. Negligible vs total VRAM budget.
+
+The double-buffer swap is a CPU-side index flip — zero GPU overhead. SyncScheduler ensures Frame N's compute signal is waited on by Frame N's Sub#2 (same frame), not Frame N+1's Sub#2 (which uses the other buffer).
+
+#### 7.4.3 Overlap Invariant
+
+The cross-frame overlap guarantee holds as long as:
+
+1. **Per-slot resources** (GBuffer, depth, AO, reservoirs) are indexed by `frameIndex % framesInFlight`
+2. **Device-global mutable resources** written by compute are double-buffered (DDGI probes)
+3. **AsyncTaskManager tasks** (BLAS rebuild, GDeflate) are polled and their outputs are not consumed until `IsComplete()` returns true
+4. **Timeline values are monotonic** — `SyncScheduler::AllocateSignal` never reuses or decrements
+
+Violating any of these invariants results in a data race that the GPU validation layer (Vulkan `VK_LAYER_KHRONOS_synchronization2`) will flag.
 
 ---
 
@@ -1147,7 +1298,66 @@ struct D3D12ComputeQueueResources {
 };
 ```
 
-**关键点**：`ID3D12CommandAllocator` 只能在 GPU 消费完对应 command list 后 Reset。帧内 allocator 按 frame-in-flight slot 轮换（同 graphics）；async allocator 在 `AsyncTaskManager::IsComplete()` 确认后 Reset。
+**关键点**：`ID3D12CommandAllocator` 只能在 GPU 消费完对应 command list 后 Reset。帧内 allocator 按 frame-in-flight slot 轮换（同 graphics）；async allocator 需要 per-task 池化管理。See §19 for the unified `CommandPoolAllocator` design that manages per-frame pool/allocator lifecycle across all backends.
+
+#### 10.2.1 D3D12 AsyncTaskManager Allocator Pool
+
+单个 `asyncAllocator` 在并发多任务场景下不安全：Task A 正在 GPU 执行时，若 Task B Reset 同一 allocator，行为未定义。需要 per-task allocator 池：
+
+```cpp
+struct D3D12AsyncAllocatorPool {
+    struct AllocatorEntry {
+        ComPtr<ID3D12CommandAllocator> allocator;
+        uint64_t completionFenceValue = 0;  // Task completion timeline value
+        bool inUse = false;
+    };
+
+    std::vector<AllocatorEntry> pool_;  // Grows on demand, never shrinks
+    ID3D12Device* device_;
+    ID3D12Fence* computeFence_;
+
+    auto Acquire() -> ID3D12CommandAllocator* {
+        uint64_t completed = computeFence_->GetCompletedValue();
+        // 1. Try to reuse a completed allocator
+        for (auto& entry : pool_) {
+            if (entry.inUse && completed >= entry.completionFenceValue) {
+                entry.allocator->Reset();  // Safe: GPU done
+                entry.completionFenceValue = 0;
+                return entry.allocator.Get();
+            }
+            if (!entry.inUse) {
+                entry.inUse = true;
+                entry.allocator->Reset();
+                return entry.allocator.Get();
+            }
+        }
+        // 2. Grow pool
+        auto& newEntry = pool_.emplace_back();
+        device_->CreateCommandAllocator(
+            D3D12_COMMAND_LIST_TYPE_COMPUTE,
+            IID_PPV_ARGS(&newEntry.allocator));
+        newEntry.inUse = true;
+        return newEntry.allocator.Get();
+    }
+
+    auto Release(ID3D12CommandAllocator* alloc, uint64_t fenceValue) -> void {
+        for (auto& entry : pool_) {
+            if (entry.allocator.Get() == alloc) {
+                entry.completionFenceValue = fenceValue;
+                // inUse stays true until Acquire() recycles it
+                return;
+            }
+        }
+    }
+};
+```
+
+| Metric            | Value                                  | Rationale                                          |
+| :---------------- | :------------------------------------- | :------------------------------------------------- |
+| Typical pool size | 2-4 allocators                         | Max concurrent async tasks (BLAS + GDeflate + QEM) |
+| Growth policy     | Grow-only, never shrink                | Allocators are cheap (~KB), avoid creation spikes  |
+| Reset timing      | At `Acquire()` time, after fence check | Lazy reset — no CPU work if pool not exhausted     |
+| Worst case VRAM   | ~4KB × 4 = 16KB                        | Negligible                                         |
 
 **Submit pattern (D3D12)**:
 
@@ -1438,6 +1648,50 @@ digraph WaitGraph {
 
 **行业参考**：D3D12 `DRED` (Device Removed Extended Data) 在 device lost 时 dump GPU breadcrumb 和 page fault 信息。Vulkan `VK_EXT_device_fault` 提供类似但更窄的覆盖。Wait-Graph 在应用层补足了跨队列死锁诊断这个空白。
 
+### 12.5 FrameManager Call-Sequence State Machine
+
+FrameManager enforces a strict per-frame call ordering. Calling APIs out of order triggers `assert` in debug builds. The state machine below documents all valid transitions:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle : Create() / CreateOffscreen()
+
+    Idle --> FrameActive : BeginFrame() ✓
+
+    FrameActive --> FrameActive : SetStagingRing() / SetReadbackRing()
+    FrameActive --> FrameActive : SetComputeSyncPoint()
+    FrameActive --> FrameActive : SetTransferSyncPoint()
+    FrameActive --> TransfersFlushed : FlushTransfers() [hasAsyncTransfer]
+    FrameActive --> FrameActive : FlushTransfers() [!hasAsyncTransfer, no-op]
+    FrameActive --> Idle : EndFrame() / EndFrameSplit()
+
+    TransfersFlushed --> TransfersFlushed : SetComputeSyncPoint()
+    TransfersFlushed --> TransfersFlushed : FlushTransfers() [no-op, idempotent]
+    TransfersFlushed --> Idle : EndFrame() / EndFrameSplit()
+
+    Idle --> [*] : ~FrameManager() [calls WaitAll]
+```
+
+#### 12.5.1 Valid Call Order (per frame)
+
+| Step | API                               | Required? | Constraint                                                       |
+| :--- | :-------------------------------- | :-------- | :--------------------------------------------------------------- |
+| 1    | `BeginFrame()`                    | **YES**   | Must be first. Resets `transfersFlushed`.                        |
+| 2    | CPU memcpy → StagingRing          | Optional  | Before `FlushTransfers()` or `EndFrame()`                        |
+| 3    | `FlushTransfers()`                | Optional  | After memcpy, before `EndFrame()`. No-op if `!hasAsyncTransfer`. |
+| 4    | Record command buffers            | **YES**   | After `BeginFrame()`, before `EndFrame()`                        |
+| 5    | `SetComputeSyncPoint()`           | Optional  | Before `EndFrame()`. Can be before or after `FlushTransfers()`.  |
+| 6    | `EndFrame()` or `EndFrameSplit()` | **YES**   | Must be last. Exactly one call per frame.                        |
+
+#### 12.5.2 Invalid Sequences (assert in debug)
+
+| Sequence                                          | Error                                                         |
+| :------------------------------------------------ | :------------------------------------------------------------ |
+| `EndFrame()` without `BeginFrame()`               | Use-after-move or double-end                                  |
+| `BeginFrame()` → `BeginFrame()`                   | Missing `EndFrame()` — leaked frame                           |
+| `FlushTransfers()` after `EndFrame()`             | Frame already submitted                                       |
+| `SetTransferSyncPoint()` after `FlushTransfers()` | Conflicts with auto-set `transferSync` — use one or the other |
+
 ---
 
 ## 13. SyncScheduler — Cross-Queue Dependency Resolution
@@ -1517,41 +1771,297 @@ scheduler.AddDependency(QueueType::Graphics, QueueType::Compute, computeDone, Pi
 
 ## 14. Complete Frame Timing Diagram (Tier1, 2 Frames In Flight)
 
+The diagrams below show the **ideal overlapped model** enabled by timeline semaphores and `FlushTransfers()` (§7.3). Frame boundaries are NOT hard barriers — transfer, compute, and graphics queues overlap freely across frames, constrained only by timeline value dependencies.
+
+### 14.0 Multi-Frame Pipeline Overview (Overlapped)
+
 ```
-Time (ms) →  0    2    4    6    8   10   12   14   16   18   20   22   24
-             ├────┼────┼────┼────┼────┼────┼────┼────┼────┼────┼────┼────┤
+Time (ms) →  0    2    4    6    8   10   12   14   16   18   20   22   24   26
+             ├────┼────┼────┼────┼────┼────┼────┼────┼────┼────┼────┼────┼────┤
 
-CPU:         ┌─ Record Frame 0 ─┐┌─ Record Frame 1 ─┐┌─ Record Frame 2 ─┐
-             │  Scene upload     ││  Scene upload     ││  Scene upload     │
-             │  Build cmd bufs   ││  Build cmd bufs   ││  Build cmd bufs   │
-             └──────3ms──────────┘└──────3ms──────────┘└──────3ms──────────┘
+CPU Frame 0: ┌memcpy─┐┌──── Record cmds ────┐
+             │ 0.5ms ││ 2.0ms               │
+             └───────┘└──────────────────────┘
+                ↓ FlushTransfers()      ↓ EndFrame()
 
-Transfer:    ┌─ Upload F0 ─┐     ┌─ Upload F1 ─┐     ┌─ Upload F2 ─┐
-             └──── 1ms ────┘     └──── 1ms ────┘     └──── 1ms ────┘
+CPU Frame 1:              ┌memcpy─┐┌──── Record cmds ────┐
+                          │ 0.5ms ││ 2.0ms               │
+                          └───────┘└──────────────────────┘
+                             ↓ FlushTransfers()      ↓ EndFrame()
 
-Graphics:              ┌──── Frame 0 GPU ──────────┐
-                       │ Depth+Cull+Geom → Shadow  │
-                       │ → Resolve → Post → Present│
-                       └───────── 13ms ────────────┘
-                                          ┌──── Frame 1 GPU ──────────┐
-                                          │ Depth+Cull+Geom → Shadow  │
-                                          │ → Resolve → Post → Present│
-                                          └───────── 13ms ────────────┘
+Transfer:    ██ F0 ██     ██ F1 ██     ██ F2 ██
+             │ 1.0ms│     │ 1.0ms│     │ 1.0ms│
+             ● T=1  │     ● T=2  │     ● T=3
+             ↑           ↑           ↑
+             overlaps    overlaps    overlaps
+             F0 record   F1 record   F2 record
 
-Compute:               ┌──GTAO+Mat──┐
-                       └──── 2ms ───┘
-                                          ┌──GTAO+Mat──┐
-                                          └──── 2ms ───┘
+Graphics:         ○T≥1 ┌── F0 Sub#1 ──┐
+                       │ Geom 2.9ms   │
+                       └── ● G=1 ─────┘
+                           │                ○T≥2 ┌── F1 Sub#1 ──┐
+Compute:                   ○G≥1 ┌─ F0 ─┐        │ Geom 2.9ms   │
+                                │2.0ms │        └── ● G=3 ─────┘
+                                └● C=1─┘            │
+                                 │                  ○G≥3 ┌─ F1 ─┐
+Graphics:              ○C≥1 ┌──── F0 Sub#2 ────────┐    │2.0ms │
+                            │ Shadow+Resolve+Post  │    └● C=2─┘
+                            │ 10.8ms               │     │
+                            └── ● G=2 → Present ──┘     │
+                                                   ○C≥2 ┌──── F1 Sub#2 ───┐
+                                                        │ Shadow+Resolve  │
+                                                        │ +Post 10.8ms   │
+                                                        └── ● G=4 → Pres─┘
 
-Effective frame time: max(CPU, GPU) = max(3, 13) = 13ms → 77fps
-Input latency: 2 × 16.7ms = 33ms (2 frames)
+Key overlaps (not possible with serial model):
+  ① Transfer F1 ‖ Graphics F0 Sub#1    (FlushTransfers: 1ms saved)
+  ② Compute F0  ‖ Graphics F0 Sub#2 start (VSM begins while GTAO runs)
+  ③ CPU F1      ‖ Graphics F0 entire    (standard double-buffer)
+  ④ Transfer F1 ‖ Compute F0            (3 queues all active simultaneously)
+
+Effective frame time: max(CPU=3ms, GPU_critical=13.7ms) = 13.7ms → 73fps
+Overlap savings vs serial: -3.0ms (Transfer 1ms + Compute 2ms hidden)
+Input latency: 2 frames × 13.7ms = 27.4ms
 
 Sync points (●=signal, ○=wait):
-  T.timeline:  ●F0(1ms)               ●F1(14ms)
-  G.timeline:  ○T≥1  ●geom(5ms)  ●done(14ms)   ○T≥2  ●geom(18ms)  ●done(27ms)
-  C.timeline:        ○G≥geom  ●(7ms)                   ○G≥geom  ●(20ms)
-               G:    ○C≥done(resolve)                   ○C≥done(resolve)
+  T.timeline: ●T=1(1ms)        ●T=2(14ms)         ●T=3(27ms)
+  G.timeline: ○T≥1 ●G=1(4ms)   ○T≥2 ●G=3(17ms)    ...
+              ○C≥1 ●G=2(15ms)   ○C≥2 ●G=4(28ms)
+  C.timeline: ○G≥1 ●C=1(6ms)   ○G≥3 ●C=2(19ms)
 ```
+
+**BeginFrame CPU wait**: only blocks when `G.timeline < slot[oldest].lastSignaledValue`, i.e., Frame N-2 hasn't finished. With 2 frames in flight and 13.7ms GPU time, CPU never stalls (3ms CPU < 13.7ms GPU). Transfer and compute from other frames are NOT waited on — they complete asynchronously via their own timeline values.
+
+### 14.1 Detailed Per-Pass Timeline (Tier1, Realistic DisplayStyle, 4K)
+
+Based on `rendering-pipeline-architecture.md` §3 (88-pass reference) and §4.2 (step-by-step). This diagram expands §14 with every pass, queue assignment, sync dependencies, and per-pass GPU budget. Optional/conditional passes are marked with `[opt]`.
+
+#### Queue Assignment & Sync Map
+
+```
+═══════════════════════════════════════════════════════════════════════════════════
+ FRAME N — Tier1 Realistic, 3-queue, split-submit, 2 frames in flight
+═══════════════════════════════════════════════════════════════════════════════════
+
+ CPU Thread (3ms total)
+ ├─ BeginFrame: CPU wait G.timeline >= slot[oldest].lastSignaledValue    [0.0ms]
+ │   └─ resets transfersFlushed = false
+ ├─ DrainBin(slot): DeferredDestructor + StagingRing.Reclaim             [0.0ms]
+ ├─ AcquireNextImage → signal imageAvail[slot] (binary)                  [0.0ms]
+ ├─ Scene dirty upload: memcpy GpuInstance patches → StagingRing         [0.5ms]
+ ├─ FlushTransfers() → transfer queue starts DMA (§7.3 eager path)      [0.0ms]
+ │   └─ Transfer runs in PARALLEL with steps below ──────────────────┐
+ ├─ RenderGraph compile (cached if static scene)                     │   [0.2ms]
+ ├─ Record command buffers (parallel: 1 per recording thread)        │   [2.0ms]
+ │                                            ◄── overlap window ────┘
+ └─ EndFrame / EndFrameSplit                                             [0.3ms]
+     ├─ transfersFlushed? skip dispatch : fallback dispatch (§7.3)
+     └─ Submit batches → Present
+
+─────────────────────────────────────────────────────────────────────────────────
+ Time(ms)  0.0       1.0       2.0       3.0       4.0       5.0       6.0
+           ├─────────┼─────────┼─────────┼─────────┼─────────┼─────────┤
+─────────────────────────────────────────────────────────────────────────────────
+
+ Transfer Queue
+ ├─ StagingRing copies (CmdCopyBuffer ×N)                     ████ 1.0ms
+ │  Signal T.timeline = T_N                                       ●
+ │
+ │  [opt] Cluster stream upload (§5.8.1, async, overlapped)   ░░░░░░░░ continuous
+ │  Signal T.timeline = T_N+1 (per-batch)                             ●
+
+─────────────────────────────────────────────────────────────────────────────────
+ Time(ms)  0.0       1.0       2.0       3.0       4.0       5.0       6.0
+           ├─────────┼─────────┼─────────┼─────────┼─────────┼─────────┤
+─────────────────────────────────────────────────────────────────────────────────
+
+ Graphics Queue — Submit #1 (Geometry)
+ │
+ │  Wait: T.timeline >= T_N (QFOT acquire: Transfer → Graphics)
+ │  Wait: imageAvail[slot] (binary, @ColorAttachmentOutput)
+ │                                                               ○ ○
+ │  #—  BLAS refit/rebuild (≤2 inline, overflow→async compute)    █ 0.5ms
+ │  #—  TLAS rebuild                                              █ 0.1ms
+ │  #1   DepthPrePass + HiZ pyramid                               █ 0.5ms
+ │  #2   GPU Culling (frustum+HiZ+LOD+cone)                      █ 0.3ms
+ │  #3   Light Cluster Assign (froxel, ≤4096 lights)             █ 0.1ms
+ │  #4   Macro-Binning (3 buckets: opaque/transparent/edge)      █ 0.1ms
+ │  #5→#6→#9  Task → Mesh → VisBuffer (1 PSO, 1 draw)           ██ 1.0ms
+ │  #7   [opt] SW Rasterizer (<4px² tris → SSBO atomic)         █ 0.3ms
+ │                                                               ─────────
+ │  Signal G.timeline = V (partial: geometry done)                    ●
+ │                                                        subtotal: 2.9ms
+
+─────────────────────────────────────────────────────────────────────────────────
+ Time(ms)  2.9       3.5       4.0       4.5       5.0       5.5       6.0
+           ├─────────┼─────────┼─────────┼─────────┼─────────┼─────────┤
+─────────────────────────────────────────────────────────────────────────────────
+
+ Async Compute Queue (帧内 frame-sync work)
+ │
+ │  Wait: G.timeline >= V (geometry done, depth available)
+ │                                                               ○
+ │  #10  Material Resolve (tile-based DSPBR → GBuffer)           ██ 1.0ms
+ │  #15  GTAO (half-res, 8 dir × 2 horizon)                     ██ 1.0ms
+ │                                                               ─────────
+ │  Signal C.timeline = C_N                                           ●
+ │                                                        subtotal: 2.0ms
+ │
+ │  [opt] Long-running async tasks (AsyncTaskManager, §5.6):
+ │  ░░░ BLAS overflow rebuild (spill >2 bodies)                  ░░░ 1-5ms/body
+ │  ░░░ GDeflate compute decompress (§5.8.1 path 2)             ░░░ 2-5ms
+ │  ░░░ Wavelet pre-decode (§5.8.2, Phase 14+)                  ░░░ 1-3ms
+ │  (polled via AsyncTaskManager::IsComplete, NOT frame-blocking)
+
+─────────────────────────────────────────────────────────────────────────────────
+ Time(ms)  2.9       4.0       5.0       6.0       7.0       8.0       9.0
+           ├─────────┼─────────┼─────────┼─────────┼─────────┼─────────┤
+─────────────────────────────────────────────────────────────────────────────────
+
+ Graphics Queue — Submit #2 (Shadows + Lighting + Post)
+ │
+ │  Wait: C.timeline >= C_N (GTAO + Material Resolve done)
+ │                                                               ○
+ │  #12  VSM Render (dirty pages, 16K² virtual, mesh shader)     ██ 2.0ms
+ │  #14  Shadow Atlas (point/spot, LRU tiles)                    █ 1.0ms
+ │  #18  Deferred Resolve (clustered BRDF + all lights + IBL     ██ 1.0ms
+ │        + VSM + AO + #85 DDGI probes [opt])
+ │  #20  [opt] RT Reflections (roughness < 0.3)                  ██ 2.0ms
+ │  #21  [opt] RT Shadows (1spp + temporal)                      █ 1.0ms
+ │  #22  [opt] RT GI (half-res, SH cache)                       ███ 3.0ms
+ │  #25→#26  LL-OIT Insert → Resolve (transparent bucket)        ██ 2.0ms
+ │  #28→#29→#30  HLR Classify → Visibility → SDF Render          ████ 4.0ms
+ │       (edge bucket, silhouette-only in Realistic: <0.5ms)
+ │  #31  [opt] Section Plane (stencil clip + cap + hatch)        █ 0.5ms
+ │  #48  [opt] SSR (Hi-Z march, half-res)                       ██ 1.5ms
+ │  #49  Bloom (6-level Gaussian)                                █ 0.5ms
+ │  #50  [opt] DoF (gather bokeh, half-res 16 samp)             ██ 1.5ms
+ │  #51  [opt] Motion Blur (McGuire tile-based)                  █ 1.0ms
+ │  #52  Tone Mapping (AgX/ACES + vignette + CA)                █ 0.2ms
+ │  #53  TAA (Halton jitter, YCoCg clamp)                       █ 0.5ms
+ │  #54  [opt] Temporal Upscale (FSR 3.0 / DLSS 3.5)           █ 1.0ms
+ │  #56  CAS Sharpen                                            █ 0.2ms
+ │  #57  [opt] Color Grading (3D LUT)                           █ 0.1ms
+ │  #59  [opt] VRS Image (16×16 tiles)                          █ 0.2ms
+ │  ──── Overlays ────
+ │  #58  Outline (Sobel)                                        █ 0.2ms
+ │  #70  [opt] Selection Outline (JFA 3-pass)                   █ 1.2ms
+ │  #60  Gizmo Render                                           █ 0.1ms
+ │  #61  Ground Grid                                            █ 0.2ms
+ │  #62  ViewCube                                               █ 0.05ms
+ │  #63  Snap Indicators                                        █ 0.01ms
+ │  #64  Measurement Viz                                        █ 0.1ms
+ │  #45  PMI Render (MSDF text + leaders)                       █ 0.1ms
+ │  #46  [opt] Analysis Overlay (zebra/curvature/draft)         █ 0.2ms
+ │  #47  Color Bar / Legend                                     █ 0.05ms
+ │  #65  LayerStack Compositor (6-layer alpha-blend)            █ 0.2ms
+ │                                                               ─────────
+ │  Signal renderDone[slot] (binary, for present)                     ●
+ │  Signal G.timeline = V+1 (frame done)                              ●
+ │
+ │  Present: Wait renderDone[slot]                                    ○
+
+─────────────────────────────────────────────────────────────────────────────────
+```
+
+#### Per-Pass Budget Summary (Realistic DisplayStyle, worst case)
+
+| Queue                  | Passes                                                                                      | Budget                              |
+| :--------------------- | :------------------------------------------------------------------------------------------ | :---------------------------------- |
+| **Transfer**           | StagingRing copies + cluster stream                                                         | 1.0ms (overlapped)                  |
+| **Graphics Submit #1** | BLAS/TLAS + DepthPrePass + Culling + Clustering + Binning + Task/Mesh/VisBuffer + SW Raster | 2.9ms                               |
+| **Async Compute**      | Material Resolve + GTAO                                                                     | 2.0ms (overlapped with Submit #2)   |
+| **Graphics Submit #2** | VSM + Atlas + Resolve + RT + OIT + HLR + Post + Overlays + Compositor                       | 8-16ms (depends on optional passes) |
+
+#### Realistic DisplayStyle Critical Path
+
+```
+Graphics critical path (no RT, no DoF/MB):
+  Submit #1: 2.9ms + Submit #2: VSM(2) + Atlas(1) + Resolve(1) + OIT(2) +
+             HLR(0.5) + SSR(1.5) + Bloom(0.5) + ToneMap(0.2) + TAA(0.5) +
+             FSR(1) + CAS(0.2) + Overlays(1.2) + Comp(0.2)
+  = 2.9 + 10.8 = 13.7ms → 73fps
+
+Realistic + all RT passes:
+  Add: RTReflect(2) + RTShadow(1) + RTGI(3) + DoF(1.5) + MB(1) = +8.5ms
+  = 2.9 + 19.3 = 22.2ms → 45fps (exceeds 16.7ms budget)
+  Mitigation: half-res RT, temporal accumulation, VRS
+
+Overlap savings:
+  Transfer: 1.0ms hidden behind graphics (zero effective cost)
+  Compute:  2.0ms overlapped with shadow rendering (GTAO || VSM)
+  Net:      -3.0ms vs serial execution
+```
+
+#### Sync Point Reference Table
+
+| Sync Point           | Type     | Producer                           | Consumer                   | Stage                                  |
+| :------------------- | :------- | :--------------------------------- | :------------------------- | :------------------------------------- |
+| `T.timeline = T_N`   | Timeline | Transfer queue (ring copies)       | Graphics Submit #1         | `PipelineStage::Transfer`              |
+| `T.timeline = T_N+1` | Timeline | Transfer queue (cluster stream)    | Graphics (next use)        | `PipelineStage::VertexInput`           |
+| `imageAvail[slot]`   | Binary   | `AcquireNextImage`                 | Graphics Submit #1         | `PipelineStage::ColorAttachmentOutput` |
+| `G.timeline = V`     | Timeline | Graphics Submit #1 (geometry done) | Async Compute              | `PipelineStage::ComputeShader`         |
+| `C.timeline = C_N`   | Timeline | Async Compute (GTAO+MatResolve)    | Graphics Submit #2         | `PipelineStage::FragmentShader`        |
+| `renderDone[slot]`   | Binary   | Graphics Submit #2                 | `QueuePresent`             | —                                      |
+| `G.timeline = V+1`   | Timeline | Graphics Submit #2 (frame done)    | `BeginFrame(N+2)` CPU wait | —                                      |
+
+#### QFOT Barriers (Vulkan only, D3D12 implicit)
+
+| Transition                           | Release Queue | Acquire Queue | srcAccess       | dstAccess    |
+| :----------------------------------- | :------------ | :------------ | :-------------- | :----------- |
+| StagingRing → GPU buffers            | Transfer      | Graphics      | `TransferWrite` | `ShaderRead` |
+| Cluster pages → Mesh shader          | Transfer      | Graphics      | `TransferWrite` | `ShaderRead` |
+| GDeflate compressed → Compute decode | Transfer      | Compute       | `TransferWrite` | `ShaderRead` |
+| Decoded clusters → Mesh shader       | Compute       | Graphics      | `ShaderWrite`   | `ShaderRead` |
+
+#### Mermaid: Tier1 Realistic Single Frame (per-pass granularity)
+
+```mermaid
+gantt
+    title Frame N — Tier1 Realistic 4K (per-pass GPU timeline)
+    dateFormat X
+    axisFormat %s ms
+
+    section Transfer Queue
+    StagingRing copies (1.0ms)          :t1, 0, 100
+    Cluster stream [opt] (async)        :t2, 50, 200
+
+    section Graphics Submit #1
+    BLAS refit/rebuild (0.6ms)          :g1, 100, 160
+    DepthPrePass + HiZ (0.5ms)         :g2, 160, 210
+    GPU Culling (0.3ms)                :g3, 210, 240
+    Light Cluster (0.1ms)              :g4, 240, 250
+    Macro-Binning (0.1ms)             :g5, 250, 260
+    Task→Mesh→VisBuffer (1.0ms)        :g6, 260, 360
+    SW Raster [opt] (0.3ms)            :g7, 360, 390
+
+    section Async Compute
+    Material Resolve (1.0ms)           :c1, 390, 490
+    GTAO half-res (1.0ms)             :c2, 490, 590
+
+    section Graphics Submit #2
+    VSM Render (2.0ms)                :g8, 590, 790
+    Shadow Atlas (1.0ms)              :g9, 790, 890
+    Deferred Resolve (1.0ms)          :g10, 890, 990
+    SSR [opt] (1.5ms)                 :g11, 990, 1140
+    Bloom (0.5ms)                     :g12, 1140, 1190
+    Tone Map (0.2ms)                  :g13, 1190, 1210
+    TAA (0.5ms)                       :g14, 1210, 1260
+    FSR/DLSS [opt] (1.0ms)           :g15, 1260, 1360
+    CAS + Overlays + Comp (1.0ms)     :g16, 1360, 1460
+```
+
+#### DisplayStyle Budget Comparison (Tier1, 4K)
+
+| DisplayStyle       | Submit #1 | Compute         | Submit #2                      | Critical Path | FPS |
+| :----------------- | :-------- | :-------------- | :----------------------------- | :------------ | :-- |
+| **Shaded**         | 2.9ms     | 2.0ms           | 5.5ms (no RT/SSR/DoF/MB)       | 8.4ms         | 119 |
+| **ShadedEdges**    | 2.9ms     | 2.0ms           | 6.0ms (+silhouette HLR)        | 8.9ms         | 112 |
+| **Realistic**      | 2.9ms     | 2.0ms           | 10.8ms (full post chain)       | 13.7ms        | 73  |
+| **Realistic + RT** | 2.9ms     | 2.0ms           | 19.3ms (+RT reflect/shadow/GI) | 22.2ms        | 45  |
+| **Wireframe/HLR**  | 1.5ms     | —               | 5.5ms (full HLR + FXAA)        | 7.0ms         | 143 |
+| **X-Ray**          | 2.9ms     | 2.0ms           | 6.0ms (forced OIT)             | 8.9ms         | 112 |
+| **Arctic**         | 2.9ms     | 1.0ms (AO only) | 3.0ms (ToneMap+AO)             | 5.9ms         | 169 |
 
 ---
 
@@ -1574,19 +2084,21 @@ Sync points (●=signal, ○=wait):
 
 ## 16. File Map
 
-| File                                      | Namespace     | Responsibility                                                                           |
-| ----------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
-| `include/miki/frame/FrameManager.h`       | `miki::frame` | Frame pacing: BeginFrame/EndFrame, timeline wait, surface integration                    |
-| `include/miki/frame/FrameContext.h`       | `miki::frame` | Per-frame state: index, number, swapchain image, dimensions                              |
-| `include/miki/frame/FrameOrchestrator.h`  | `miki::frame` | Multi-window frame orchestration, global deferred destruction                            |
-| `include/miki/frame/SyncScheduler.h`      | `miki::frame` | Cross-queue timeline dependency resolution (arbitrary queue-pair, including T→C→G chain) |
-| `include/miki/frame/AsyncTaskManager.h`   | `miki::frame` | Long-running cross-frame compute tasks (BLAS rebuild, GDeflate decode, GPU QEM)          |
-| `include/miki/frame/DeferredDestructor.h` | `miki::frame` | Frame-tagged resource destruction queue                                                  |
-| `include/miki/rhi/Sync.h`                 | `miki::rhi`   | `QueueTimelines`, `TimelineSyncPoint` (in FrameManager.h), sync descriptors              |
-| `src/miki/frame/FrameManager.cpp`         | —             | Impl: timeline wait, acquire, submit, present                                            |
-| `src/miki/frame/SyncScheduler.cpp`        | —             | Impl: counter allocation, arbitrary queue-pair dependency tracking                       |
-| `src/miki/frame/AsyncTaskManager.cpp`     | —             | Impl: compute task submit, non-blocking poll, batch splitting                            |
-| `src/miki/frame/DeferredDestructor.cpp`   | —             | Impl: ring buffer drain                                                                  |
+| File                                           | Namespace     | Responsibility                                                                           |
+| ---------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------- |
+| `include/miki/frame/FrameManager.h`            | `miki::frame` | Frame pacing: BeginFrame/EndFrame, timeline wait, surface integration                    |
+| `include/miki/frame/FrameContext.h`            | `miki::frame` | Per-frame state: index, number, swapchain image, dimensions                              |
+| `include/miki/frame/FrameOrchestrator.h`       | `miki::frame` | Multi-window frame orchestration, global deferred destruction                            |
+| `include/miki/frame/SyncScheduler.h`           | `miki::frame` | Cross-queue timeline dependency resolution (arbitrary queue-pair, including T→C→G chain) |
+| `include/miki/frame/AsyncTaskManager.h`        | `miki::frame` | Long-running cross-frame compute tasks (BLAS rebuild, GDeflate decode, GPU QEM)          |
+| `include/miki/frame/DeferredDestructor.h`      | `miki::frame` | Frame-tagged resource destruction queue                                                  |
+| `include/miki/rhi/Sync.h`                      | `miki::rhi`   | `QueueTimelines`, `TimelineSyncPoint` (in FrameManager.h), sync descriptors              |
+| `include/miki/rhi/GpuCapabilityProfile.h`      | `miki::rhi`   | `hasAsyncTransfer`, `hasAsyncCompute`, `hasTimelineSemaphore` capability flags           |
+| `include/miki/rhi/backend/AllCommandBuffers.h` | `miki::rhi`   | Conditional-include aggregate for all backend CommandBuffer headers (for Dispatch)       |
+| `src/miki/frame/FrameManager.cpp`              | —             | Impl: timeline wait, acquire, submit, present                                            |
+| `src/miki/frame/SyncScheduler.cpp`             | —             | Impl: counter allocation, arbitrary queue-pair dependency tracking                       |
+| `src/miki/frame/AsyncTaskManager.cpp`          | —             | Impl: compute task submit, non-blocking poll, batch splitting                            |
+| `src/miki/frame/DeferredDestructor.cpp`        | —             | Impl: ring buffer drain                                                                  |
 
 ---
 
@@ -1617,3 +2129,1527 @@ Sync points (●=signal, ○=wait):
 | **3-Queue Chain**         | Transfer → Compute → Graphics pipeline where each queue stage waits on the previous via timeline semaphore. Used for GDeflate GPU decompression path.            |
 | **Batch Splitting**       | Dividing a long compute workload into ≤2ms sub-batches to prevent blocking frame-sync compute tasks on the same queue.                                           |
 | **Budget Overflow Spill** | When per-frame inline work exceeds budget (e.g., >2 BLAS rebuilds), excess is offloaded to AsyncTaskManager to avoid frame time spikes.                          |
+
+---
+
+## 17. Test Specification
+
+Tests are the **executable specification** of program behavior. Each test case is written in BDD style (`GIVEN / WHEN / THEN`) and serves as a completeness constraint on the implementation. Tests run against a `FrameSyncTestDevice` — an enhanced MockDevice that tracks semaphore/fence state, submit calls, and queue timelines internally so all FrameManager logic can be verified without a real GPU.
+
+Test file: `tests/frame/test_frame_manager.cpp`
+
+### 17.1 Test Infrastructure
+
+#### 17.1.1 `FrameSyncTestDevice`
+
+A test-only device derived from `MockDevice` that overrides sync and submit stubs with state-tracking implementations:
+
+| Override                 | Behavior                                                                 |
+| :----------------------- | :----------------------------------------------------------------------- |
+| `CreateSemaphoreImpl`    | Returns valid handle, stores type (binary/timeline) + initial value      |
+| `DestroySemaphoreImpl`   | Marks handle invalid                                                     |
+| `SignalSemaphoreImpl`    | Updates stored value (CPU signal for timeline)                           |
+| `WaitSemaphoreImpl`      | Asserts stored value >= target (immediate in test — no real GPU)         |
+| `GetSemaphoreValueImpl`  | Returns stored value                                                     |
+| `CreateFenceImpl`        | Returns valid handle, stores signaled state                              |
+| `WaitFenceImpl`          | Asserts fence is signaled (test simulates GPU completion)                |
+| `ResetFenceImpl`         | Clears signaled state                                                    |
+| `GetFenceStatusImpl`     | Returns stored signaled state                                            |
+| `SubmitImpl`             | Records `{queue, cmdCount, waits[], signals[], fence}` into a submit log |
+| `AcquireCommandListImpl` | Returns valid stub handles                                               |
+| `ReleaseCommandListImpl` | No-op                                                                    |
+| `GetQueueTimelinesImpl`  | Returns pre-created timeline semaphores for Graphics/Compute/Transfer    |
+| `GetCapabilitiesImpl`    | Returns configurable tier + `hasAsyncTransfer` + `hasTimelineSemaphore`  |
+
+The submit log enables assertions like "graphics queue received exactly 1 submit with 2 wait semaphores".
+
+#### 17.1.2 `StubRenderSurface`
+
+A minimal `RenderSurface` implementation for windowed-mode tests:
+
+- `AcquireNextImage()` → always succeeds, returns index 0
+- `Present()` → always succeeds
+- `GetExtent()` → returns configurable {width, height}
+- `SetSubmitSyncInfo()` → stores the sync info for later assertions
+
+#### 17.1.3 `StubStagingRing` / `StubReadbackRing`
+
+Stubs with controllable `GetPendingCopyCount()`, `FlushFrame()` call tracking, and `RecordTransfers()` that records a no-op copy command.
+
+### 17.2 FrameManager — Lifecycle Tests
+
+```
+FM-LC-01  GIVEN invalid DeviceHandle
+          WHEN  Create() is called
+          THEN  returns ErrorCode::InvalidArgument
+
+FM-LC-02  GIVEN valid device (any tier)
+          WHEN  Create(device, surface, 2) succeeds
+          THEN  FramesInFlight() == 2
+          AND   FrameIndex() == 0
+          AND   FrameNumber() == 0
+          AND   IsWindowed() == true
+
+FM-LC-03  GIVEN valid device
+          WHEN  CreateOffscreen(device, 1920, 1080, 2) succeeds
+          THEN  IsWindowed() == false
+          AND   FramesInFlight() == 2
+
+FM-LC-04  GIVEN framesInFlight == 0
+          WHEN  Create() is called
+          THEN  FramesInFlight() is clamped to 1
+
+FM-LC-05  GIVEN framesInFlight == 5 (> kMaxFramesInFlight)
+          WHEN  Create() is called
+          THEN  FramesInFlight() is clamped to kMaxFramesInFlight (3)
+
+FM-LC-06  GIVEN a valid FrameManager `a`
+          WHEN  `b = std::move(a)`
+          THEN  `b` is usable (BeginFrame succeeds)
+          AND   `a` is in moved-from state (all queries return 0/false)
+
+FM-LC-07  GIVEN a valid FrameManager
+          WHEN  destructor runs
+          THEN  WaitAll() is called before DestroySyncObjects()
+          AND   no GPU resource leak (all semaphores/fences destroyed)
+```
+
+### 17.3 FrameManager — Frame Lifecycle (BeginFrame / EndFrame)
+
+```
+FM-FL-01  GIVEN offscreen FrameManager with 2 frames in flight, T1
+          WHEN  BeginFrame() is called for the first time
+          THEN  returns FrameContext with frameIndex==0, frameNumber==1
+          AND   no CPU wait occurs (slot.timelineValue == 0, never submitted)
+
+FM-FL-02  GIVEN FM after BeginFrame()
+          WHEN  EndFrame(cmdBuffer) is called
+          THEN  Submit is recorded on Graphics queue
+          AND   submit signals G.timeline = 1
+          AND   frameIndex advances to 1
+
+FM-FL-03  GIVEN FM with 2 frames in flight, after 2 complete frames
+          WHEN  BeginFrame() is called for frame 3
+          THEN  CPU wait occurs on slot[0].timelineValue (== 1)
+          AND   returns frameIndex == 0 (ring wraps)
+
+FM-FL-04  GIVEN windowed FrameManager, T1
+          WHEN  BeginFrame() is called
+          THEN  surface.SetSubmitSyncInfo() is called with this slot's imageAvail + renderDone
+          AND   surface.AcquireNextImage() is called
+          AND   FrameContext.swapchainImage is valid
+
+FM-FL-05  GIVEN windowed FM, T1, after EndFrame()
+          WHEN  submit log is inspected
+          THEN  waits include imageAvail[slot] at ColorAttachmentOutput
+          AND   signals include renderDone[slot] (binary) + G.timeline (timeline)
+          AND   surface.Present() was called
+
+FM-FL-06  GIVEN windowed FM, surface extent == (0, 0) (minimized)
+          WHEN  BeginFrame() is called
+          THEN  returns ErrorCode::InvalidState (frame skipped)
+
+FM-FL-07  GIVEN FM with single-cmd EndFrame overload
+          WHEN  EndFrame(singleCmd) is called
+          THEN  internally delegates to EndFrame(span{singleCmd})
+          AND   submit contains exactly 1 command buffer
+```
+
+### 17.4 FrameManager — Timeline Semaphore (T1)
+
+```
+FM-TL-01  GIVEN T1 FrameManager (Vulkan or D3D12)
+          WHEN  Create() succeeds
+          THEN  graphicsTimeline is retrieved from device.GetQueueTimelines().graphics
+          AND   no per-slot fences are created
+
+FM-TL-02  GIVEN T1 FM, 3 consecutive frames completed
+          WHEN  CurrentTimelineValue() is queried
+          THEN  returns 3
+
+FM-TL-03  GIVEN T1 FM
+          WHEN  GetGraphicsSyncPoint() is called after frame 5
+          THEN  returns {graphicsTimeline, 5}
+
+FM-TL-04  GIVEN T1 FM, after EndFrame(frame N)
+          WHEN  next BeginFrame() runs
+          THEN  CPU waits on G.timeline >= slot[oldest].timelineValue
+          AND   NOT on any transfer or compute timeline
+```
+
+### 17.5 FrameManager — Fence-Based (T2)
+
+```
+FM-T2-01  GIVEN T2 FrameManager (Vulkan Compat)
+          WHEN  Create() succeeds
+          THEN  per-slot fences are created (signaled initially)
+          AND   per-slot binary semaphores are created (imageAvail + renderDone)
+          AND   no timeline semaphore is used
+
+FM-T2-02  GIVEN T2 FM, after EndFrame()
+          WHEN  submit log is inspected
+          THEN  signalFence == slot[current].fence
+          AND   no timeline signal in signals[]
+
+FM-T2-03  GIVEN T2 FM, second loop around frame ring
+          WHEN  BeginFrame() runs
+          THEN  WaitFence + ResetFence are called on the returning slot's fence
+```
+
+### 17.6 FrameManager — Implicit Sync (T3/T4)
+
+```
+FM-IS-01  GIVEN T3 or T4 FrameManager
+          WHEN  Create() succeeds
+          THEN  no fences or semaphores are created
+
+FM-IS-02  GIVEN T3/T4 FM
+          WHEN  BeginFrame() is called
+          THEN  no CPU wait occurs (implicit sync)
+
+FM-IS-03  GIVEN T3/T4 FM
+          WHEN  WaitAll() is called
+          THEN  device.WaitIdle() is called (lightweight device-level drain)
+```
+
+### 17.7 FrameManager — Transfer Dispatch (§7.3)
+
+```
+FM-TX-01  GIVEN T1 FM with hasAsyncTransfer, stagingRing has 3 pending copies
+          WHEN  EndFrame() is called (FlushTransfers NOT called)
+          THEN  submit log shows a Transfer queue submit BEFORE graphics submit
+          AND   transfer submit signals T.timeline
+          AND   graphics submit waits on T.timeline at PipelineStage::Transfer
+
+FM-TX-02  GIVEN T1 FM with hasAsyncTransfer, stagingRing has 3 pending copies
+          WHEN  FlushTransfers() is called THEN EndFrame() is called
+          THEN  submit log shows Transfer submit at FlushTransfers time
+          AND   EndFrame does NOT submit to Transfer queue again
+          AND   graphics submit still waits on T.timeline (auto-set by FlushTransfers)
+
+FM-TX-03  GIVEN T1 FM with hasAsyncTransfer, NO pending copies
+          WHEN  FlushTransfers() is called
+          THEN  no Transfer submit occurs (no-op)
+          AND   transfersFlushed remains false
+
+FM-TX-04  GIVEN T1 FM with hasAsyncTransfer, pending copies
+          WHEN  FlushTransfers() is called twice in same frame
+          THEN  second call is no-op (idempotent)
+          AND   exactly 1 Transfer submit in log
+
+FM-TX-05  GIVEN FM WITHOUT hasAsyncTransfer (T2/OpenGL), pending copies
+          WHEN  FlushTransfers() is called
+          THEN  no-op (returns immediately)
+          AND   EndFrame() prepends transfer cmd to graphics batch
+          AND   submit log shows single Graphics submit with (1 + N) command buffers
+
+FM-TX-06  GIVEN FM WITHOUT hasAsyncTransfer, pending copies
+          WHEN  EndFrame() auto-dispatches
+          THEN  no Transfer queue submit
+          AND   graphics submit does NOT wait on any transfer timeline
+          AND   stagingRing.FlushFrame() was called exactly once
+
+FM-TX-07  GIVEN T1 FM with hasAsyncTransfer, pending copies
+          WHEN  FlushTransfers() called, then EndFrame() called
+          THEN  stagingRing.FlushFrame() called exactly once (by SubmitTransferCopies)
+          AND   EndFrame's else branch does NOT call FlushFrame again
+
+FM-TX-08  GIVEN FM (any tier), no stagingRing or readbackRing set
+          WHEN  EndFrame() is called
+          THEN  no transfer dispatch, no FlushFrame calls, no crash
+
+FM-TX-09  GIVEN T1 FM with hasAsyncTransfer, readbackRing has pending reads
+          WHEN  FlushTransfers() is called
+          THEN  readbackRing.RecordTransfers() is called on the transfer cmd
+          AND   readbackRing.FlushFrame() is called
+```
+
+### 17.8 FrameManager — Split Submit (EndFrameSplit)
+
+```
+FM-SS-01  GIVEN T1 FM
+          WHEN  EndFrameSplit({batchA, batchB}) is called
+          THEN  2 Graphics submits occur
+          AND   first submit waits imageAvail + transferSync
+          AND   last submit waits computeSync
+          AND   last submit signals renderDone + G.timeline
+
+FM-SS-02  GIVEN T1 FM, 3 batches, batch[0].signalPartialTimeline = true
+          WHEN  EndFrameSplit() is called
+          THEN  batch[0] signals G.timeline = V+1
+          AND   batch[1] signals G.timeline = V+2 (if signalPartialTimeline)
+          AND   batch[2] signals G.timeline = V+3
+          AND   CurrentTimelineValue() == V+3 after call
+
+FM-SS-03  GIVEN T1 FM with pending transfer copies, FlushTransfers NOT called
+          WHEN  EndFrameSplit({batchA, batchB}) is called
+          THEN  transfer cmd is prepended to batchA (first batch)
+          AND   batchB is submitted unchanged
+
+FM-SS-04  GIVEN FM, empty batches span
+          WHEN  EndFrameSplit({}) is called
+          THEN  delegates to EndFrame({}) — single empty submit
+
+FM-SS-05  GIVEN T2 FM
+          WHEN  EndFrameSplit({batchA, batchB}) is called
+          THEN  only last batch signals the per-slot fence
+          AND   no timeline signals
+```
+
+### 17.9 FrameManager — Cross-Queue Sync Points
+
+```
+FM-XQ-01  GIVEN T1 FM, compute sync point set via SetComputeSyncPoint({sem, 42})
+          WHEN  EndFrame() is called
+          THEN  graphics submit waits on sem at value 42 at ComputeShader stage
+          AND   after EndFrame, computeSync is reset to {_, 0}
+
+FM-XQ-02  GIVEN T1 FM, transfer sync point set via SetTransferSyncPoint({sem, 7})
+          WHEN  EndFrame() is called
+          THEN  graphics submit waits on sem at value 7 at Transfer stage
+          AND   after EndFrame, transferSync is reset to {_, 0}
+
+FM-XQ-03  GIVEN T1 FM, both compute and transfer sync points set
+          WHEN  EndFrame() is called
+          THEN  graphics submit has 3 waits: imageAvail + transfer + compute
+
+FM-XQ-04  GIVEN T1 FM, no sync points set
+          WHEN  EndFrame() is called
+          THEN  graphics submit has only 1 wait: imageAvail (windowed)
+          OR    0 waits (offscreen)
+
+FM-XQ-05  GIVEN T2 FM, SetComputeSyncPoint() called
+          WHEN  EndFrame() is called
+          THEN  compute sync is ignored (T2 has no async compute)
+          AND   submit has no timeline waits
+```
+
+### 17.10 FrameManager — Resource Lifecycle Hooks
+
+```
+FM-RL-01  GIVEN FM with DeferredDestructor set
+          WHEN  BeginFrame() runs
+          THEN  DrainBin(frameIndex) is called
+          AND   SetCurrentBin(frameIndex) is called
+
+FM-RL-02  GIVEN FM with StagingRing set, after frame N completed
+          WHEN  BeginFrame() runs for frame N+2 (reusing slot)
+          THEN  stagingRing.ReclaimCompleted(slot.timelineValue) is called
+
+FM-RL-03  GIVEN FM with NO DeferredDestructor/StagingRing/ReadbackRing
+          WHEN  BeginFrame() and EndFrame() cycle
+          THEN  no crash, lifecycle hooks simply skipped
+
+FM-RL-04  GIVEN FM with ReadbackRing set, after frame N completed
+          WHEN  BeginFrame() runs for frame N+2
+          THEN  readbackRing.ReclaimCompleted(slot.timelineValue) is called
+```
+
+### 17.11 FrameManager — Resize / Reconfigure
+
+```
+FM-RS-01  GIVEN windowed FM
+          WHEN  Resize(1920, 1080) is called
+          THEN  WaitAll() is called first
+          AND   surface.Resize(1920, 1080) is called
+
+FM-RS-02  GIVEN windowed FM
+          WHEN  Resize(0, 0) is called (minimized)
+          THEN  no-op, returns success
+          AND   WaitAll() is NOT called
+
+FM-RS-03  GIVEN offscreen FM
+          WHEN  Resize(3840, 2160) is called
+          THEN  internal dimensions updated to 3840×2160
+          AND   no surface interaction
+
+FM-RS-04  GIVEN offscreen FM
+          WHEN  Reconfigure() is called
+          THEN  returns ErrorCode::InvalidState (no surface to reconfigure)
+
+FM-RS-05  GIVEN windowed FM
+          WHEN  Reconfigure(newConfig) is called
+          THEN  WaitAll() called first
+          AND   surface.Reconfigure(newConfig) is called
+```
+
+### 17.12 FrameManager — Queries
+
+```
+FM-QR-01  GIVEN FM after 5 complete frames
+          WHEN  FrameNumber() is queried
+          THEN  returns 5
+
+FM-QR-02  GIVEN FM with 2 frames in flight, after 3 frames
+          WHEN  FrameIndex() is queried
+          THEN  returns 1 (3 % 2)
+
+FM-QR-03  GIVEN T1 FM, GPU has completed timeline value 10
+          WHEN  IsFrameComplete(10) is called
+          THEN  returns true
+          WHEN  IsFrameComplete(11) is called
+          THEN  returns false
+
+FM-QR-04  GIVEN moved-from FM
+          WHEN  FrameIndex() / FrameNumber() / FramesInFlight() are called
+          THEN  all return 0
+
+FM-QR-05  GIVEN T1 FM, never submitted
+          WHEN  CurrentTimelineValue() is called
+          THEN  returns 0
+```
+
+### 17.13 FrameManager — WaitAll
+
+```
+FM-WA-01  GIVEN T1 FM with currentTimelineValue == 10
+          WHEN  WaitAll() is called
+          THEN  WaitSemaphore(graphicsTimeline, 10, UINT64_MAX) is called exactly once
+
+FM-WA-02  GIVEN T2 FM with 2 frames in flight
+          WHEN  WaitAll() is called
+          THEN  WaitForSlot is called for slots 0 and 1
+
+FM-WA-03  GIVEN T3/T4 FM
+          WHEN  WaitAll() is called
+          THEN  device.WaitIdle() is called
+
+FM-WA-04  GIVEN moved-from FM
+          WHEN  WaitAll() is called
+          THEN  no-op, no crash
+```
+
+### 17.14 FrameManager — Multi-Frame Stress / Integration
+
+```
+FM-MF-01  GIVEN T1 offscreen FM with 2 frames in flight
+          WHEN  100 frames are run (BeginFrame → EndFrame cycle)
+          THEN  frameNumber == 100
+          AND   currentTimelineValue == 100
+          AND   frameIndex == 0 (100 % 2)
+
+FM-MF-02  GIVEN T1 FM with 3 frames in flight
+          WHEN  10 frames are run
+          THEN  frame ring wraps correctly: indices cycle 0,1,2,0,1,2,...
+          AND   slot.timelineValue is correctly updated for each slot
+
+FM-MF-03  GIVEN T1 FM with hasAsyncTransfer, stagingRing with alternating pending/empty
+          WHEN  10 frames run, FlushTransfers() called on odd frames only
+          THEN  odd frames: Transfer submit at FlushTransfers, EndFrame skips
+          AND   even frames: Transfer submit at EndFrame (lazy path)
+          AND   all frames: stagingRing.FlushFrame called exactly once per frame
+
+FM-MF-04  GIVEN T1 FM, SetComputeSyncPoint called every frame with incrementing values
+          WHEN  10 frames run
+          THEN  each frame's graphics submit waits on that frame's compute value
+          AND   computeSync is reset to 0 after each EndFrame
+```
+
+### 17.15 SyncScheduler Tests
+
+```
+SS-01     GIVEN freshly Init'd SyncScheduler with 3 queue timelines
+          WHEN  AllocateSignal(Graphics) is called
+          THEN  returns 1 (first allocation)
+          WHEN  called again
+          THEN  returns 2 (monotonic)
+
+SS-02     GIVEN SyncScheduler
+          WHEN  AddDependency(Compute, Graphics, 5, ComputeShader)
+          THEN  GetPendingWaits(Compute) contains {graphicsSem, 5, ComputeShader}
+
+SS-03     GIVEN SyncScheduler with pending waits on Compute
+          WHEN  CommitSubmit(Compute) is called
+          THEN  GetPendingWaits(Compute) is empty
+
+SS-04     GIVEN SyncScheduler with circular dependency: G waits C, C waits G
+          WHEN  DetectDeadlock() is called
+          THEN  returns true
+
+SS-05     GIVEN SyncScheduler with no circular dependency
+          WHEN  DetectDeadlock() is called
+          THEN  returns false
+
+SS-06     GIVEN SyncScheduler after Reset()
+          WHEN  GetCurrentValue(Graphics) is called
+          THEN  returns 0
+
+SS-07     GIVEN SyncScheduler
+          WHEN  AddDependency(Graphics, Transfer, 3, Transfer)
+          AND   AddDependency(Graphics, Compute, 7, FragmentShader)
+          THEN  GetPendingWaits(Graphics) has 2 entries
+
+SS-08     GIVEN SyncScheduler
+          WHEN  ExportWaitGraphDOT() is called
+          THEN  output contains "digraph" and queue node names
+
+SS-09     GIVEN SyncScheduler
+          WHEN  ExportWaitGraphJSON() is called
+          THEN  output is valid JSON with queue state arrays
+
+SS-10     GIVEN SyncScheduler, 3-queue chain: T→C→G
+          WHEN  AddDependency(Compute, Transfer, 1, ComputeShader)
+          AND   AddDependency(Graphics, Compute, 1, VertexInput)
+          THEN  GetPendingWaits(Compute) has Transfer wait
+          AND   GetPendingWaits(Graphics) has Compute wait
+          AND   DetectDeadlock() returns false (DAG, not cycle)
+```
+
+### 17.16 DeferredDestructor Tests
+
+```
+DD-01     GIVEN DeferredDestructor with 2 bins
+          WHEN  Destroy(bufferHandle) is called
+          THEN  PendingCount() == 1
+          AND   handle is NOT destroyed immediately
+
+DD-02     GIVEN DD with buffer in bin 0
+          WHEN  DrainBin(0) is called
+          THEN  device.DestroyBuffer() is called
+          AND   PendingCount() == 0
+
+DD-03     GIVEN DD, current bin == 0
+          WHEN  Destroy(tex1) then SetCurrentBin(1) then Destroy(tex2)
+          THEN  DrainBin(0) destroys tex1 only
+          AND   DrainBin(1) destroys tex2 only
+
+DD-04     GIVEN DD with resources in both bins
+          WHEN  DrainAll() is called
+          THEN  all resources destroyed
+          AND   PendingCount() == 0
+
+DD-05     GIVEN DD with 2 bins, resources in bin 0
+          WHEN  DrainBin(1) is called (wrong bin)
+          THEN  no resources destroyed, PendingCount unchanged
+
+DD-06     GIVEN DD
+          WHEN  Destroy() called for every handle type (Buffer, Texture, ..., QueryPool)
+          THEN  each type is correctly dispatched on DrainBin
+
+DD-07     GIVEN DD with binCount clamped from 0 to 1
+          WHEN  Create(device, 0)
+          THEN  binCount == 1 (clamped)
+
+DD-08     GIVEN DD with binCount clamped from 5 to kMaxBins(3)
+          WHEN  Create(device, 5)
+          THEN  binCount == 3 (clamped)
+```
+
+### 17.17 Test Coverage Matrix
+
+| Component              | Behavior Category               | Test IDs     | Count  |
+| :--------------------- | :------------------------------ | :----------- | :----- |
+| **FrameManager**       | Lifecycle (create/destroy/move) | FM-LC-01..07 | 7      |
+| **FrameManager**       | Frame lifecycle (begin/end)     | FM-FL-01..07 | 7      |
+| **FrameManager**       | Timeline semaphore (T1)         | FM-TL-01..04 | 4      |
+| **FrameManager**       | Fence-based (T2)                | FM-T2-01..03 | 3      |
+| **FrameManager**       | Implicit sync (T3/T4)           | FM-IS-01..03 | 3      |
+| **FrameManager**       | Transfer dispatch               | FM-TX-01..09 | 9      |
+| **FrameManager**       | Split submit                    | FM-SS-01..05 | 5      |
+| **FrameManager**       | Cross-queue sync                | FM-XQ-01..05 | 5      |
+| **FrameManager**       | Resource lifecycle hooks        | FM-RL-01..04 | 4      |
+| **FrameManager**       | Resize / reconfigure            | FM-RS-01..05 | 5      |
+| **FrameManager**       | Queries                         | FM-QR-01..05 | 5      |
+| **FrameManager**       | WaitAll                         | FM-WA-01..04 | 4      |
+| **FrameManager**       | Multi-frame stress              | FM-MF-01..04 | 4      |
+| **SyncScheduler**      | All behaviors                   | SS-01..10    | 10     |
+| **DeferredDestructor** | All behaviors                   | DD-01..08    | 8      |
+| **Total**              |                                 |              | **83** |
+
+### 17.18 Test Execution Strategy
+
+| Mode                     | Command                                                                             | Coverage                                        |
+| :----------------------- | :---------------------------------------------------------------------------------- | :---------------------------------------------- |
+| **Unit (MockDevice)**    | `ctest -R test_frame_manager`                                                       | All 83 tests, headless, <1s                     |
+| **Integration (Vulkan)** | `ctest -R test_frame_manager --test-dir build -C Debug` with `MIKI_BUILD_VULKAN=ON` | Parameterized subset against real Vulkan device |
+| **Integration (D3D12)**  | Same with `MIKI_BUILD_D3D12=ON`                                                     | Parameterized subset against real D3D12 device  |
+| **CI**                   | GitHub Actions matrix: `{Mock, Vulkan, D3D12}` × `{Debug, Release}`                 | Full matrix                                     |
+
+Tests that require GPU features (e.g., timeline semaphore CPU poll) use `GTEST_SKIP()` when the backend doesn't support them — same pattern as `tests/rhi/RhiTestFixture.h`.
+
+---
+
+## 18. Composite Test Specification
+
+Composite tests exercise **behavior combinations across subsystems**. Where §17 unit tests verify isolated behaviors, §18 tests verify correctness when multiple behaviors interact within the same scenario. Each test crosses at least two behavior categories or two subsystems.
+
+Design principles:
+
+1. **Cross-cutting**: every composite test touches ≥2 of {FrameManager, SyncScheduler, DeferredDestructor, transfer dispatch, cross-queue sync, resize, queries}.
+2. **Stateful**: tests run multi-frame sequences where earlier frames' side effects constrain later frames' behavior.
+3. **Realistic**: scenarios mirror real application frame loops (create resources → render → destroy → resize → resume).
+
+Test file: `tests/frame/test_frame_manager.cpp` (appended after §17 tests)
+
+### 18.1 FrameManager + DeferredDestructor Integration
+
+```
+CT-DD-01  GIVEN T1 offscreen FM (2 frames in flight) with DeferredDestructor (binCount=2)
+          WHEN  frame 1: BeginFrame, Destroy(bufA) into bin 0, EndFrame
+          AND   frame 2: BeginFrame, Destroy(bufB) into bin 1, EndFrame
+          AND   frame 3: BeginFrame (reuses slot 0 → drains bin 0)
+          THEN  after frame 3's BeginFrame: bufA is drained (PendingCount drops by 1)
+          AND   bufB is still pending in bin 1
+          AND   SetCurrentBin(0) was called (bin rotates back to 0)
+
+CT-DD-02  GIVEN T1 offscreen FM (3 frames in flight) with DeferredDestructor (binCount=3)
+          WHEN  6 frames are run, each frame: Destroy(resource_i) into current bin
+          THEN  after each BeginFrame: DrainBin(frameIndex) is called before SetCurrentBin
+          AND   resources destroyed in correct order: frame 1's resource drained at frame 4,
+                frame 2's at frame 5, frame 3's at frame 6
+          AND   PendingCount never exceeds framesInFlight (3) at any BeginFrame boundary
+
+CT-DD-03  GIVEN FM with DeferredDestructor, after running 5 frames with resources queued
+          WHEN  FrameManager destructor runs (~FrameManager)
+          THEN  WaitAll() is called first (GPU idle)
+          AND   DeferredDestructor still has pending resources (destructor did NOT drain DD)
+          AND   DD's own destructor (~DeferredDestructor) calls DrainAll()
+          NOTE  This validates destruction ordering: FM dtor waits GPU, DD dtor cleans resources
+
+CT-DD-04  GIVEN FM with DeferredDestructor
+          WHEN  Destroy(invalidHandle) is called (handle with generation=0 or index=0)
+          THEN  PendingCount remains unchanged (invalid handles are silently filtered)
+          AND   no crash or UB on subsequent DrainBin/DrainAll
+
+CT-DD-05  GIVEN moved-from FM (b = std::move(a)) with DeferredDestructor set on original
+          WHEN  b.BeginFrame() runs
+          THEN  DeferredDestructor hooks still fire correctly (DrainBin + SetCurrentBin)
+          AND   a is in moved-from state (impl_ == nullptr)
+```
+
+### 18.2 FrameManager + SyncScheduler Multi-Frame Pipeline
+
+```
+CT-SS-01  GIVEN SyncScheduler Init'd with 3 queue timelines
+          WHEN  simulating 5 frames of a Transfer→Compute→Graphics pipeline:
+                each frame:
+                  1. AllocateSignal(Transfer) → tVal
+                  2. AddDependency(Compute, Transfer, tVal, ComputeShader)
+                  3. AllocateSignal(Compute) → cVal
+                  4. AddDependency(Graphics, Compute, cVal, VertexInput)
+                  5. AllocateSignal(Graphics) → gVal
+                  6. CommitSubmit(Transfer), CommitSubmit(Compute), CommitSubmit(Graphics)
+          THEN  after 5 frames: GetCurrentValue(Graphics) == 5
+          AND   GetCurrentValue(Compute) == 5
+          AND   GetCurrentValue(Transfer) == 5
+          AND   all GetPendingWaits are empty (committed)
+          AND   DetectDeadlock() == false throughout
+
+CT-SS-02  GIVEN SyncScheduler after CT-SS-01 (5 committed frames)
+          WHEN  Reset() is called
+          THEN  GetCurrentValue for all 3 queues == 0
+          AND   next AllocateSignal(Graphics) returns 1 (counter restarted)
+
+CT-SS-03  GIVEN SyncScheduler
+          WHEN  building a diamond dependency: T→C, T→G, C→G
+                  AllocateSignal(Transfer) → tVal
+                  AddDependency(Compute, Transfer, tVal, ComputeShader)
+                  AddDependency(Graphics, Transfer, tVal, Transfer)
+                  AllocateSignal(Compute) → cVal
+                  AddDependency(Graphics, Compute, cVal, FragmentShader)
+          THEN  GetPendingWaits(Graphics) has 2 entries (Transfer + Compute)
+          AND   GetPendingWaits(Compute) has 1 entry (Transfer)
+          AND   DetectDeadlock() == false (DAG, not cycle)
+
+CT-SS-04  GIVEN SyncScheduler with valid chain T→C→G (no cycle)
+          WHEN  an additional dependency G→T is added (closing the cycle)
+          THEN  DetectDeadlock() == true
+          WHEN  CommitSubmit(Transfer) advances Transfer's currentValue past waited value
+          THEN  DetectDeadlock() == false (cycle broken by progress)
+
+CT-SS-05  GIVEN SyncScheduler
+          WHEN  AllocateSignal is called N times without CommitSubmit
+          THEN  GetCurrentValue remains 0 (uncommitted)
+          AND   GetSignalValue returns N (last allocated)
+          WHEN  CommitSubmit is called
+          THEN  GetCurrentValue == N
+          AND   GetPendingWaits cleared
+```
+
+### 18.3 FrameManager Cross-Queue Sync + Frame Lifecycle
+
+```
+CT-XQ-01  GIVEN T1 offscreen FM (2 frames in flight)
+          WHEN  frame 1: BeginFrame, SetComputeSyncPoint({sem, 10}), EndFrame(cmd)
+          AND   frame 2: BeginFrame (no sync point set), EndFrame(cmd)
+          THEN  frame 1's submit waits on compute sem at value 10
+          AND   frame 2's submit has 0 waits (compute sync was reset after frame 1)
+          AND   computeSync.value == 0 between frames (auto-reset by EndFrame)
+
+CT-XQ-02  GIVEN T1 offscreen FM
+          WHEN  frame 1: SetComputeSyncPoint({csem, 5}) + SetTransferSyncPoint({tsem, 3})
+          AND   EndFrame(cmd)
+          THEN  submit has ≥2 waits: compute at ComputeShader stage + transfer at Transfer stage
+          WHEN  frame 2: only SetComputeSyncPoint({csem, 10}), no transfer sync
+          AND   EndFrame(cmd)
+          THEN  frame 2's submit has exactly 1 wait (compute only, transfer was reset)
+
+CT-XQ-03  GIVEN T1 offscreen FM
+          WHEN  10 frames run, SetComputeSyncPoint called on odd frames only
+          THEN  odd frames' submits wait on compute sync
+          AND   even frames' submits have 0 cross-queue waits
+          AND   FrameNumber() == 10, CurrentTimelineValue() == 10
+```
+
+### 18.4 FrameManager Resize + Frame Lifecycle Continuity
+
+```
+CT-RS-01  GIVEN T1 offscreen FM (2 frames in flight), after running 5 frames
+          WHEN  Resize(3840, 2160) is called
+          AND   5 more frames are run
+          THEN  FrameNumber() == 10 (counter not reset by resize)
+          AND   CurrentTimelineValue() == 10
+          AND   FrameIndex() == 0 (10 % 2)
+
+CT-RS-02  GIVEN T1 offscreen FM with DeferredDestructor, after running 3 frames
+          WHEN  Resize(1280, 720) is called (internally calls WaitAll)
+          AND   next BeginFrame runs
+          THEN  WaitAll was called by Resize (all GPU work complete)
+          AND   BeginFrame still drains the correct DD bin
+          AND   frame ring continues correctly (no double-wait or skipped slot)
+
+CT-RS-03  GIVEN offscreen FM after running frames
+          WHEN  Resize(0, 0) is called
+          THEN  returns success (no-op for offscreen, zero dimensions stored)
+          WHEN  Resize(1920, 1080) is called
+          AND   BeginFrame + EndFrame succeed
+          THEN  FrameContext reports width=1920, height=1080
+```
+
+### 18.5 FrameManager WaitAll + Resume
+
+```
+CT-WA-01  GIVEN T1 offscreen FM (2 frames in flight), after running 5 frames
+          WHEN  WaitAll() is called mid-sequence
+          AND   5 more frames are run
+          THEN  FrameNumber() == 10
+          AND   CurrentTimelineValue() == 10
+          AND   no deadlock or double-wait occurred
+          NOTE  WaitAll ensures GPU idle; subsequent BeginFrame should not re-wait
+
+CT-WA-02  GIVEN T1 offscreen FM, after WaitAll()
+          WHEN  WaitAll() is called again immediately (double WaitAll)
+          THEN  no crash, no timeout (idempotent — timeline already at target)
+
+CT-WA-03  GIVEN FM with DeferredDestructor, 3 frames completed
+          WHEN  WaitAll() is called
+          AND   then Destroy(resource) is called (between WaitAll and next BeginFrame)
+          AND   then BeginFrame runs
+          THEN  the Destroy'd resource goes into current bin
+          AND   BeginFrame drains the frameIndex's bin (which may or may not contain the new resource)
+          AND   PendingCount is consistent
+```
+
+### 18.6 FrameManager Move Semantics + State Continuity
+
+```
+CT-MV-01  GIVEN T1 offscreen FM (a) after 5 frames, with DeferredDestructor set
+          WHEN  b = std::move(a)
+          THEN  b.FrameNumber() == 5
+          AND   b.CurrentTimelineValue() == 5
+          AND   b.FramesInFlight() == 2
+          AND   a.FrameNumber() == 0, a.CurrentTimelineValue() == 0
+          WHEN  b.BeginFrame() + b.EndFrame(cmd) succeed
+          THEN  b.FrameNumber() == 6, b.CurrentTimelineValue() == 6
+
+CT-MV-02  GIVEN FM (a) with DeferredDestructor, resource queued in bin 0
+          WHEN  b = std::move(a)
+          AND   b runs 3 more frames
+          THEN  DeferredDestructor bins are drained correctly by b
+          AND   queued resource from before move is eventually drained
+
+CT-MV-03  GIVEN FM (a), b = std::move(a)
+          WHEN  a.WaitAll() is called on moved-from instance
+          THEN  no crash, no-op (impl_ == nullptr guard)
+          WHEN  b.WaitAll() is called
+          THEN  succeeds, waits on correct timeline value
+```
+
+### 18.7 EndFrameSplit + Cross-Queue + Transfer Interactions
+
+```
+CT-SP-01  GIVEN T1 offscreen FM with compute and transfer sync points set
+          WHEN  EndFrameSplit({batchA, batchB}) is called
+          THEN  batchA (first) waits on transferSync at Transfer stage
+          AND   batchB (last) waits on computeSync at ComputeShader stage
+          AND   batchB signals graphicsTimeline + renderDone (offscreen: timeline only)
+          AND   both sync points are reset to 0 after call
+
+CT-SP-02  GIVEN T1 offscreen FM
+          WHEN  frame 1: EndFrameSplit({batchA(signalPartial=true), batchB, batchC})
+          AND   frame 2: EndFrame(singleCmd)
+          THEN  frame 1: batchA signals timeline V+1, batchC signals V+3
+          AND   frame 2: single submit signals timeline V+4
+          AND   CurrentTimelineValue() == V+4 after frame 2
+
+CT-SP-03  GIVEN T1 offscreen FM, after 3 frames with EndFrame
+          WHEN  frame 4 uses EndFrameSplit({batchA, batchB})
+          AND   frame 5 uses EndFrame(cmd) again
+          THEN  timeline values are continuous: 1,2,3, [4,5 from split], 6
+          AND   FrameNumber() == 5
+          NOTE  Verifies EndFrame/EndFrameSplit are interchangeable across frames
+```
+
+### 18.8 DeferredDestructor Bin Cycling Under Frame Ring
+
+```
+CT-BC-01  GIVEN DeferredDestructor with binCount == framesInFlight (2)
+          WHEN  frame loop runs 10 frames:
+                each frame: BeginFrame → DrainBin(idx) → SetCurrentBin(idx) → Destroy(res) → EndFrame
+          THEN  at no point do two frames' resources share the same bin simultaneously
+          AND   each resource is drained exactly 2 frames after enqueue (when slot reused)
+          AND   final PendingCount after WaitAll + DrainAll == 0
+
+CT-BC-02  GIVEN DeferredDestructor with binCount == 3, FM with framesInFlight == 3
+          WHEN  frames 1-3: each enqueues 1 resource into bin 0,1,2 respectively
+          AND   frame 4: BeginFrame drains bin 0 (slot 0 reuse)
+          AND   frame 5: BeginFrame drains bin 1 (slot 1 reuse)
+          THEN  after frame 5's BeginFrame: PendingCount == 1 (only frame 3's resource in bin 2)
+          AND   frame 6's BeginFrame drains bin 2 → PendingCount == 0
+
+CT-BC-03  GIVEN DeferredDestructor with binCount == 2, FM with framesInFlight == 2
+          WHEN  frame 1: Destroy 100 resources into bin 0
+          AND   frame 2: Destroy 100 resources into bin 1
+          AND   frame 3: BeginFrame drains bin 0 (100 resources freed)
+          THEN  PendingCount drops from 200 to 100
+          AND   no per-frame budget violation (all 100 destroyed in single DrainBin call)
+```
+
+### 18.9 SyncScheduler Diagnostics Under Complex State
+
+```
+CT-DG-01  GIVEN SyncScheduler with 3-queue chain T→C→G after 3 committed rounds
+          WHEN  ExportWaitGraphDOT() is called
+          THEN  output contains "digraph", node labels with correct current values
+          AND   no edges (all waits were committed/cleared)
+          WHEN  AddDependency(Graphics, Compute, 99, FragmentShader) then ExportWaitGraphDOT()
+          THEN  output contains edge C → G with label "wait C>=99"
+
+CT-DG-02  GIVEN SyncScheduler with pending cycle (G→C→G)
+          WHEN  ExportWaitGraphJSON() is called
+          THEN  JSON is parseable
+          AND   "deadlock" field is true
+          AND   both Graphics and Compute queues have non-empty "waits" arrays
+
+CT-DG-03  GIVEN SyncScheduler
+          WHEN  DumpWaitGraph(stderr) is called after adding 5 dependencies across 3 queues
+          THEN  no crash, output written to provided FILE*
+          AND   output includes all 3 queue names and correct pending counts
+```
+
+### 18.10 Full Frame Loop Simulation (End-to-End)
+
+```
+CT-E2E-01  GIVEN T1 offscreen FM (2 frames in flight)
+                 + DeferredDestructor (2 bins)
+                 + SyncScheduler Init'd with device timelines
+           WHEN  20-frame loop:
+                   each frame:
+                     1. BeginFrame → ctx
+                     2. SyncScheduler: AllocateSignal(Graphics)
+                     3. On even frames: SetComputeSyncPoint with incrementing value
+                     4. Destroy(synthetic resource handle) into DD
+                     5. EndFrame(cmd)
+                     6. SyncScheduler: CommitSubmit(Graphics)
+           THEN  FrameNumber() == 20
+           AND   CurrentTimelineValue() == 20
+           AND   SyncScheduler: GetCurrentValue(Graphics) == 20
+           AND   DD: PendingCount <= 2 (at most framesInFlight resources pending)
+           AND   no crash, no deadlock
+
+CT-E2E-02  GIVEN T1 offscreen FM (3 frames in flight)
+                 + DeferredDestructor (3 bins)
+           WHEN  50-frame loop with alternating EndFrame / EndFrameSplit:
+                   odd frames:  EndFrame(singleCmd)
+                   even frames: EndFrameSplit({batchA, batchB})
+           THEN  timeline values are strictly monotonic
+           AND   FrameNumber() == 50
+           AND   DD bins cycled correctly (no orphaned resources)
+           AND   WaitAll() succeeds at end
+
+CT-E2E-03  GIVEN T1 offscreen FM (2 frames in flight) + DeferredDestructor
+           WHEN  10 frames run
+           AND   Resize(3840, 2160) (calls WaitAll internally)
+           AND   10 more frames run
+           AND   b = std::move(fm)
+           AND   5 more frames run on b
+           THEN  b.FrameNumber() == 25
+           AND   b.CurrentTimelineValue() == 25
+           AND   DD PendingCount <= 2
+           AND   original FM is in moved-from state
+```
+
+### 18.11 SyncScheduler + DeferredDestructor (Pure CPU)
+
+```
+CT-SSDD-01  GIVEN SyncScheduler + DeferredDestructor (both created with MockDevice)
+            WHEN  simulating frame loop (pure CPU):
+                    for i in 1..10:
+                      AllocateSignal(Graphics)
+                      DD.SetCurrentBin(i % 2)
+                      DD.Destroy(syntheticBuffer_i)
+                      CommitSubmit(Graphics)
+                      DD.DrainBin((i + 1) % 2)  // drain the "other" bin
+            THEN  after loop: DD.PendingCount() == 1 (last frame's resource)
+            AND   SyncScheduler: GetCurrentValue(Graphics) == 10
+            AND   no deadlock detected
+
+CT-SSDD-02  GIVEN DeferredDestructor with 3 bins
+            WHEN  3 rounds of: Destroy into bin N, DrainBin((N+2)%3)
+            THEN  bin 0 has resource from round 1 (not yet drained by DrainBin(2))
+            AND   bin 1 has resource from round 2 (not yet drained by DrainBin(0))
+            AND   bin 2 has resource from round 3 (drained in next round)
+            AND   PendingCount == 3 after 3 rounds
+            WHEN  DrainAll called
+            THEN  PendingCount == 0
+```
+
+### 18.12 Edge Cases and Degenerate Scenarios
+
+```
+CT-EDGE-01  GIVEN T1 offscreen FM
+            WHEN  BeginFrame called, then EndFrame called with empty span ({})
+            THEN  submit still occurs (signals timeline, advances frame)
+            AND   timeline value increments
+            AND   next BeginFrame succeeds
+
+CT-EDGE-02  GIVEN T1 offscreen FM
+            WHEN  EndFrameSplit with single batch containing 0 command buffers
+            THEN  submit occurs (empty batch is valid)
+            AND   timeline value increments
+
+CT-EDGE-03  GIVEN DeferredDestructor with binCount=1
+            WHEN  Destroy 10 resources, then DrainBin(0), then Destroy 5 more
+            THEN  after DrainBin: PendingCount == 5 (first 10 drained, then 5 added)
+            AND   DrainAll: PendingCount == 0
+
+CT-EDGE-04  GIVEN SyncScheduler
+            WHEN  AddDependency with same queue as both waiter and signaler (self-dependency)
+            THEN  GetPendingWaits contains the self-wait entry
+            AND   DetectDeadlock() == true (trivial self-cycle)
+
+CT-EDGE-05  GIVEN T1 offscreen FM with framesInFlight == 1
+            WHEN  10 frames run (BeginFrame + EndFrame)
+            THEN  every BeginFrame after the first waits on the single slot's timeline
+            AND   FrameIndex() is always 0
+            AND   timeline values are 1..10
+
+CT-EDGE-06  GIVEN DeferredDestructor
+            WHEN  Destroy called with invalid handle (value == 0)
+            THEN  PendingCount unchanged (silently filtered by IsValid check)
+            AND   subsequent DrainAll has no crash
+
+CT-EDGE-07  GIVEN T1 offscreen FM
+            WHEN  SetComputeSyncPoint called BEFORE BeginFrame (between frames)
+            AND   BeginFrame + EndFrame run
+            THEN  the sync point is consumed by EndFrame (waits on it)
+            AND   sync point reset to 0 after EndFrame
+            NOTE  Validates that sync point timing is per-EndFrame, not per-BeginFrame
+
+CT-EDGE-08  GIVEN SyncScheduler
+            WHEN  CommitSubmit called without any prior AllocateSignal
+            THEN  GetCurrentValue == 0 (nextValue - 1 == 0)
+            AND   no crash (empty commit is valid)
+```
+
+### 18.13 Composite Test Coverage Matrix
+
+| Category                        | Test IDs       | Behaviors Crossed                                       | Count  |
+| :------------------------------ | :------------- | :------------------------------------------------------ | :----- |
+| **FM + DeferredDestructor**     | CT-DD-01..05   | Frame lifecycle × bin management × move semantics       | 5      |
+| **FM + SyncScheduler pipeline** | CT-SS-01..05   | Multi-frame allocation × dependency × commit × deadlock | 5      |
+| **FM + Cross-queue sync**       | CT-XQ-01..03   | Compute/transfer sync × frame lifecycle × reset         | 3      |
+| **FM + Resize continuity**      | CT-RS-01..03   | Resize × frame counter × WaitAll × DD                   | 3      |
+| **FM + WaitAll resume**         | CT-WA-01..03   | WaitAll × frame resume × idempotency × DD interaction   | 3      |
+| **FM + Move semantics**         | CT-MV-01..03   | Move × state transfer × DD hooks × WaitAll              | 3      |
+| **FM + EndFrameSplit combos**   | CT-SP-01..03   | Split submit × cross-queue × timeline continuity        | 3      |
+| **DD bin cycling**              | CT-BC-01..03   | Bin rotation × frame ring × bulk destroy                | 3      |
+| **SS diagnostics**              | CT-DG-01..03   | DOT/JSON export × complex state × deadlock reporting    | 3      |
+| **End-to-end simulation**       | CT-E2E-01..03  | FM + DD + SS + resize + move (full integration)         | 3      |
+| **SS + DD pure CPU**            | CT-SSDD-01..02 | SyncScheduler × DeferredDestructor (no GPU)             | 2      |
+| **Edge cases / degenerate**     | CT-EDGE-01..08 | Empty submits × self-dependency × single-slot × invalid | 8      |
+| **Total**                       |                |                                                         | **44** |
+
+### 18.14 Updated Combined Coverage Summary
+
+| Section | Test Type  | Count   |
+| :------ | :--------- | :------ |
+| §17     | Unit tests | 83      |
+| §18     | Composite  | 44      |
+| **Sum** |            | **127** |
+
+---
+
+## 19. CommandPoolAllocator — Command Buffer Lifecycle Management
+
+### 19.1 Problem Statement
+
+The current implementation creates a **new `VkCommandPool` per `AcquireCommandList` call** and destroys it on `ReleaseCommandList`. This is a 1:1 Pool:Buffer pattern — the worst-performing approach documented by every major IHV and the Khronos Vulkan Best Practices guide.
+
+**Measured costs** (typical desktop GPU, single-threaded):
+
+| Operation                                   | Approximate CPU cost | Frequency in current impl  |
+| ------------------------------------------- | -------------------- | -------------------------- |
+| `vkCreateCommandPool`                       | 50–200 μs            | Every `AcquireCommandList` |
+| `vkDestroyCommandPool`                      | 30–100 μs            | Every `ReleaseCommandList` |
+| `vkAllocateCommandBuffers` (from warm pool) | 0.5–2 μs             | Every `AcquireCommandList` |
+| `vkResetCommandPool` (bulk reset)           | 1–5 μs               | Once per frame per pool    |
+
+With 2–4 command lists per frame (graphics + transfer fallback + compute), the current approach wastes 160–1200 μs/frame on pool create/destroy alone — **up to 7% of a 16.6ms frame budget** at 60 fps.
+
+The D3D12 backend has the same structural problem: each `CreateCommandBufferImpl` creates a new `ID3D12CommandAllocator` and destroys it on release.
+
+### 19.2 Industry Best Practices Survey (2024–2026)
+
+#### 19.2.1 NVIDIA Recommendations
+
+> "Use **L × T + N** pools. (L = buffered frames, T = recording threads, N = extra pools for secondary command buffers). **Don't create or destroy command pools, reuse them instead.** This saves the overhead of allocator creation/destruction and memory allocation/free."
+> — [NVIDIA Vulkan Dos and Don'ts](https://developer.nvidia.com/blog/vulkan-dos-donts/)
+
+#### 19.2.2 Khronos Vulkan Samples — Recycling Strategy Ranking
+
+The official Khronos `command_buffer_usage` sample benchmarks three strategies:
+
+| Strategy                                                                   | Relative Performance | Notes                                                                             |
+| -------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------- |
+| **Allocate & Free** (current miki)                                         | Worst                | "Significant CPU overhead for allocating and freeing memory frequently"           |
+| **Individual Reset** (`vkResetCommandBuffer` + `RESET_COMMAND_BUFFER_BIT`) | Medium               | "More expensive than pool reset"; forces per-buffer internal allocators           |
+| **Pool Reset** (`vkResetCommandPool`, no `RESET_COMMAND_BUFFER_BIT`)       | **Best**             | "Allows the pool to reuse memory with lower CPU overhead"; single large allocator |
+
+> "To reset the pool, the flag `RESET_COMMAND_BUFFER_BIT` is **not required, and it is actually better to avoid it** since it prevents using a single large allocator for all buffers in the pool, thus increasing memory overhead."
+> — [Khronos Vulkan Samples: Command buffer usage](https://docs.vulkan.org/samples/latest/samples/performance/command_buffer_usage/README.html)
+
+#### 19.2.3 ARM Mali Best Practices
+
+> "Each frame in the queue manages a collection of pools so that **each thread can own**: a command pool, a descriptor pool cache, a descriptor set cache, a buffer pool."
+> — [ARM: Management of Command Buffers and Multi-Threaded Recording](https://developer.arm.com/community/arm-community-blogs/b/mobile-graphics-and-gaming-blog/posts/vulkan-mobile-best-practices-and-management)
+
+#### 19.2.4 Engine Implementations Comparison
+
+| Engine                          | Pool Strategy                                 | Pool:Buffer Ratio | Reset Method                        | Thread Safety       |
+| ------------------------------- | --------------------------------------------- | ----------------- | ----------------------------------- | ------------------- |
+| **UE5**                         | Per-frame-slot per-queue `CommandPoolManager` | 1:N               | `vkResetCommandPool` at frame start | Per-thread pools    |
+| **Godot 4**                     | Per-frame per-thread ring                     | 1:N               | Pool reset at frame start           | Thread-local pools  |
+| **wgpu-hal**                    | Per-frame per-queue pool                      | 1:N               | `reset_pool` at frame start         | Thread-local pools  |
+| **Arseny Kapoulkine (niagara)** | Per-frame per-queue pool, bulk reset          | 1:N               | Pool reset                          | Per-thread          |
+| **miki (current)**              | Per-acquire pool, destroy on release          | **1:1**           | N/A (destroyed)                     | **Not thread-safe** |
+
+**Conclusion**: All production engines use per-frame pooling with bulk reset. miki's 1:1 pattern is unique and suboptimal.
+
+#### 19.2.5 D3D12 Equivalent Pattern
+
+D3D12's `ID3D12CommandAllocator` maps to `VkCommandPool` in lifecycle semantics:
+
+| Vulkan                                           | D3D12                                                                             | Constraint                                                 |
+| ------------------------------------------------ | --------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `VkCommandPool`                                  | `ID3D12CommandAllocator`                                                          | Must not be reset while GPU is consuming its command lists |
+| `vkResetCommandPool`                             | `ID3D12CommandAllocator::Reset()`                                                 | Only safe after GPU fence signal                           |
+| `vkAllocateCommandBuffers`                       | `ID3D12Device::CreateCommandList` / `ID3D12GraphicsCommandList::Reset(allocator)` | Cheap from warm allocator                                  |
+| No `RESET_COMMAND_BUFFER_BIT` → single allocator | Always single allocator per object                                                | Best for sequential recording                              |
+
+#### 19.2.6 WebGPU and OpenGL
+
+WebGPU has no explicit command pool — `wgpuDeviceCreateCommandEncoder()` manages allocation internally. OpenGL has no command buffer concept (immediate mode). For these backends, CommandPoolAllocator degenerates to a thin wrapper that tracks `CommandListAcquisition` objects without native pool management.
+
+### 19.3 Architecture Design
+
+#### 19.3.1 Design Principles
+
+1. **Pool-per-frame-per-queue**: Each `(frameSlot, queueFamily)` pair owns exactly one native pool/allocator. Pool count = `framesInFlight × queueFamilyCount`.
+2. **Bulk reset at frame start**: `vkResetCommandPool` / `ID3D12CommandAllocator::Reset()` in `BeginFrame`, after the CPU-side fence/timeline wait confirms GPU completion for that slot.
+3. **No `RESET_COMMAND_BUFFER_BIT`**: Vulkan pools created without this flag — enables single large internal allocator for best memory efficiency.
+4. **Thread extension point**: Initial design is single-threaded per queue. §19.8 defines the multi-thread extension (per-frame × per-queue × per-thread) for RenderGraph phase.
+5. **Cross-backend abstraction**: `CommandPoolAllocator` is a `frame`-layer class (like `DeferredDestructor`), not an `rhi`-layer class. It wraps backend-specific pool management behind a uniform interface.
+6. **Zero-allocation steady state**: After warm-up frames, no heap allocation occurs in `Acquire`/`Release` paths.
+
+#### 19.3.2 Ownership Model
+
+```
+FrameManager (owns)
+├── CommandPoolAllocator (owns)
+│   ├── PoolRing[0] (frame slot 0)
+│   │   ├── graphicsPool  → VkCommandPool / ID3D12CommandAllocator
+│   │   ├── computePool   → VkCommandPool / ID3D12CommandAllocator (if async compute)
+│   │   └── transferPool  → VkCommandPool / ID3D12CommandAllocator (if async transfer)
+│   ├── PoolRing[1] (frame slot 1)
+│   │   └── ...
+│   └── PoolRing[2] (frame slot 2, if 3 frames in flight)
+│       └── ...
+├── DeferredDestructor
+├── StagingRing*
+└── ReadbackRing*
+```
+
+#### 19.3.3 Lifecycle Integration with FrameManager
+
+```
+BeginFrame(slot N):
+  1. WaitForSlot(N)              ← GPU done with slot N's commands
+  2. commandPoolAllocator.ResetSlot(N)  ← vkResetCommandPool / allocator->Reset()
+  3. DeferredDestructor.DrainBin(N)
+  4. StagingRing.ReclaimCompleted()
+  ...
+
+AcquireCommandList(queueType):
+  → commandPoolAllocator.Acquire(currentFrameIndex, queueType)
+  → vkAllocateCommandBuffers from slot's pool (near-zero cost)
+  → return CommandListAcquisition
+
+EndFrame / EndFrameSplit:
+  → Submit all acquired command buffers
+  → Signal timeline/fence for slot N
+
+ReleaseCommandList(acq):
+  → Mark buffer as reclaimable (NO destroy — pool reset handles it)
+  → Release CommandList wrapper object back to arena
+```
+
+### 19.4 Public Interface
+
+```cpp
+namespace miki::frame {
+
+/// @brief Manages per-frame command pool/allocator lifecycle.
+/// Integrates with FrameManager::BeginFrame to reset pools after GPU completion.
+/// Thread safety: single-threaded per queue in v1. See §19.8 for multi-thread extension.
+///
+/// Ownership: FrameManager owns CommandPoolAllocator via Impl.
+/// Lifetime: created at FrameManager::Create, destroyed at ~FrameManager.
+class CommandPoolAllocator {
+public:
+    struct Desc {
+        rhi::DeviceHandle device;
+        uint32_t framesInFlight = FrameManager::kDefaultFramesInFlight;
+        bool hasAsyncCompute = false;   ///< Create per-frame compute pools
+        bool hasAsyncTransfer = false;  ///< Create per-frame transfer pools
+    };
+
+    CommandPoolAllocator() = default;
+    ~CommandPoolAllocator();
+
+    CommandPoolAllocator(CommandPoolAllocator&&) noexcept;
+    auto operator=(CommandPoolAllocator&&) noexcept -> CommandPoolAllocator&;
+    CommandPoolAllocator(const CommandPoolAllocator&) = delete;
+    auto operator=(const CommandPoolAllocator&) -> CommandPoolAllocator& = delete;
+
+    /// @brief Create and initialize all native pools.
+    /// Called once during FrameManager::Create.
+    /// Creates framesInFlight × activeQueueCount pools.
+    [[nodiscard]] static auto Create(const Desc& desc) -> core::Result<CommandPoolAllocator>;
+
+    /// @brief Reset all pools for the given frame slot.
+    /// PRECONDITION: GPU has completed all work submitted from this slot.
+    /// Called by FrameManager::BeginFrame after WaitForSlot.
+    /// Vulkan: vkResetCommandPool(pool, 0)
+    /// D3D12:  allocator->Reset()
+    /// WebGPU/OpenGL: no-op
+    void ResetSlot(uint32_t frameSlot);
+
+    /// @brief Acquire a command buffer from the current frame slot's pool.
+    /// Vulkan: vkAllocateCommandBuffers (near-zero cost from warm pool)
+    /// D3D12:  CreateCommandList1 or Reset(allocator) on cached list
+    /// WebGPU: wgpuDeviceCreateCommandEncoder
+    /// OpenGL: create deferred command list object
+    /// @param frameSlot  Current frame index [0, framesInFlight)
+    /// @param queue      Target queue type
+    /// @return CommandListAcquisition with buffer handle + recordable list
+    [[nodiscard]] auto Acquire(uint32_t frameSlot, rhi::QueueType queue)
+        -> core::Result<rhi::CommandListAcquisition>;
+
+    /// @brief Release a previously acquired command list.
+    /// Does NOT destroy the native buffer — ResetSlot handles bulk reclamation.
+    /// Releases the CommandList wrapper object back to the arena.
+    void Release(const rhi::CommandListAcquisition& acq);
+
+    /// @brief Query how many command buffers are currently acquired (debug/stats).
+    [[nodiscard]] auto GetAcquiredCount(uint32_t frameSlot) const -> uint32_t;
+
+    /// @brief Query total pool count (framesInFlight × activeQueueCount).
+    [[nodiscard]] auto GetPoolCount() const -> uint32_t;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+} // namespace miki::frame
+```
+
+### 19.5 Backend-Specific Implementation Details
+
+#### 19.5.1 Vulkan
+
+```cpp
+struct VulkanFramePool {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    rhi::QueueType queueType;
+    uint32_t queueFamilyIndex;
+
+    // Tracking for allocated buffers (indices into HandlePool)
+    // No need for individual tracking — ResetSlot resets entire pool.
+    uint32_t allocatedCount = 0;
+};
+
+// Per-frame-slot: one VulkanFramePool per active queue family
+struct FramePoolSet {
+    VulkanFramePool graphics;                 // Always present
+    std::optional<VulkanFramePool> compute;   // If hasAsyncCompute
+    std::optional<VulkanFramePool> transfer;  // If hasAsyncTransfer
+};
+
+// Total: framesInFlight × FramePoolSet
+std::array<FramePoolSet, kMaxFramesInFlight> poolRing_;
+```
+
+**Pool creation** (at `CommandPoolAllocator::Create`):
+
+```cpp
+VkCommandPoolCreateInfo poolInfo{};
+poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+poolInfo.flags = 0;  // NO RESET_COMMAND_BUFFER_BIT — enables single large allocator
+poolInfo.queueFamilyIndex = queueFamilyIndex;
+vkCreateCommandPool(device, &poolInfo, nullptr, &pool);
+```
+
+**Pool reset** (at `BeginFrame` → `ResetSlot`):
+
+```cpp
+vkResetCommandPool(device, poolRing_[slot].graphics.pool, 0);
+// All VkCommandBuffers allocated from this pool are implicitly reset.
+// No need to call vkFreeCommandBuffers or vkResetCommandBuffer.
+```
+
+**Buffer allocation** (at `Acquire`):
+
+```cpp
+VkCommandBufferAllocateInfo allocInfo{};
+allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+allocInfo.commandPool = poolRing_[slot].graphics.pool;
+allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+allocInfo.commandBufferCount = 1;
+vkAllocateCommandBuffers(device, &allocInfo, &cmdBuffer);
+// Cost: ~0.5–2 μs from warm pool (vs 50–200 μs for pool creation)
+```
+
+**Important**: without `RESET_COMMAND_BUFFER_BIT`, individual `vkResetCommandBuffer` is **illegal**. The demo's current `Reset → Begin → End` per-frame pattern must change to: `ResetSlot` at `BeginFrame`, then `Acquire → Begin → End → Submit → Release`.
+
+#### 19.5.2 D3D12
+
+```cpp
+struct D3D12FramePool {
+    ComPtr<ID3D12CommandAllocator> allocator;
+    D3D12_COMMAND_LIST_TYPE type;
+    uint32_t allocatedCount = 0;
+
+    // Cached command lists — D3D12 allows Reset(allocator) on existing list
+    std::vector<ComPtr<ID3D12GraphicsCommandList7>> cachedLists;
+    uint32_t nextCachedIndex = 0;
+};
+```
+
+**Allocator reset** (at `BeginFrame` → `ResetSlot`):
+
+```cpp
+poolRing_[slot].graphics.allocator->Reset();
+poolRing_[slot].graphics.nextCachedIndex = 0;
+// All command lists recorded with this allocator are implicitly invalidated.
+```
+
+**Command list acquisition** (at `Acquire`):
+
+```cpp
+if (nextCachedIndex < cachedLists.size()) {
+    // Reuse existing list — cheapest path
+    auto& list = cachedLists[nextCachedIndex++];
+    list->Reset(allocator.Get(), nullptr);
+} else {
+    // Create new list (will be cached for future frames)
+    ComPtr<ID3D12GraphicsCommandList7> newList;
+    device->CreateCommandList1(0, type, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&newList));
+    cachedLists.push_back(newList);
+    nextCachedIndex++;
+    newList->Reset(allocator.Get(), nullptr);
+}
+```
+
+#### 19.5.3 WebGPU (Tier 3)
+
+WebGPU has no explicit pool concept. `CommandPoolAllocator` for WebGPU:
+
+- `ResetSlot`: no-op (WebGPU manages internally)
+- `Acquire`: `wgpuDeviceCreateCommandEncoder` (same as current)
+- `Release`: `wgpuCommandEncoderRelease` (same as current)
+
+The allocator still provides the uniform `Acquire`/`Release` interface and tracks acquired count.
+
+#### 19.5.4 OpenGL (Tier 4)
+
+OpenGL uses deferred command lists (CPU-side command recording, flushed at submit). `CommandPoolAllocator` for OpenGL:
+
+- `ResetSlot`: clear the deferred command vector
+- `Acquire`: allocate a new deferred command list object from an arena
+- `Release`: mark as reclaimable
+
+### 19.6 Integration with FrameManager
+
+#### 19.6.1 Changes to FrameManager::Impl
+
+```cpp
+struct FrameManager::Impl {
+    // ... existing fields ...
+
+    // NEW: replaces ad-hoc AcquireCommandList/ReleaseCommandList calls
+    CommandPoolAllocator commandPoolAllocator;
+};
+```
+
+#### 19.6.2 Changes to FrameManager::BeginFrame
+
+```
+BeginFrame(slot N):
+  WaitForSlot(N)
++ commandPoolAllocator.ResetSlot(N)    // ← NEW: bulk reset after GPU completion
+  DeferredDestructor.DrainBin(N)
+  StagingRing.ReclaimCompleted()
+  ...
+```
+
+#### 19.6.3 Changes to FrameManager Transfer Dispatch
+
+Current code in `EndFrame` / `EndFrameSplit`:
+
+```cpp
+// Current: calls device.Dispatch([](auto& dev) { return dev.AcquireCommandList(...); })
+// After:   calls commandPoolAllocator.Acquire(frameIndex, QueueType::Graphics)
+```
+
+The `commandPoolAllocator.Acquire` call replaces all direct `AcquireCommandList` / `ReleaseCommandList` calls within FrameManager.
+
+#### 19.6.4 Changes to Application Code (AcquireCommandList API)
+
+The existing `DeviceBase::AcquireCommandList` / `ReleaseCommandList` public API is **deprecated** in favor of `CommandPoolAllocator::Acquire` / `Release`. However, to maintain backward compatibility during migration:
+
+1. **Phase 1**: `CommandPoolAllocator` is internal to FrameManager. Applications continue using `AcquireCommandList` for their own command buffers (those are managed separately from FrameManager's internal transfer/compute buffers).
+2. **Phase 2**: Expose `FrameManager::AcquireCommandList(QueueType)` that delegates to the internal `CommandPoolAllocator` with the current frame slot. Applications get the pooling benefit transparently.
+3. **Phase 3**: Deprecate `DeviceBase::AcquireCommandList` — all command buffer allocation flows through `FrameManager` (or a standalone `CommandPoolAllocator` for headless compute).
+
+Recommended Phase 2 API:
+
+```cpp
+class FrameManager {
+public:
+    // ... existing ...
+
+    /// @brief Acquire a command list from this frame's pool.
+    /// Must be called between BeginFrame and EndFrame.
+    /// The returned buffer is automatically reclaimed at next BeginFrame for this slot.
+    [[nodiscard]] auto AcquireCommandList(rhi::QueueType queue = rhi::QueueType::Graphics)
+        -> core::Result<rhi::CommandListAcquisition>;
+
+    /// @brief Release a command list back to the pool.
+    /// Optional — unreleased buffers are bulk-reclaimed at ResetSlot.
+    /// Useful for releasing transfer command lists immediately after submit.
+    void ReleaseCommandList(const rhi::CommandListAcquisition& acq);
+};
+```
+
+### 19.7 Performance Model
+
+#### 19.7.1 Steady-State Cost Comparison
+
+| Operation                        | Current (per frame)                               | After (per frame)         | Speedup     |
+| -------------------------------- | ------------------------------------------------- | ------------------------- | ----------- |
+| Pool create/destroy              | 2–4 × (80–300 μs) = 160–1200 μs                   | **0 μs**                  | ∞           |
+| Pool reset                       | N/A                                               | 1–3 × (1–5 μs) = 1–15 μs  | —           |
+| Buffer allocate                  | 2–4 × (0.5–2 μs) = 1–8 μs (hidden in pool create) | 2–4 × (0.5–2 μs) = 1–8 μs | 1×          |
+| Arena alloc (`unique_ptr`)       | 2–4 × heap alloc                                  | **0** (arena reuse)       | ∞           |
+| Arena search (`find_if + erase`) | O(n) per release                                  | **O(1)** (index-based)    | N×          |
+| **Total CPU overhead**           | **162–1208 μs**                                   | **2–23 μs**               | **~50–80×** |
+
+#### 19.7.2 Memory Model
+
+Without `RESET_COMMAND_BUFFER_BIT`, the Vulkan driver uses a single large linear allocator per pool. Memory grows to the high-water mark and is reused via pool reset. Typical steady-state memory per pool:
+
+- Graphics pool: 64–256 KB (depends on command complexity)
+- Transfer pool: 4–16 KB (simple copy commands)
+- Compute pool: 8–32 KB
+
+Total: `framesInFlight × queues × poolSize` ≈ 2 × 3 × 256 KB = **1.5 MB** worst case. Acceptable.
+
+### 19.8 Multi-Thread Extension (RenderGraph Phase)
+
+When RenderGraph enables parallel command recording, the pool model extends to:
+
+```
+Pool count = framesInFlight × queueFamilyCount × recordingThreadCount
+```
+
+NVIDIA's formula: **L × T + N** where L = frames, T = threads, N = secondary pools.
+
+```cpp
+struct CommandPoolAllocator::Desc {
+    // ... existing ...
+    uint32_t recordingThreadCount = 1;  ///< >1 enables per-thread pools
+};
+
+/// Thread-safe acquire — each thread uses its own pool.
+/// threadIndex must be in [0, recordingThreadCount).
+[[nodiscard]] auto Acquire(uint32_t frameSlot, rhi::QueueType queue, uint32_t threadIndex = 0)
+    -> core::Result<rhi::CommandListAcquisition>;
+```
+
+Multi-thread pool layout:
+
+```
+PoolRing[frameSlot][queueType][threadIndex] → VkCommandPool
+```
+
+Each thread owns its pool — **no mutex, no contention**. This is lock-free by construction.
+
+Secondary command buffers for RenderGraph:
+
+```cpp
+/// Acquire a secondary command buffer (inherits render pass state).
+/// Used by RenderGraph to split draw recording across threads.
+[[nodiscard]] auto AcquireSecondary(uint32_t frameSlot, rhi::QueueType queue, uint32_t threadIndex)
+    -> core::Result<rhi::CommandListAcquisition>;
+```
+
+### 19.9 CommandList Wrapper Arena
+
+The current `commandListArena_` (`std::vector<std::unique_ptr<VulkanCommandBuffer>>`) has two problems:
+
+1. **Heap allocation** per `Acquire` (`make_unique`)
+2. **O(n) linear search + erase** in `Release`
+
+Replacement: a **pre-allocated, index-based arena** per frame slot:
+
+```cpp
+/// Fixed-capacity arena for CommandBuffer wrapper objects.
+/// No heap allocation after initial frame warm-up.
+template <typename T>
+struct CommandListArena {
+    static constexpr uint32_t kInitialCapacity = 16;
+
+    std::vector<T> storage;         // Pre-allocated, grows only on warm-up
+    std::vector<bool> inUse;        // Bitset for O(1) acquire/release
+    uint32_t nextFreeHint = 0;      // Scan hint for next free slot
+
+    auto Acquire() -> T* {
+        for (uint32_t i = nextFreeHint; i < storage.size(); ++i) {
+            if (!inUse[i]) {
+                inUse[i] = true;
+                nextFreeHint = i + 1;
+                return &storage[i];
+            }
+        }
+        // Grow (only during warm-up frames)
+        storage.emplace_back();
+        inUse.push_back(true);
+        nextFreeHint = static_cast<uint32_t>(storage.size());
+        return &storage.back();
+    }
+
+    void Release(T* ptr) {
+        auto idx = static_cast<uint32_t>(ptr - storage.data());
+        inUse[idx] = false;
+        if (idx < nextFreeHint) nextFreeHint = idx;
+    }
+
+    void ResetAll() {
+        std::fill(inUse.begin(), inUse.end(), false);
+        nextFreeHint = 0;
+    }
+};
+```
+
+### 19.10 Test Specification
+
+Test file: `tests/frame/test_command_pool_allocator.cpp`
+
+```
+CPA-01  GIVEN CommandPoolAllocator with 2 frames in flight, graphics queue only
+        WHEN  Acquire(slot=0, Graphics) called 4 times
+        THEN  4 valid CommandListAcquisitions returned
+        AND   GetAcquiredCount(0) == 4
+        AND   GetPoolCount() == 2 (2 slots × 1 queue)
+
+CPA-02  GIVEN CPA with 2 frames in flight
+        WHEN  slot 0: Acquire 3 buffers, then ResetSlot(0)
+        THEN  GetAcquiredCount(0) == 0
+        AND   subsequent Acquire(slot=0) succeeds (pool reused)
+
+CPA-03  GIVEN CPA with 3 frames in flight, all 3 queues
+        WHEN  ResetSlot(1) called
+        THEN  only slot 1's pools are reset; slot 0 and slot 2 are unaffected
+        AND   buffers acquired from slot 0 remain valid
+
+CPA-04  GIVEN CPA (Vulkan backend)
+        WHEN  Acquire 8 buffers from slot 0, ResetSlot(0), Acquire 8 more
+        THEN  second batch succeeds (pool memory reused, no OOM)
+        AND   total vkCreateCommandPool calls == framesInFlight × queueCount (init only)
+
+CPA-05  GIVEN CPA after 100-frame warm-up loop
+        WHEN  profiling Acquire/Release calls
+        THEN  zero heap allocations in steady state (arena reuse)
+
+CPA-06  GIVEN CPA with moved-from instance (b = std::move(a))
+        WHEN  b.Acquire(0, Graphics) called
+        THEN  succeeds; a is in moved-from state (impl_ == nullptr)
+
+CPA-07  GIVEN CPA
+        WHEN  ~CommandPoolAllocator runs
+        THEN  all native pools destroyed (vkDestroyCommandPool / Release allocator)
+        AND   no resource leaks
+
+CPA-08  GIVEN CPA with asyncTransfer=true
+        WHEN  Acquire(slot=0, Transfer) called
+        THEN  uses transfer queue pool (different VkCommandPool from graphics)
+        AND   Acquire(slot=0, Graphics) uses graphics pool
+
+CPA-09  GIVEN CPA integrated with FrameManager
+        WHEN  FrameManager::BeginFrame called for slot N
+        THEN  CPA.ResetSlot(N) is called after WaitForSlot(N)
+        AND   before DeferredDestructor.DrainBin(N)
+
+CPA-10  GIVEN CPA (Vulkan backend)
+        WHEN  pools created
+        THEN  VkCommandPoolCreateInfo.flags == 0 (no RESET_COMMAND_BUFFER_BIT)
+
+CPA-11  GIVEN CPA with recordingThreadCount=4
+        WHEN  Acquire(slot=0, Graphics, threadIndex=0) and Acquire(slot=0, Graphics, threadIndex=1)
+        THEN  different VkCommandPools used (no contention)
+        AND   GetPoolCount() == framesInFlight × queueCount × threadCount
+
+CPA-12  GIVEN CPA (D3D12 backend)
+        WHEN  Acquire called twice for same slot, then ResetSlot
+        THEN  ID3D12CommandAllocator::Reset() called once
+        AND   cached command lists are reused on next Acquire (no CreateCommandList1)
+```
+
+### 19.11 Migration Plan
+
+| Phase       | Scope                    | Changes                                                                                                                                                      | Risk                        |
+| ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- |
+| **Phase 1** | Internal to FrameManager | Create `CommandPoolAllocator`; replace FrameManager's internal `AcquireCommandList`/`ReleaseCommandList` calls with `commandPoolAllocator.Acquire`/`Release` | Low — no public API change  |
+| **Phase 2** | Application-facing       | Add `FrameManager::AcquireCommandList(QueueType)` that delegates to CPA                                                                                      | Low — additive API          |
+| **Phase 3** | Deprecation              | Deprecate `DeviceBase::AcquireCommandList`; update all demos/tests                                                                                           | Medium — breaking change    |
+| **Phase 4** | Multi-thread             | Add `threadIndex` parameter; integrate with RenderGraph                                                                                                      | High — requires thread pool |
+
+### 19.12 Files
+
+| File                                          | Namespace     | Purpose                                         |
+| --------------------------------------------- | ------------- | ----------------------------------------------- |
+| `include/miki/frame/CommandPoolAllocator.h`   | `miki::frame` | Public interface                                |
+| `src/miki/frame/CommandPoolAllocator.cpp`     | `miki::frame` | Cross-backend impl via `DeviceHandle::Dispatch` |
+| `tests/frame/test_command_pool_allocator.cpp` | —             | CPA-01..12 tests                                |
+
+### 19.13 Invariants
+
+1. **INV-POOL-CREATE**: Native pools are created exactly once (at `CommandPoolAllocator::Create`) and destroyed exactly once (at `~CommandPoolAllocator`). No per-frame create/destroy.
+2. **INV-RESET-SAFE**: `ResetSlot(N)` is called only after GPU completion for slot N is confirmed (via timeline wait or fence wait). Violation → undefined behavior.
+3. **INV-NO-RESET-BIT**: Vulkan pools are created without `RESET_COMMAND_BUFFER_BIT`. Individual `vkResetCommandBuffer` must not be called on buffers from these pools.
+4. **INV-SLOT-ISOLATION**: Resetting slot N does not affect buffers acquired from other slots.
+5. **INV-THREAD-ISOLATION**: In multi-thread mode, each `(slot, queue, thread)` triple maps to a unique native pool. No mutex required.
+6. **INV-STEADY-STATE**: After warm-up (typically 2–3 frames), `Acquire`/`Release` perform zero heap allocations.
+7. **INV-ARENA-BOUNDED**: The CommandList wrapper arena per pool grows monotonically to the per-frame high-water mark and never shrinks (avoids realloc churn).
