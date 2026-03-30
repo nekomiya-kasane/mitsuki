@@ -46,6 +46,7 @@
 #include <array>
 #include <cassert>
 
+#include "miki/frame/CommandPoolAllocator.h"
 #include "miki/frame/DeferredDestructor.h"
 #include "miki/resource/ReadbackRing.h"
 #include "miki/resource/StagingRing.h"
@@ -104,6 +105,9 @@ namespace miki::frame {
         // Offscreen dimensions (only used in offscreen mode)
         uint32_t offscreenWidth = 0;
         uint32_t offscreenHeight = 0;
+
+        // Command pool allocator (§19)
+        CommandPoolAllocator commandPoolAllocator;
 
         // ── Helpers ──────────────────────────────────────────────
 
@@ -167,14 +171,13 @@ namespace miki::frame {
                 return 0;
             }
 
-            // 2. Acquire transfer command list
-            auto acqResult
-                = device.Dispatch([](auto& dev) { return dev.AcquireCommandList(rhi::QueueType::Transfer); });
+            // 2. Acquire transfer command list via CPA (§19)
+            auto acqResult = commandPoolAllocator.Acquire(frameIndex, rhi::QueueType::Transfer);
             if (!acqResult) {
                 return 0;
             }
 
-            auto& acq = *acqResult;
+            auto& acq = acqResult->acquisition;
             uint32_t count = 0;
 
             // 3. Begin + record copies
@@ -202,10 +205,8 @@ namespace miki::frame {
             // 5. Set transferSync so EndFrame's graphics submit waits on this
             transferSync = {.semaphore = transferTimeline, .value = nextTransferValue};
 
-            // 6. Release transfer command list (deferred — GPU still using it)
-            // The command buffer will be reused next frame after WaitForSlot. For now, release immediately — the submit
-            // has consumed the recorded commands.
-            device.Dispatch([&](auto& dev) { dev.ReleaseCommandList(acq); });
+            // 6. Transfer cmd is not individually released — CPA ResetSlot handles bulk reclamation
+            // at the next BeginFrame for this slot after GPU completion.
 
             return count;
         }
@@ -319,8 +320,21 @@ namespace miki::frame {
 
         impl->CreateSyncObjects();
 
-        // Wire sync info into RenderSurface for AcquireNextImage/Present
-        // (T3/T4: these stay invalid, which is fine — RenderSurface handles it)
+        // Initialize command pool allocator (§19)
+        {
+            CommandPoolAllocator::Desc cpaDesc{
+                .device = iDevice,
+                .framesInFlight = impl->framesInFlight,
+                .hasAsyncCompute = caps.hasAsyncCompute,
+                .hasAsyncTransfer = impl->hasAsyncTransfer,
+                .initialArenaCapacity = 16,
+                .enableHwmShrink = false,
+            };
+            auto cpaResult = CommandPoolAllocator::Create(cpaDesc);
+            if (cpaResult) {
+                impl->commandPoolAllocator = std::move(*cpaResult);
+            }
+        }
 
         return FrameManager(std::move(impl));
     }
@@ -344,6 +358,22 @@ namespace miki::frame {
 
         impl->CreateSyncObjects();
 
+        // Initialize command pool allocator (§19)
+        {
+            CommandPoolAllocator::Desc cpaDesc{
+                .device = iDevice,
+                .framesInFlight = impl->framesInFlight,
+                .hasAsyncCompute = caps.hasAsyncCompute,
+                .hasAsyncTransfer = impl->hasAsyncTransfer,
+                .initialArenaCapacity = 16,
+                .enableHwmShrink = false,
+            };
+            auto cpaResult = CommandPoolAllocator::Create(cpaDesc);
+            if (cpaResult) {
+                impl->commandPoolAllocator = std::move(*cpaResult);
+            }
+        }
+
         return FrameManager(std::move(impl));
     }
 
@@ -359,6 +389,9 @@ namespace miki::frame {
 
         // 1. CPU wait: ensure this slot's previous GPU work is complete
         impl_->WaitForSlot(impl_->frameIndex);
+
+        // 1a. Reset command pools for this slot (§19 — after GPU completion confirmed)
+        impl_->commandPoolAllocator.ResetSlot(impl_->frameIndex);
 
         // 1b. Drain deferred destructions for this slot (GPU is done with it)
         if (impl_->deferredDestructor) {
@@ -450,11 +483,10 @@ namespace miki::frame {
             impl_->SubmitTransferCopies(fenceValue);
             impl_->transfersFlushed = true;
         } else if (!impl_->transfersFlushed && impl_->HasPendingTransfers()) {
-            // Fallback: record copies on a graphics cmd prepended to the user's batch
-            auto acqResult
-                = impl_->device.Dispatch([](auto& dev) { return dev.AcquireCommandList(rhi::QueueType::Graphics); });
+            // Fallback: record copies on a graphics cmd prepended to the user's batch (via CPA §19)
+            auto acqResult = impl_->commandPoolAllocator.Acquire(impl_->frameIndex, rhi::QueueType::Graphics);
             if (acqResult) {
-                transferAcq = *acqResult;
+                transferAcq = acqResult->acquisition;
                 transferAcq.listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
                 impl_->RecordTransfersOnGraphics(transferAcq.listHandle, fenceValue);
                 transferAcq.listHandle.Dispatch([](auto& cmd) { cmd.End(); });
@@ -559,10 +591,7 @@ namespace miki::frame {
         };
         impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, submitDesc); });
 
-        // ── 3. Release fallback transfer cmd (if used) ───────────────
-        if (transferAcq.bufferHandle.IsValid()) {
-            impl_->device.Dispatch([&](auto& dev) { dev.ReleaseCommandList(transferAcq); });
-        }
+        // ── 3. Transfer cmd not individually released — CPA ResetSlot handles bulk reclamation (§19)
 
         // ── 4. Present ───────────────────────────────────────────────
         if (impl_->surface) {
@@ -606,10 +635,9 @@ namespace miki::frame {
             impl_->SubmitTransferCopies(fenceValue);
             impl_->transfersFlushed = true;
         } else if (!impl_->transfersFlushed && impl_->HasPendingTransfers()) {
-            auto acqResult
-                = impl_->device.Dispatch([](auto& dev) { return dev.AcquireCommandList(rhi::QueueType::Graphics); });
+            auto acqResult = impl_->commandPoolAllocator.Acquire(impl_->frameIndex, rhi::QueueType::Graphics);
             if (acqResult) {
-                transferAcq = *acqResult;
+                transferAcq = acqResult->acquisition;
                 transferAcq.listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
                 impl_->RecordTransfersOnGraphics(transferAcq.listHandle, fenceValue);
                 transferAcq.listHandle.Dispatch([](auto& cmd) { cmd.End(); });
@@ -718,10 +746,7 @@ namespace miki::frame {
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, submitDesc); });
         }
 
-        // ── Cleanup ──────────────────────────────────────────────────
-        if (transferAcq.bufferHandle.IsValid()) {
-            impl_->device.Dispatch([&](auto& dev) { dev.ReleaseCommandList(transferAcq); });
-        }
+        // ── Cleanup — transfer cmd not individually released, CPA ResetSlot handles it (§19)
 
         slot.timelineValue = lastTimelineValue;
         impl_->currentTimelineValue = lastTimelineValue;
