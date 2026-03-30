@@ -224,6 +224,24 @@ namespace miki::rhi {
     };
 
     // =========================================================================
+    // CommandPoolDesc — pool creation parameters (§19)
+    // =========================================================================
+
+    struct CommandPoolDesc {
+        QueueType queue = QueueType::Graphics;
+        bool transient = false;  ///< Hint: buffers are short-lived (Vulkan: VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
+    };
+
+    // =========================================================================
+    // CommandPoolResetFlags — flags for ResetCommandPool (§19)
+    // =========================================================================
+
+    enum class CommandPoolResetFlags : uint8_t {
+        None = 0,
+        ReleaseResources = 1 << 0,  ///< Vulkan: VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT; D3D12: trim cached lists
+    };
+
+    // =========================================================================
     // CommandListHandle — type-erased facade for RenderGraph
     // =========================================================================
 

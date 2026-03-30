@@ -93,6 +93,7 @@ namespace miki::rhi {
     using DescriptorLayoutHandle = Handle<struct DescriptorLayoutTag>;
     using DescriptorSetHandle = Handle<struct DescriptorSetTag>;
     using CommandBufferHandle = Handle<struct CommandBufferTag>;
+    using CommandPoolHandle = Handle<struct CommandPoolTag>;
 
     // =========================================================================
     // Pool capacities — sized for 10B triangle CAD/CAE workloads
@@ -116,6 +117,7 @@ namespace miki::rhi {
     inline constexpr size_t kMaxAccelStructs = 8192;
     inline constexpr size_t kMaxSwapchains = 16;
     inline constexpr size_t kMaxCommandBuffers = 512;
+    inline constexpr size_t kMaxCommandPools = 64;
     inline constexpr size_t kMaxDeviceMemory = 1024;
 
     // =========================================================================

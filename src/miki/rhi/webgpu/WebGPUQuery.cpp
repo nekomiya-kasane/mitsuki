@@ -216,4 +216,54 @@ namespace miki::rhi {
         DestroyCommandBufferImpl(acq.bufferHandle);
     }
 
+    // =========================================================================
+    // Command pool management (§19 — pool-level API, metadata-only for WebGPU)
+    // =========================================================================
+
+    auto WebGPUDevice::CreateCommandPoolImpl(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle> {
+        auto [handle, data] = commandPools_.Allocate();
+        if (!data) {
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        data->queueType = desc.queue;
+        return handle;
+    }
+
+    void WebGPUDevice::DestroyCommandPoolImpl(CommandPoolHandle h) {
+        commandPools_.Free(h);
+    }
+
+    void WebGPUDevice::ResetCommandPoolImpl(CommandPoolHandle /*h*/, CommandPoolResetFlags /*flags*/) {
+        // WebGPU: no native pool concept — reset is a no-op
+    }
+
+    auto WebGPUDevice::AllocateFromPoolImpl(CommandPoolHandle pool, bool /*secondary*/)
+        -> RhiResult<CommandListAcquisition> {
+        auto* poolData = commandPools_.Lookup(pool);
+        if (!poolData) {
+            return std::unexpected(RhiError::InvalidHandle);
+        }
+        CommandBufferDesc desc{.type = poolData->queueType, .secondary = false};
+        auto bufResult = CreateCommandBufferImpl(desc);
+        if (!bufResult) {
+            return std::unexpected(bufResult.error());
+        }
+        auto bufHandle = *bufResult;
+        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<WebGPUCommandBuffer>());
+        cmdBuf->Init(this, bufHandle);
+        CommandListHandle listHandle(cmdBuf.get(), BackendType::WebGPU);
+        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+    }
+
+    void WebGPUDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& acq) {
+        void* raw = acq.listHandle.GetRawPtr();
+        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
+            return p.get() == raw;
+        });
+        if (it != commandListArena_.end()) {
+            commandListArena_.erase(it);
+        }
+        DestroyCommandBufferImpl(acq.bufferHandle);
+    }
+
 }  // namespace miki::rhi

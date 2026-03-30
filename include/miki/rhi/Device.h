@@ -195,15 +195,27 @@ namespace miki::rhi {
         }
         void DestroyCommandBuffer(CommandBufferHandle h) { Self().DestroyCommandBufferImpl(h); }
 
-        // --- Command list acquisition (unified factory) ---
+        // --- Command pool management (§19 — pool-level API for CommandPoolAllocator) ---
+        [[nodiscard]] auto CreateCommandPool(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle> {
+            return Self().CreateCommandPoolImpl(desc);
+        }
+        void DestroyCommandPool(CommandPoolHandle pool) { Self().DestroyCommandPoolImpl(pool); }
+        void ResetCommandPool(CommandPoolHandle pool, CommandPoolResetFlags flags = CommandPoolResetFlags::None) {
+            Self().ResetCommandPoolImpl(pool, flags);
+        }
+        [[nodiscard]] auto AllocateFromPool(CommandPoolHandle pool, bool secondary = false)
+            -> RhiResult<CommandListAcquisition> {
+            return Self().AllocateFromPoolImpl(pool, secondary);
+        }
+        void FreeFromPool(CommandPoolHandle pool, const CommandListAcquisition& acq) {
+            Self().FreeFromPoolImpl(pool, acq);
+        }
+
+        // --- Command list acquisition (unified factory — legacy, delegates internally) ---
         using CommandListAcquisition = rhi::CommandListAcquisition;
-        /** @brief Create a command buffer AND its recordable command list in one call.
-         *  Eliminates the need for callers to manually Init backend-specific CommandBuffer objects.
-         */
         [[nodiscard]] auto AcquireCommandList(QueueType queue) -> RhiResult<CommandListAcquisition> {
             return Self().AcquireCommandListImpl(queue);
         }
-        /** @brief Release a previously acquired command list. Destroys both the list object and the buffer. */
         void ReleaseCommandList(const CommandListAcquisition& acq) { Self().ReleaseCommandListImpl(acq); }
 
         // --- Synchronization ---

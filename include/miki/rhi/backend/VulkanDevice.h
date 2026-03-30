@@ -143,6 +143,12 @@ namespace miki::rhi {
         QueueType queueType = QueueType::Graphics;
     };
 
+    struct VulkanCommandPoolData {
+        VkCommandPool pool = VK_NULL_HANDLE;
+        uint32_t queueFamilyIndex = UINT32_MAX;
+        QueueType queueType = QueueType::Graphics;
+    };
+
     struct VulkanDeviceMemoryData {
         VmaAllocation allocation = nullptr;
         uint64_t size = 0;
@@ -272,11 +278,18 @@ namespace miki::rhi {
         auto CreatePipelineLibraryPartImpl(const PipelineLibraryPartDesc& desc) -> RhiResult<PipelineLibraryPartHandle>;
         auto LinkGraphicsPipelineImpl(const LinkedPipelineDesc& desc) -> RhiResult<PipelineHandle>;
 
-        // -- Command buffers (VulkanCommandBuffer.cpp) --
+        // -- Command buffers (VulkanQuery.cpp) --
         auto CreateCommandBufferImpl(const CommandBufferDesc& desc) -> RhiResult<CommandBufferHandle>;
         void DestroyCommandBufferImpl(CommandBufferHandle h);
         auto AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition>;
         void ReleaseCommandListImpl(const CommandListAcquisition& acq);
+
+        // -- Command pools §19 (VulkanQuery.cpp) --
+        auto CreateCommandPoolImpl(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle>;
+        void DestroyCommandPoolImpl(CommandPoolHandle h);
+        void ResetCommandPoolImpl(CommandPoolHandle h, CommandPoolResetFlags flags);
+        auto AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary) -> RhiResult<CommandListAcquisition>;
+        void FreeFromPoolImpl(CommandPoolHandle pool, const CommandListAcquisition& acq);
 
         // -- Query (VulkanQuery.cpp) --
         auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;
@@ -328,6 +341,9 @@ namespace miki::rhi {
         }
         auto GetCommandBufferPool() -> HandlePool<VulkanCommandBufferData, CommandBufferTag, kMaxCommandBuffers>& {
             return commandBuffers_;
+        }
+        auto GetCommandPoolPool() -> HandlePool<VulkanCommandPoolData, CommandPoolTag, kMaxCommandPools>& {
+            return commandPools_;
         }
 
        private:
@@ -383,6 +399,7 @@ namespace miki::rhi {
         HandlePool<VulkanAccelStructData, AccelStructTag, kMaxAccelStructs> accelStructs_;
         HandlePool<VulkanSwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<VulkanCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
+        HandlePool<VulkanCommandPoolData, CommandPoolTag, kMaxCommandPools> commandPools_;
         HandlePool<VulkanDeviceMemoryData, DeviceMemoryTag, kMaxDeviceMemory> deviceMemory_;
 
         // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --

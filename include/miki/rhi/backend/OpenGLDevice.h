@@ -212,6 +212,10 @@ namespace miki::rhi {
         bool isSecondary = false;
     };
 
+    struct GLCommandPoolData {
+        QueueType queueType = QueueType::Graphics;
+    };
+
     // =========================================================================
     // OpenGL device description
     // =========================================================================
@@ -334,6 +338,13 @@ namespace miki::rhi {
         auto AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition>;
         void ReleaseCommandListImpl(const CommandListAcquisition& acq);
 
+        // -- Command pools §19 (OpenGLQuery.cpp) --
+        auto CreateCommandPoolImpl(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle>;
+        void DestroyCommandPoolImpl(CommandPoolHandle h);
+        void ResetCommandPoolImpl(CommandPoolHandle h, CommandPoolResetFlags flags);
+        auto AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary) -> RhiResult<CommandListAcquisition>;
+        void FreeFromPoolImpl(CommandPoolHandle pool, const CommandListAcquisition& acq);
+
         // -- Query (OpenGLQuery.cpp) --
         auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;
         void DestroyQueryPoolImpl(QueryPoolHandle h);
@@ -376,6 +387,9 @@ namespace miki::rhi {
         auto GetQueryPoolPool() -> HandlePool<GLQueryPoolData, QueryPoolTag, kMaxQueryPools>& { return queryPools_; }
         auto GetCommandBufferPool() -> HandlePool<GLCommandBufferData, CommandBufferTag, kMaxCommandBuffers>& {
             return commandBuffers_;
+        }
+        auto GetCommandPoolPool() -> HandlePool<GLCommandPoolData, CommandPoolTag, kMaxCommandPools>& {
+            return commandPools_;
         }
         auto GetShaderModulePool() -> HandlePool<GLShaderModuleData, ShaderModuleTag, kMaxShaderModules>& {
             return shaderModules_;
@@ -423,6 +437,7 @@ namespace miki::rhi {
         HandlePool<GLQueryPoolData, QueryPoolTag, kMaxQueryPools> queryPools_;
         HandlePool<GLSwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<GLCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
+        HandlePool<GLCommandPoolData, CommandPoolTag, kMaxCommandPools> commandPools_;
 
         // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
         std::vector<std::unique_ptr<OpenGLCommandBuffer>> commandListArena_;

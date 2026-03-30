@@ -110,6 +110,15 @@
         return std::unexpected(RhiError::NotImplemented); }                                                            \
     void ReleaseCommandListImpl(const CommandListAcquisition&) {}                                                      \
                                                                                                                        \
+    /* --- Command pools (§19) --- */                                                                                  \
+    auto CreateCommandPoolImpl(const CommandPoolDesc&) -> RhiResult<CommandPoolHandle> {                               \
+        return std::unexpected(RhiError::NotImplemented); }                                                            \
+    void DestroyCommandPoolImpl(CommandPoolHandle) {}                                                                  \
+    void ResetCommandPoolImpl(CommandPoolHandle, CommandPoolResetFlags) {}                                             \
+    auto AllocateFromPoolImpl(CommandPoolHandle, bool) -> RhiResult<CommandListAcquisition> {                          \
+        return std::unexpected(RhiError::NotImplemented); }                                                            \
+    void FreeFromPoolImpl(CommandPoolHandle, const CommandListAcquisition&) {}                                                      \
+                                                                                                                       \
     /* --- Query --- */                                                                                                \
     auto CreateQueryPoolImpl(const QueryPoolDesc&) -> RhiResult<QueryPoolHandle> {                                     \
         return std::unexpected(RhiError::NotImplemented); }                                                            \

@@ -187,4 +187,115 @@ namespace miki::rhi {
         DestroyCommandBufferImpl(acq.bufferHandle);
     }
 
+    // =========================================================================
+    // Command pool management (§19 — pool-level API)
+    // =========================================================================
+
+    auto VulkanDevice::CreateCommandPoolImpl(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle> {
+        uint32_t queueFamily = queueFamilies_.graphics;
+        if (desc.queue == QueueType::Compute) {
+            queueFamily = queueFamilies_.compute;
+        } else if (desc.queue == QueueType::Transfer) {
+            queueFamily = queueFamilies_.transfer;
+        }
+
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags = desc.transient ? VK_COMMAND_POOL_CREATE_TRANSIENT_BIT : 0;
+        poolInfo.queueFamilyIndex = queueFamily;
+
+        VkCommandPool vkPool = VK_NULL_HANDLE;
+        VkResult r = vkCreateCommandPool(device_, &poolInfo, nullptr, &vkPool);
+        if (r != VK_SUCCESS) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
+
+        auto [handle, data] = commandPools_.Allocate();
+        if (!data) {
+            vkDestroyCommandPool(device_, vkPool, nullptr);
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        data->pool = vkPool;
+        data->queueFamilyIndex = queueFamily;
+        data->queueType = desc.queue;
+        return handle;
+    }
+
+    void VulkanDevice::DestroyCommandPoolImpl(CommandPoolHandle h) {
+        auto* data = commandPools_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        vkDestroyCommandPool(device_, data->pool, nullptr);
+        commandPools_.Free(h);
+    }
+
+    void VulkanDevice::ResetCommandPoolImpl(CommandPoolHandle h, CommandPoolResetFlags flags) {
+        auto* data = commandPools_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        VkCommandPoolResetFlags vkFlags = 0;
+        if (static_cast<uint8_t>(flags) & static_cast<uint8_t>(CommandPoolResetFlags::ReleaseResources)) {
+            vkFlags = VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT;
+        }
+        vkResetCommandPool(device_, data->pool, vkFlags);
+    }
+
+    auto VulkanDevice::AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary)
+        -> RhiResult<CommandListAcquisition> {
+        auto* poolData = commandPools_.Lookup(pool);
+        if (!poolData) {
+            return std::unexpected(RhiError::InvalidHandle);
+        }
+
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = poolData->pool;
+        allocInfo.level = secondary ? VK_COMMAND_BUFFER_LEVEL_SECONDARY : VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer cmdBuffer = VK_NULL_HANDLE;
+        VkResult r = vkAllocateCommandBuffers(device_, &allocInfo, &cmdBuffer);
+        if (r != VK_SUCCESS) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
+
+        auto [bufHandle, bufData] = commandBuffers_.Allocate();
+        if (!bufData) {
+            vkFreeCommandBuffers(device_, poolData->pool, 1, &cmdBuffer);
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        bufData->pool = poolData->pool;
+        bufData->buffer = cmdBuffer;
+        bufData->queueType = poolData->queueType;
+
+        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<VulkanCommandBuffer>());
+        cmdBuf->Init(this, cmdBuffer, poolData->pool, poolData->queueType);
+
+        CommandListHandle listHandle(cmdBuf.get(), tier_);
+        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+    }
+
+    void VulkanDevice::FreeFromPoolImpl(CommandPoolHandle pool, const CommandListAcquisition& acq) {
+        auto* poolData = commandPools_.Lookup(pool);
+        auto* bufData = commandBuffers_.Lookup(acq.bufferHandle);
+
+        if (poolData && bufData) {
+            vkFreeCommandBuffers(device_, poolData->pool, 1, &bufData->buffer);
+        }
+
+        void* raw = acq.listHandle.GetRawPtr();
+        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
+            return p.get() == raw;
+        });
+        if (it != commandListArena_.end()) {
+            commandListArena_.erase(it);
+        }
+
+        if (acq.bufferHandle.IsValid()) {
+            commandBuffers_.Free(acq.bufferHandle);
+        }
+    }
+
 }  // namespace miki::rhi

@@ -205,6 +205,110 @@ namespace miki::rhi {
         DestroyCommandBufferImpl(acq.bufferHandle);
     }
 
+    // =========================================================================
+    // Command pool management (§19 — pool-level API)
+    // =========================================================================
+
+    auto D3D12Device::CreateCommandPoolImpl(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle> {
+        D3D12_COMMAND_LIST_TYPE type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if (desc.queue == QueueType::Compute) {
+            type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+        } else if (desc.queue == QueueType::Transfer) {
+            type = D3D12_COMMAND_LIST_TYPE_COPY;
+        }
+
+        ComPtr<ID3D12CommandAllocator> allocator;
+        HRESULT hr = device_->CreateCommandAllocator(type, IID_PPV_ARGS(&allocator));
+        if (FAILED(hr)) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
+
+        auto [handle, data] = commandPools_.Allocate();
+        if (!data) {
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        data->allocator = std::move(allocator);
+        data->listType = type;
+        data->queueType = desc.queue;
+        data->nextFreeList = 0;
+        return handle;
+    }
+
+    void D3D12Device::DestroyCommandPoolImpl(CommandPoolHandle h) {
+        auto* data = commandPools_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        data->cachedLists.clear();
+        data->allocator.Reset();
+        commandPools_.Free(h);
+    }
+
+    void D3D12Device::ResetCommandPoolImpl(CommandPoolHandle h, CommandPoolResetFlags flags) {
+        auto* data = commandPools_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        data->allocator->Reset();
+        if (static_cast<uint8_t>(flags) & static_cast<uint8_t>(CommandPoolResetFlags::ReleaseResources)) {
+            data->cachedLists.clear();
+        }
+        data->nextFreeList = 0;
+    }
+
+    auto D3D12Device::AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary)
+        -> RhiResult<CommandListAcquisition> {
+        auto* poolData = commandPools_.Lookup(pool);
+        if (!poolData) {
+            return std::unexpected(RhiError::InvalidHandle);
+        }
+
+        ComPtr<ID3D12GraphicsCommandList7> cmdList;
+        if (poolData->nextFreeList < poolData->cachedLists.size()) {
+            cmdList = poolData->cachedLists[poolData->nextFreeList];
+            HRESULT hr = cmdList->Reset(poolData->allocator.Get(), nullptr);
+            if (FAILED(hr)) {
+                return std::unexpected(RhiError::OutOfDeviceMemory);
+            }
+        } else {
+            auto type = secondary ? D3D12_COMMAND_LIST_TYPE_BUNDLE : poolData->listType;
+            HRESULT hr = device_->CreateCommandList1(0, type, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&cmdList));
+            if (FAILED(hr)) {
+                return std::unexpected(RhiError::OutOfDeviceMemory);
+            }
+            poolData->cachedLists.push_back(cmdList);
+        }
+        poolData->nextFreeList++;
+
+        auto [bufHandle, bufData] = commandBuffers_.Allocate();
+        if (!bufData) {
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        bufData->allocator = poolData->allocator;
+        bufData->list = cmdList;
+        bufData->queueType = poolData->queueType;
+        bufData->isSecondary = secondary;
+
+        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<D3D12CommandBuffer>());
+        cmdBuf->Init(this, cmdList.Get(), poolData->allocator.Get(), poolData->queueType);
+
+        CommandListHandle listHandle(cmdBuf.get(), BackendType::D3D12);
+        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+    }
+
+    void D3D12Device::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& acq) {
+        void* raw = acq.listHandle.GetRawPtr();
+        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
+            return p.get() == raw;
+        });
+        if (it != commandListArena_.end()) {
+            commandListArena_.erase(it);
+        }
+        if (acq.bufferHandle.IsValid()) {
+            commandBuffers_.Free(acq.bufferHandle);
+        }
+    }
+
 }  // namespace miki::rhi
 
 #if defined(__clang__)

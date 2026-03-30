@@ -167,6 +167,14 @@ namespace miki::rhi {
         bool isSecondary = false;
     };
 
+    struct D3D12CommandPoolData {
+        ComPtr<ID3D12CommandAllocator> allocator;
+        D3D12_COMMAND_LIST_TYPE listType = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        QueueType queueType = QueueType::Graphics;
+        std::vector<ComPtr<ID3D12GraphicsCommandList7>> cachedLists;
+        uint32_t nextFreeList = 0;
+    };
+
     struct D3D12DeviceMemoryData {
         ComPtr<ID3D12Heap> heap;
         uint64_t size = 0;
@@ -324,6 +332,13 @@ namespace miki::rhi {
         auto AcquireCommandListImpl(QueueType queue) -> RhiResult<CommandListAcquisition>;
         void ReleaseCommandListImpl(const CommandListAcquisition& acq);
 
+        // -- Command pools §19 (D3D12Query.cpp) --
+        auto CreateCommandPoolImpl(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle>;
+        void DestroyCommandPoolImpl(CommandPoolHandle h);
+        void ResetCommandPoolImpl(CommandPoolHandle h, CommandPoolResetFlags flags);
+        auto AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary) -> RhiResult<CommandListAcquisition>;
+        void FreeFromPoolImpl(CommandPoolHandle pool, const CommandListAcquisition& acq);
+
         // -- Query (D3D12Query.cpp) --
         auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;
         void DestroyQueryPoolImpl(QueryPoolHandle h);
@@ -367,6 +382,9 @@ namespace miki::rhi {
         }
         auto GetCommandBufferPool() -> HandlePool<D3D12CommandBufferData, CommandBufferTag, kMaxCommandBuffers>& {
             return commandBuffers_;
+        }
+        auto GetCommandPoolPool() -> HandlePool<D3D12CommandPoolData, CommandPoolTag, kMaxCommandPools>& {
+            return commandPools_;
         }
         auto GetShaderModulePool() -> HandlePool<D3D12ShaderModuleData, ShaderModuleTag, kMaxShaderModules>& {
             return shaderModules_;
@@ -422,6 +440,7 @@ namespace miki::rhi {
         HandlePool<D3D12AccelStructData, AccelStructTag, kMaxAccelStructs> accelStructs_;
         HandlePool<D3D12SwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<D3D12CommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
+        HandlePool<D3D12CommandPoolData, CommandPoolTag, kMaxCommandPools> commandPools_;
         HandlePool<D3D12DeviceMemoryData, DeviceMemoryTag, kMaxDeviceMemory> deviceMemory_;
 
         // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
