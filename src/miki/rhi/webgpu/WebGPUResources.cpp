@@ -278,6 +278,15 @@ namespace miki::rhi {
         data->mappedPtr = nullptr;
     }
 
+    void WebGPUDevice::FlushMappedRangeImpl(BufferHandle, uint64_t, uint64_t) {
+        // WebGPU has no persistent mapping — all writes go through wgpuQueueWriteBuffer.
+        // MapAsync + Unmap is the only mapped access pattern. No flush needed.
+    }
+
+    void WebGPUDevice::InvalidateMappedRangeImpl(BufferHandle, uint64_t, uint64_t) {
+        // WebGPU MapAsync for read guarantees coherent data on callback completion.
+    }
+
     auto WebGPUDevice::GetBufferDeviceAddressImpl([[maybe_unused]] BufferHandle h) -> uint64_t {
         return 0;  // No BDA on WebGPU T3
     }

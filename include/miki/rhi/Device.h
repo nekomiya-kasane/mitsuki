@@ -78,6 +78,17 @@ namespace miki::rhi {
         void DestroyBuffer(BufferHandle h) { Self().DestroyBufferImpl(h); }
         [[nodiscard]] auto MapBuffer(BufferHandle h) -> RhiResult<void*> { return Self().MapBufferImpl(h); }
         void UnmapBuffer(BufferHandle h) { Self().UnmapBufferImpl(h); }
+        /// @brief Flush CPU writes to make them visible to GPU (non-coherent memory).
+        /// No-op on coherent memory (desktop Vulkan VMA default, D3D12 UPLOAD, GL persistent+coherent).
+        /// Required on mobile Vulkan HOST_CACHED memory.
+        void FlushMappedRange(BufferHandle h, uint64_t offset, uint64_t size) {
+            Self().FlushMappedRangeImpl(h, offset, size);
+        }
+        /// @brief Invalidate CPU cache to see GPU writes (non-coherent readback memory).
+        /// No-op on coherent memory. Required on mobile Vulkan HOST_CACHED readback buffers.
+        void InvalidateMappedRange(BufferHandle h, uint64_t offset, uint64_t size) {
+            Self().InvalidateMappedRangeImpl(h, offset, size);
+        }
         [[nodiscard]] auto GetBufferDeviceAddress(BufferHandle h) -> uint64_t {
             return Self().GetBufferDeviceAddressImpl(h);
         }

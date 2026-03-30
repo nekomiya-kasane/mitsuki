@@ -377,6 +377,22 @@ namespace miki::rhi {
         data->mappedPtr = nullptr;
     }
 
+    void VulkanDevice::FlushMappedRangeImpl(BufferHandle h, uint64_t offset, uint64_t size) {
+        auto* data = buffers_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        vmaFlushAllocation(allocator_, data->allocation, offset, size);
+    }
+
+    void VulkanDevice::InvalidateMappedRangeImpl(BufferHandle h, uint64_t offset, uint64_t size) {
+        auto* data = buffers_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        vmaInvalidateAllocation(allocator_, data->allocation, offset, size);
+    }
+
     auto VulkanDevice::GetBufferDeviceAddressImpl(BufferHandle h) -> uint64_t {
         auto* data = buffers_.Lookup(h);
         if (!data) {

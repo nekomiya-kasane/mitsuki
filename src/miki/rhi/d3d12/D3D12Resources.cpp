@@ -290,6 +290,14 @@ namespace miki::rhi {
         data->mappedPtr = nullptr;
     }
 
+    void D3D12Device::FlushMappedRangeImpl(BufferHandle, uint64_t, uint64_t) {
+        // D3D12 UPLOAD/READBACK heaps are always CPU-coherent. No flush needed.
+    }
+
+    void D3D12Device::InvalidateMappedRangeImpl(BufferHandle, uint64_t, uint64_t) {
+        // D3D12 UPLOAD/READBACK heaps are always CPU-coherent. No invalidation needed.
+    }
+
     auto D3D12Device::GetBufferDeviceAddressImpl(BufferHandle h) -> uint64_t {
         auto* data = buffers_.Lookup(h);
         if (!data) {

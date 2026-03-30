@@ -275,6 +275,8 @@ namespace miki::rhi {
         void DestroyBufferImpl(BufferHandle h);
         auto MapBufferImpl(BufferHandle h) -> RhiResult<void*>;
         void UnmapBufferImpl(BufferHandle h);
+        void FlushMappedRangeImpl(BufferHandle h, uint64_t offset, uint64_t size);
+        void InvalidateMappedRangeImpl(BufferHandle h, uint64_t offset, uint64_t size);
         auto GetBufferDeviceAddressImpl(BufferHandle h) -> uint64_t;
 
         auto CreateTextureImpl(const TextureDesc& desc) -> RhiResult<TextureHandle>;

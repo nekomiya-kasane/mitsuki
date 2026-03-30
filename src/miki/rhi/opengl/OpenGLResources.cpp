@@ -240,6 +240,29 @@ namespace miki::rhi {
         data->mappedPtr = nullptr;
     }
 
+    void OpenGLDevice::FlushMappedRangeImpl(BufferHandle h, uint64_t offset, uint64_t size) {
+        auto* data = buffers_.Lookup(h);
+        if (!data || !data->mappedPtr) {
+            return;
+        }
+        // Only needed for non-coherent persistent maps (GL_MAP_PERSISTENT_BIT without GL_MAP_COHERENT_BIT).
+        // Our buffers use GL_MAP_COHERENT_BIT, so this is typically a no-op at driver level.
+        if (hasDSA_) {
+            gl_->FlushMappedNamedBufferRange(
+                data->buffer, static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(size)
+            );
+        } else {
+            gl_->BindBuffer(GL_ARRAY_BUFFER, data->buffer);
+            gl_->FlushMappedBufferRange(GL_ARRAY_BUFFER, static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(size));
+            gl_->BindBuffer(GL_ARRAY_BUFFER, 0);
+        }
+    }
+
+    void OpenGLDevice::InvalidateMappedRangeImpl(BufferHandle, uint64_t, uint64_t) {
+        // OpenGL has no explicit cache invalidation for mapped buffers.
+        // GL_MAP_COHERENT_BIT ensures CPU sees GPU writes without manual invalidation.
+    }
+
     auto OpenGLDevice::GetBufferDeviceAddressImpl(BufferHandle) -> uint64_t {
         return 0;  // GL has no BDA
     }

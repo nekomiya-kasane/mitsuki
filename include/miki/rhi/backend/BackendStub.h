@@ -35,6 +35,8 @@
     auto MapBufferImpl(BufferHandle) -> RhiResult<void*> {                                                             \
         return std::unexpected(RhiError::NotImplemented); }                                                            \
     void UnmapBufferImpl(BufferHandle) {}                                                                              \
+    void FlushMappedRangeImpl(BufferHandle, uint64_t, uint64_t) {}                                                     \
+    void InvalidateMappedRangeImpl(BufferHandle, uint64_t, uint64_t) {}                                                \
     auto GetBufferDeviceAddressImpl(BufferHandle) -> uint64_t { return 0; }                                            \
                                                                                                                        \
     auto CreateTextureImpl(const TextureDesc&) -> RhiResult<TextureHandle> {                                           \
