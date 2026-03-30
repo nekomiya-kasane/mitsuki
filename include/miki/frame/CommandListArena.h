@@ -56,7 +56,7 @@ namespace miki::frame {
         [[nodiscard]] auto Acquire() -> AcquireResult {
             for (uint32_t w = 0; w < kNumWords; ++w) {
                 if (freeMask_[w] != 0) {
-                    uint32_t bit = static_cast<uint32_t>(std::countr_zero(freeMask_[w]));
+                    auto bit = static_cast<uint32_t>(std::countr_zero(freeMask_[w]));
                     uint32_t index = w * kBitsPerWord + bit;
                     freeMask_[w] &= ~(uint64_t{1} << bit);
                     acquiredCount_++;

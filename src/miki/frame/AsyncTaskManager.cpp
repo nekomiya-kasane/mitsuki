@@ -72,6 +72,7 @@ namespace miki::frame {
             .commandBuffers = std::span<const rhi::CommandBufferHandle>(&iCmd, 1),
             .waitSemaphores = iWaits,
             .signalSemaphores = std::span<const rhi::SemaphoreSubmitInfo>(&signalInfo, 1),
+            .signalFence = {},
         };
         impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Compute, submitDesc); });
         impl_->scheduler->CommitSubmit(rhi::QueueType::Compute);
@@ -144,6 +145,7 @@ namespace miki::frame {
                 .commandBuffers = std::span<const rhi::CommandBufferHandle>(&iBatches[i], 1),
                 .waitSemaphores = (i == 0) ? iWaits : std::span<const rhi::SemaphoreSubmitInfo>{},
                 .signalSemaphores = std::span<const rhi::SemaphoreSubmitInfo>(&signalInfo, 1),
+                .signalFence = {},
             };
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Compute, submitDesc); });
             impl_->scheduler->CommitSubmit(rhi::QueueType::Compute);

@@ -199,6 +199,7 @@ namespace miki::frame {
                 .commandBuffers = std::span(&acq.bufferHandle, 1),
                 .waitSemaphores = {},
                 .signalSemaphores = transferSignals,
+                .signalFence = {},
             };
             device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Transfer, transferSubmit); });
 

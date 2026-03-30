@@ -58,7 +58,9 @@ namespace miki::resource {
             if (mapResult) {
                 std::memcpy(static_cast<uint8_t*>(*mapResult) + iDstOffset, iData, iSize);
                 impl_->device.Dispatch([&](auto& dev) { dev.UnmapBuffer(iDst); });
-                return UploadResult{.path = UploadPath::DirectVRAM, .size = iSize};
+                return UploadResult{
+                    .path = UploadPath::DirectVRAM, .stagingBuffer = {}, .stagingOffset = 0, .size = iSize
+                };
             }
             // Fall through to Path C if map fails
         }
@@ -106,7 +108,7 @@ namespace miki::resource {
         impl_->stagingRing->EnqueueBufferCopy(*allocResult, iDst, iDstOffset);
 
         UploadPath path = (iSize <= kStagingRingThreshold) ? UploadPath::StagingRing : UploadPath::StagingRingLarge;
-        return UploadResult{.path = path, .size = iSize};
+        return UploadResult{.path = path, .stagingBuffer = {}, .stagingOffset = 0, .size = iSize};
     }
 
     auto UploadManager::UploadTexture(
