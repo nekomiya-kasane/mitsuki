@@ -1,8 +1,21 @@
 /** @file ReadbackRing.h
- *  @brief Per-frame ring buffer for GPU→CPU readback.
+ *  @brief Multi-chunk readback ring for GPU→CPU downloads.
  *
- *  16MB default persistent-mapped GpuToCpu buffer. Used for query results,
- *  screenshots, pick hit buffers, measurement results.
+ *  Symmetric counterpart to StagingRing. Pool of persistently-mapped GpuToCpu
+ *  buffer chunks. EnqueueBufferReadback() / EnqueueTextureReadback() return a
+ *  ReadbackTicket. After the GPU fence completes, caller polls IsReady() then
+ *  reads data via GetData(). InvalidateMappedRange called before CPU read for
+ *  non-coherent memory correctness (mobile Vulkan).
+ *
+ *  Design (ported from D:\repos\miki, adapted for mitsuki CRTP DeviceBase):
+ *    - Multi-chunk auto-grow (same pattern as StagingRing)
+ *    - Per-frame fence retirement
+ *    - ReadbackTicket with deferred poll (2-3 frame latency is inherent)
+ *    - Texture readback support (CopyTextureToBuffer)
+ *    - ShrinkToFit for long-running VRAM reclaim
+ *    - InvalidateMappedRange for non-coherent memory
+ *
+ *  Thread safety: NOT thread-safe. Render thread only.
  *
  *  See: specs/03-sync.md §7.2
  *  Namespace: miki::resource
@@ -19,12 +32,27 @@
 
 namespace miki::resource {
 
-    static constexpr uint64_t kDefaultReadbackRingCapacity = 16ULL * 1024 * 1024;  // 16MB
+    inline constexpr uint64_t kReadbackAlignment = 256;
 
-    /// @brief Handle to a pending readback request. Resolve after GPU completion.
-    struct ReadbackFuture {
-        uint64_t id = 0;
-        [[nodiscard]] constexpr auto IsValid() const noexcept -> bool { return id != 0; }
+    struct ReadbackRingDesc {
+        uint64_t chunkSize = uint64_t{2} << 20;  ///< Per-chunk capacity (default 2 MB)
+        uint32_t maxChunks = 32;                 ///< Max chunks (default 64 MB total cap)
+    };
+
+    struct ReadbackTicket {
+        uint32_t chunkIndex_ = ~0u;
+        uint64_t chunkOffset_ = 0;
+        uint64_t size = 0;
+        [[nodiscard]] constexpr auto IsValid() const noexcept -> bool { return chunkIndex_ != ~0u && size > 0; }
+    };
+
+    struct TextureReadbackRegion {
+        uint32_t mipLevel = 0;
+        uint32_t arrayLayer = 0;
+        uint32_t offsetX = 0, offsetY = 0, offsetZ = 0;
+        uint32_t width = 0, height = 0, depth = 1;
+        uint32_t rowLength = 0;
+        uint32_t imageHeight = 0;
     };
 
     class ReadbackRing {
@@ -36,34 +64,40 @@ namespace miki::resource {
         ReadbackRing(ReadbackRing&&) noexcept;
         auto operator=(ReadbackRing&&) noexcept -> ReadbackRing&;
 
-        [[nodiscard]] static auto Create(rhi::DeviceHandle iDevice, uint64_t iCapacity = kDefaultReadbackRingCapacity)
+        [[nodiscard]] static auto Create(rhi::DeviceHandle iDevice, ReadbackRingDesc iDesc = {})
             -> core::Result<ReadbackRing>;
 
-        /// @brief Reserve space in the readback ring for a future GPU→CPU copy.
-        /// Returns a future handle + the destination buffer/offset for CmdCopyBuffer.
-        /// @param iSize  Number of bytes to read back.
-        /// @return {future, dstBuffer, dstOffset} for recording the copy command.
-        struct ReadbackReservation {
-            ReadbackFuture future;
-            rhi::BufferHandle dstBuffer;  ///< Readback ring buffer (use as CmdCopyBuffer dst)
-            uint64_t dstOffset = 0;       ///< Offset into dstBuffer
-        };
-        [[nodiscard]] auto Reserve(uint64_t iSize, uint64_t iAlignment = 16) -> core::Result<ReadbackReservation>;
+        // ── Enqueue GPU→CPU copies ──────────────────────────────────
 
-        /// @brief Tag all pending reservations with a frame number.
-        /// Called at EndFrame.
-        auto FlushFrame(uint64_t iFrameNumber) -> void;
+        [[nodiscard]] auto EnqueueBufferReadback(rhi::BufferHandle iSrc, uint64_t iSrcOffset, uint64_t iSize)
+            -> core::Result<ReadbackTicket>;
 
-        /// @brief Reclaim chunks from completed frames.
-        /// After this call, futures from those frames can be Resolved.
-        auto ReclaimCompleted(uint64_t iCompletedFrame) -> void;
+        [[nodiscard]] auto EnqueueTextureReadback(
+            rhi::TextureHandle iSrc, const TextureReadbackRegion& iRegion, uint64_t iDataSize
+        ) -> core::Result<ReadbackTicket>;
 
-        /// @brief Resolve a completed readback future to CPU-readable data.
-        /// Returns empty span if future is not yet complete or invalid.
-        [[nodiscard]] auto Resolve(ReadbackFuture iFuture) const noexcept -> std::span<const uint8_t>;
+        // ── Frame lifecycle ─────────────────────────────────────────
+
+        auto FlushFrame(uint64_t iFenceValue) -> void;
+        auto ReclaimCompleted(uint64_t iCompletedFenceValue) -> void;
+
+        // ── Data access ─────────────────────────────────────────────
+
+        [[nodiscard]] auto IsReady(const ReadbackTicket& iTicket) const noexcept -> bool;
+        [[nodiscard]] auto GetData(const ReadbackTicket& iTicket) const -> std::span<const std::byte>;
+
+        // ── Memory management ───────────────────────────────────────
+
+        auto ShrinkToFit(uint64_t iTargetTotalBytes) -> uint64_t;
+        [[nodiscard]] auto GetUtilization() const noexcept -> float;
+
+        // ── Metrics ─────────────────────────────────────────────────
 
         [[nodiscard]] auto Capacity() const noexcept -> uint64_t;
-        [[nodiscard]] auto Available() const noexcept -> uint64_t;
+        [[nodiscard]] auto GetBytesReadbackThisFrame() const noexcept -> uint64_t;
+        [[nodiscard]] auto GetActiveChunkCount() const noexcept -> uint32_t;
+        [[nodiscard]] auto GetFreeChunkCount() const noexcept -> uint32_t;
+        [[nodiscard]] auto GetTotalChunkCount() const noexcept -> uint32_t;
 
        private:
         struct Impl;

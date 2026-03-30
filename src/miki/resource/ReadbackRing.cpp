@@ -1,138 +1,262 @@
 /** @file ReadbackRing.cpp
- *  @brief Per-frame ring buffer for GPU→CPU readback.
+ *  @brief Multi-chunk readback ring for GPU→CPU downloads.
+ *  Ported from D:\repos\miki, adapted for mitsuki CRTP DeviceBase / DeviceHandle.
  *  See: ReadbackRing.h, specs/03-sync.md §7.2
  */
 
 #include "miki/resource/ReadbackRing.h"
+#include "ChunkPool.h"
 
 #include <algorithm>
 #include <cassert>
 #include <vector>
 
-#include "miki/rhi/backend/AllBackends.h"
-
 namespace miki::resource {
 
-    struct ReadbackEntry {
-        ReadbackFuture future;
-        uint64_t offset;
-        uint64_t size;
-        uint64_t frameNumber;
-        bool completed = false;
+    // =========================================================================
+    // Internal types
+    // =========================================================================
+
+    struct RbChunk {
+        rhi::BufferHandle buffer = {};
+        std::byte* mapped = nullptr;
+        uint64_t capacity = 0;
+        uint64_t writePos = 0;
+        bool alive = true;
+        uint64_t retiredAtFence = ~0ull;
     };
+
+    struct PendingBufferReadback {
+        uint32_t chunkIndex = 0;
+        uint64_t dstOffset = 0;
+        uint64_t size = 0;
+        rhi::BufferHandle src = {};
+        uint64_t srcOffset = 0;
+    };
+
+    struct PendingTextureReadback {
+        uint32_t chunkIndex = 0;
+        uint64_t dstOffset = 0;
+        uint64_t size = 0;
+        rhi::TextureHandle src = {};
+        TextureReadbackRegion region = {};
+    };
+
+    // =========================================================================
+    // Impl
+    // =========================================================================
 
     struct ReadbackRing::Impl {
-        rhi::DeviceHandle device;
-        rhi::BufferHandle buffer;
-        void* mappedPtr = nullptr;
-        uint64_t capacity = 0;
-        uint64_t writeOffset = 0;
-        uint64_t reclaimOffset = 0;
-        uint64_t unflushedStart = 0;
-        uint64_t nextFutureId = 1;
-        std::vector<ReadbackEntry> entries;
+        detail::ChunkPool<RbChunk> pool;
+        ReadbackRingDesc desc = {};
+
+        std::vector<PendingBufferReadback> pendingBufferReadbacks;
+        std::vector<PendingTextureReadback> pendingTextureReadbacks;
+
+        uint64_t bytesReadbackThisFrame = 0;
+        uint64_t lastCompletedFence = 0;
+
+        auto CreateReadbackChunk(uint64_t iCapacity) -> core::Result<uint32_t> {
+            return pool.CreateChunk(iCapacity, rhi::BufferUsage::TransferDst, rhi::MemoryLocation::GpuToCpu);
+        }
+
+        auto AllocateSpace(uint64_t iSize, uint64_t iAlignment) -> core::Result<std::pair<uint32_t, uint64_t>> {
+            // 1. Try active chunks
+            for (auto it = pool.activeChunks.rbegin(); it != pool.activeChunks.rend(); ++it) {
+                auto r = pool.TryAllocFromChunk(*it, iSize, iAlignment);
+                if (r.valid) {
+                    return std::pair{r.chunkIndex, r.offset};
+                }
+            }
+
+            // 2. Try free chunks
+            for (size_t i = 0; i < pool.freeChunks.size(); ++i) {
+                auto ci = pool.freeChunks[i];
+                auto& c = pool.chunks[ci];
+                c.writePos = 0;
+                c.retiredAtFence = ~0ull;
+                if (iSize <= c.capacity) {
+                    pool.freeChunks[i] = pool.freeChunks.back();
+                    pool.freeChunks.pop_back();
+                    pool.ActivateChunk(ci);
+                    auto r = pool.TryAllocFromChunk(ci, iSize, iAlignment);
+                    if (r.valid) {
+                        return std::pair{r.chunkIndex, r.offset};
+                    }
+                }
+            }
+
+            // 3. Create new chunk
+            uint64_t needed = detail::ChunkPool<RbChunk>::AlignUp(iSize, iAlignment);
+            uint64_t newCap = std::max(desc.chunkSize, needed);
+            auto chunkResult = CreateReadbackChunk(newCap);
+            if (!chunkResult) {
+                return std::unexpected(chunkResult.error());
+            }
+
+            pool.ActivateChunk(*chunkResult);
+            auto r = pool.TryAllocFromChunk(*chunkResult, iSize, iAlignment);
+            assert(r.valid);
+            return std::pair{r.chunkIndex, r.offset};
+        }
     };
 
+    // =========================================================================
+    // Lifecycle
+    // =========================================================================
+
+    ReadbackRing::ReadbackRing(std::unique_ptr<Impl> iImpl) : impl_(std::move(iImpl)) {}
+
     ReadbackRing::~ReadbackRing() {
-        if (impl_ && impl_->buffer.IsValid()) {
-            impl_->device.Dispatch([&](auto& dev) {
-                dev.UnmapBuffer(impl_->buffer);
-                dev.DestroyBuffer(impl_->buffer);
-            });
+        if (impl_ && impl_->pool.device.IsValid()) {
+            impl_->pool.DestroyAllChunks();
         }
     }
 
     ReadbackRing::ReadbackRing(ReadbackRing&&) noexcept = default;
     auto ReadbackRing::operator=(ReadbackRing&&) noexcept -> ReadbackRing& = default;
-    ReadbackRing::ReadbackRing(std::unique_ptr<Impl> iImpl) : impl_(std::move(iImpl)) {}
 
-    auto ReadbackRing::Create(rhi::DeviceHandle iDevice, uint64_t iCapacity) -> core::Result<ReadbackRing> {
-        if (!iDevice.IsValid()) return std::unexpected(core::ErrorCode::InvalidArgument);
-
-        auto bufResult = iDevice.Dispatch([&](auto& dev) {
-            rhi::BufferDesc desc{
-                .size = iCapacity,
-                .usage = rhi::BufferUsage::TransferDst,
-                .memory = rhi::MemoryLocation::GpuToCpu,
-            };
-            return dev.CreateBuffer(desc);
-        });
-        if (!bufResult) return std::unexpected(core::ErrorCode::OutOfMemory);
-
-        auto mapResult = iDevice.Dispatch([&](auto& dev) { return dev.MapBuffer(*bufResult); });
-        if (!mapResult) {
-            iDevice.Dispatch([&](auto& dev) { dev.DestroyBuffer(*bufResult); });
-            return std::unexpected(core::ErrorCode::OutOfMemory);
+    auto ReadbackRing::Create(rhi::DeviceHandle iDevice, ReadbackRingDesc iDesc) -> core::Result<ReadbackRing> {
+        if (!iDevice.IsValid() || iDesc.chunkSize == 0 || iDesc.maxChunks == 0) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
         }
 
         auto impl = std::make_unique<Impl>();
-        impl->device = iDevice;
-        impl->buffer = *bufResult;
-        impl->mappedPtr = *mapResult;
-        impl->capacity = iCapacity;
+        impl->pool.device = iDevice;
+        impl->pool.chunkSize = iDesc.chunkSize;
+        impl->pool.maxChunks = iDesc.maxChunks;
+        impl->desc = iDesc;
+
+        auto chunkResult = impl->CreateReadbackChunk(iDesc.chunkSize);
+        if (!chunkResult) {
+            return std::unexpected(core::ErrorCode::OutOfMemory);
+        }
+        impl->pool.ActivateChunk(*chunkResult);
+
         return ReadbackRing(std::move(impl));
     }
 
-    auto ReadbackRing::Reserve(uint64_t iSize, uint64_t iAlignment) -> core::Result<ReadbackReservation> {
-        assert(impl_ && "ReadbackRing used after move");
-        if (iSize == 0) return std::unexpected(core::ErrorCode::InvalidArgument);
+    // =========================================================================
+    // Enqueue readbacks
+    // =========================================================================
 
-        uint64_t aligned = (impl_->writeOffset + iAlignment - 1) & ~(iAlignment - 1);
-        uint64_t wrapAligned = aligned % impl_->capacity;
-
-        if (wrapAligned + iSize > impl_->capacity) {
-            wrapAligned = 0;
-            aligned = ((impl_->writeOffset / impl_->capacity) + 1) * impl_->capacity;
+    auto ReadbackRing::EnqueueBufferReadback(rhi::BufferHandle iSrc, uint64_t iSrcOffset, uint64_t iSize)
+        -> core::Result<ReadbackTicket> {
+        if (iSize == 0) {
+            return ReadbackTicket{};
         }
-
-        uint64_t used = aligned + iSize - impl_->reclaimOffset;
-        if (used > impl_->capacity) return std::unexpected(core::ErrorCode::OutOfMemory);
-
-        uint64_t physOffset = wrapAligned;
-        impl_->writeOffset = aligned + iSize;
-
-        ReadbackFuture future{.id = impl_->nextFutureId++};
-        impl_->entries.push_back({.future = future, .offset = physOffset, .size = iSize, .frameNumber = 0});
-
-        return ReadbackReservation{.future = future, .dstBuffer = impl_->buffer, .dstOffset = physOffset};
+        auto allocResult = impl_->AllocateSpace(iSize, kReadbackAlignment);
+        if (!allocResult) {
+            return std::unexpected(allocResult.error());
+        }
+        auto [ci, off] = *allocResult;
+        impl_->pendingBufferReadbacks.push_back(
+            {.chunkIndex = ci, .dstOffset = off, .size = iSize, .src = iSrc, .srcOffset = iSrcOffset}
+        );
+        impl_->bytesReadbackThisFrame += iSize;
+        return ReadbackTicket{.chunkIndex_ = ci, .chunkOffset_ = off, .size = iSize};
     }
 
-    auto ReadbackRing::FlushFrame(uint64_t iFrameNumber) -> void {
-        assert(impl_ && "ReadbackRing used after move");
-        for (auto& e : impl_->entries) {
-            if (e.frameNumber == 0) e.frameNumber = iFrameNumber;
+    auto ReadbackRing::EnqueueTextureReadback(
+        rhi::TextureHandle iSrc, const TextureReadbackRegion& iRegion, uint64_t iDataSize
+    ) -> core::Result<ReadbackTicket> {
+        if (iDataSize == 0) {
+            return ReadbackTicket{};
         }
-        impl_->unflushedStart = impl_->writeOffset;
+        auto allocResult = impl_->AllocateSpace(iDataSize, kReadbackAlignment);
+        if (!allocResult) {
+            return std::unexpected(allocResult.error());
+        }
+        auto [ci, off] = *allocResult;
+        impl_->pendingTextureReadbacks.push_back(
+            {.chunkIndex = ci, .dstOffset = off, .size = iDataSize, .src = iSrc, .region = iRegion}
+        );
+        impl_->bytesReadbackThisFrame += iDataSize;
+        return ReadbackTicket{.chunkIndex_ = ci, .chunkOffset_ = off, .size = iDataSize};
     }
 
-    auto ReadbackRing::ReclaimCompleted(uint64_t iCompletedFrame) -> void {
-        assert(impl_ && "ReadbackRing used after move");
-        for (auto& e : impl_->entries) {
-            if (!e.completed && e.frameNumber > 0 && e.frameNumber <= iCompletedFrame) {
-                e.completed = true;
-            }
+    // =========================================================================
+    // Frame lifecycle
+    // =========================================================================
+
+    auto ReadbackRing::FlushFrame(uint64_t iFenceValue) -> void {
+        if (impl_->pool.activeChunks.empty()) {
+            return;
         }
-        // Reclaim from front while completed
-        while (!impl_->entries.empty() && impl_->entries.front().completed) {
-            auto& front = impl_->entries.front();
-            impl_->reclaimOffset = front.offset + front.size;
-            impl_->entries.erase(impl_->entries.begin());
+        for (auto ci : impl_->pool.activeChunks) {
+            impl_->pool.chunks[ci].retiredAtFence = iFenceValue;
         }
+        impl_->pool.FlushFrame(iFenceValue);
+        impl_->pendingBufferReadbacks.clear();
+        impl_->pendingTextureReadbacks.clear();
+        impl_->bytesReadbackThisFrame = 0;
     }
 
-    auto ReadbackRing::Resolve(ReadbackFuture iFuture) const noexcept -> std::span<const uint8_t> {
-        if (!impl_) return {};
-        auto it = std::ranges::find_if(impl_->entries, [&](const ReadbackEntry& e) { return e.future.id == iFuture.id; });
-        if (it == impl_->entries.end() || !it->completed) return {};
-        return {static_cast<const uint8_t*>(impl_->mappedPtr) + it->offset, it->size};
+    auto ReadbackRing::ReclaimCompleted(uint64_t iCompletedFenceValue) -> void {
+        impl_->lastCompletedFence = iCompletedFenceValue;
+        impl_->pool.ReclaimCompleted(iCompletedFenceValue);
     }
 
-    auto ReadbackRing::Capacity() const noexcept -> uint64_t { return impl_ ? impl_->capacity : 0; }
+    // =========================================================================
+    // Data access
+    // =========================================================================
 
-    auto ReadbackRing::Available() const noexcept -> uint64_t {
-        if (!impl_) return 0;
-        uint64_t used = impl_->writeOffset - impl_->reclaimOffset;
-        return (used < impl_->capacity) ? (impl_->capacity - used) : 0;
+    auto ReadbackRing::IsReady(const ReadbackTicket& iTicket) const noexcept -> bool {
+        if (!iTicket.IsValid()) {
+            return false;
+        }
+        if (iTicket.chunkIndex_ >= impl_->pool.chunks.size()) {
+            return false;
+        }
+        auto const& c = impl_->pool.chunks[iTicket.chunkIndex_];
+        if (!c.alive || c.retiredAtFence == ~0ull) {
+            return false;
+        }
+        return impl_->lastCompletedFence >= c.retiredAtFence;
+    }
+
+    auto ReadbackRing::GetData(const ReadbackTicket& iTicket) const -> std::span<const std::byte> {
+        if (!iTicket.IsValid()) {
+            return {};
+        }
+        if (iTicket.chunkIndex_ >= impl_->pool.chunks.size()) {
+            return {};
+        }
+        auto const& c = impl_->pool.chunks[iTicket.chunkIndex_];
+        if (!c.alive || iTicket.chunkOffset_ + iTicket.size > c.capacity) {
+            return {};
+        }
+        // Invalidate CPU cache for non-coherent memory before reading GPU-written data
+        impl_->pool.device.Dispatch([&](auto& dev) {
+            dev.InvalidateMappedRange(c.buffer, iTicket.chunkOffset_, iTicket.size);
+        });
+        return {c.mapped + iTicket.chunkOffset_, iTicket.size};
+    }
+
+    // =========================================================================
+    // Memory management + Metrics
+    // =========================================================================
+
+    auto ReadbackRing::ShrinkToFit(uint64_t iTargetTotalBytes) -> uint64_t {
+        return impl_->pool.ShrinkToFit(iTargetTotalBytes);
+    }
+    auto ReadbackRing::GetUtilization() const noexcept -> float {
+        return impl_ ? impl_->pool.GetUtilization() : 0.0f;
+    }
+    auto ReadbackRing::Capacity() const noexcept -> uint64_t {
+        return impl_ ? impl_->pool.GetTotalAllocatedBytes() : 0;
+    }
+    auto ReadbackRing::GetBytesReadbackThisFrame() const noexcept -> uint64_t {
+        return impl_ ? impl_->bytesReadbackThisFrame : 0;
+    }
+    auto ReadbackRing::GetActiveChunkCount() const noexcept -> uint32_t {
+        return impl_ ? impl_->pool.GetActiveChunkCount() : 0;
+    }
+    auto ReadbackRing::GetFreeChunkCount() const noexcept -> uint32_t {
+        return impl_ ? impl_->pool.GetFreeChunkCount() : 0;
+    }
+    auto ReadbackRing::GetTotalChunkCount() const noexcept -> uint32_t {
+        return impl_ ? impl_->pool.GetTotalChunkCount() : 0;
     }
 
 }  // namespace miki::resource

@@ -28,10 +28,13 @@ namespace miki::resource {
     auto UploadManager::operator=(UploadManager&&) noexcept -> UploadManager& = default;
     UploadManager::UploadManager(std::unique_ptr<Impl> iImpl) : impl_(std::move(iImpl)) {}
 
-    auto UploadManager::Create(rhi::DeviceHandle iDevice, StagingRing* iStagingRing,
-                               frame::DeferredDestructor* iDeferredDestructor, bool iRebarAvailable,
-                               uint64_t iRebarBudget) -> core::Result<UploadManager> {
-        if (!iDevice.IsValid() || !iStagingRing) return std::unexpected(core::ErrorCode::InvalidArgument);
+    auto UploadManager::Create(
+        rhi::DeviceHandle iDevice, StagingRing* iStagingRing, frame::DeferredDestructor* iDeferredDestructor,
+        bool iRebarAvailable, uint64_t iRebarBudget
+    ) -> core::Result<UploadManager> {
+        if (!iDevice.IsValid() || !iStagingRing) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
+        }
 
         auto impl = std::make_unique<Impl>();
         impl->device = iDevice;
@@ -45,7 +48,9 @@ namespace miki::resource {
     auto UploadManager::Upload(rhi::BufferHandle iDst, uint64_t iDstOffset, const void* iData, uint64_t iSize)
         -> core::Result<UploadResult> {
         assert(impl_ && "UploadManager used after move");
-        if (iSize == 0 || !iData) return std::unexpected(core::ErrorCode::InvalidArgument);
+        if (iSize == 0 || !iData) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
+        }
 
         // Path D: Direct VRAM write via ReBAR (largest data, zero copy)
         if (impl_->rebarAvailable && iSize > impl_->stagingRing->Capacity() && iSize <= impl_->rebarBudget) {
@@ -61,11 +66,14 @@ namespace miki::resource {
         // Path C: Dedicated staging buffer (> ring capacity)
         if (iSize > impl_->stagingRing->Capacity()) {
             auto bufResult = impl_->device.Dispatch([&](auto& dev) {
-                rhi::BufferDesc desc{.size = iSize, .usage = rhi::BufferUsage::TransferSrc,
-                                     .memory = rhi::MemoryLocation::CpuToGpu};
+                rhi::BufferDesc desc{
+                    .size = iSize, .usage = rhi::BufferUsage::TransferSrc, .memory = rhi::MemoryLocation::CpuToGpu
+                };
                 return dev.CreateBuffer(desc);
             });
-            if (!bufResult) return std::unexpected(core::ErrorCode::OutOfMemory);
+            if (!bufResult) {
+                return std::unexpected(core::ErrorCode::OutOfMemory);
+            }
 
             auto mapResult = impl_->device.Dispatch([&](auto& dev) { return dev.MapBuffer(*bufResult); });
             if (!mapResult) {
@@ -80,21 +88,22 @@ namespace miki::resource {
                 impl_->deferredDestructor->Destroy(*bufResult);
             }
 
-            return UploadResult{.path = UploadPath::DedicatedBuffer, .stagingBuffer = *bufResult, .stagingOffset = 0, .size = iSize};
+            return UploadResult{
+                .path = UploadPath::DedicatedBuffer, .stagingBuffer = *bufResult, .stagingOffset = 0, .size = iSize
+            };
         }
 
         // Path A/B: StagingRing (small or medium data)
-        auto allocResult = impl_->stagingRing->Allocate(iSize, 16);
+        auto allocResult = impl_->stagingRing->Allocate(iSize, kStagingAlignment);
         if (!allocResult) {
-            // Ring full — this is Path B territory, caller may need to wait
             return std::unexpected(core::ErrorCode::OutOfMemory);
         }
 
-        std::memcpy(allocResult->cpuPtr, iData, iSize);
+        std::memcpy(allocResult->mappedPtr, iData, iSize);
+        impl_->stagingRing->EnqueueBufferCopy(*allocResult, iDst, iDstOffset);
 
         UploadPath path = (iSize <= kStagingRingThreshold) ? UploadPath::StagingRing : UploadPath::StagingRingLarge;
-        return UploadResult{.path = path, .stagingBuffer = allocResult->buffer,
-                            .stagingOffset = allocResult->gpuOffset, .size = iSize};
+        return UploadResult{.path = path, .size = iSize};
     }
 
 }  // namespace miki::resource
