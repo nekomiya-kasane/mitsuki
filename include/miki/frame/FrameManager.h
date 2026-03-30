@@ -21,6 +21,7 @@
 
 #include "miki/core/Result.h"
 #include "miki/frame/FrameContext.h"
+#include "miki/frame/SyncScheduler.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Handle.h"
 #include "miki/rhi/Swapchain.h"
@@ -37,15 +38,6 @@ namespace miki::resource {
 namespace miki::frame {
 
     class DeferredDestructor;
-
-    // =========================================================================
-    // TimelineSyncPoint — cross-queue sync token
-    // =========================================================================
-
-    struct TimelineSyncPoint {
-        rhi::SemaphoreHandle semaphore;
-        uint64_t value = 0;
-    };
 
     // =========================================================================
     // FrameManager
@@ -115,6 +107,16 @@ namespace miki::frame {
         auto SetComputeSyncPoint(TimelineSyncPoint iPoint) noexcept -> void;
 
         // ── Transfer queue integration ──────────────────────────────
+
+        /// @brief Eagerly dispatch pending StagingRing/ReadbackRing copies NOW.
+        /// Call after CPU-side memcpy is done but BEFORE EndFrame — the transfer
+        /// queue runs in parallel with command buffer recording (~2ms overlap).
+        /// If not called, EndFrame will dispatch transfers itself (zero overlap).
+        /// Safe to call multiple times per frame (no-op if already flushed).
+        /// T1 + hasAsyncTransfer: submits to dedicated transfer queue.
+        /// Fallback: defers to EndFrame (cannot eagerly dispatch on graphics queue
+        /// because the user's cmd buffers aren't recorded yet).
+        auto FlushTransfers() -> void;
 
         /// @brief Register a transfer completion for this frame.
         /// Graphics queue will wait at the appropriate stage.

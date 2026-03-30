@@ -26,6 +26,13 @@
 
 namespace miki::frame {
 
+    /// @brief Cross-queue sync token: {semaphore, value}.
+    /// Canonical definition — used by FrameManager, AsyncTaskManager, RenderGraph.
+    struct TimelineSyncPoint {
+        rhi::SemaphoreHandle semaphore;
+        uint64_t value = 0;
+    };
+
     /// @brief Cross-queue sync point: {semaphore, value, waitStage}.
     struct SyncWaitEntry {
         rhi::SemaphoreHandle semaphore;
