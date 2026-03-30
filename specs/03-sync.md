@@ -2635,37 +2635,348 @@ DD-08     GIVEN DD with binCount clamped from 5 to kMaxBins(3)
           THEN  binCount == 3 (clamped)
 ```
 
-### 17.17 Test Coverage Matrix
+### 17.18 CommandPoolAllocator Tests
 
-| Component              | Behavior Category               | Test IDs     | Count  |
-| :--------------------- | :------------------------------ | :----------- | :----- |
-| **FrameManager**       | Lifecycle (create/destroy/move) | FM-LC-01..07 | 7      |
-| **FrameManager**       | Frame lifecycle (begin/end)     | FM-FL-01..07 | 7      |
-| **FrameManager**       | Timeline semaphore (T1)         | FM-TL-01..04 | 4      |
-| **FrameManager**       | Fence-based (T2)                | FM-T2-01..03 | 3      |
-| **FrameManager**       | Implicit sync (T3/T4)           | FM-IS-01..03 | 3      |
-| **FrameManager**       | Transfer dispatch               | FM-TX-01..09 | 9      |
-| **FrameManager**       | Split submit                    | FM-SS-01..05 | 5      |
-| **FrameManager**       | Cross-queue sync                | FM-XQ-01..05 | 5      |
-| **FrameManager**       | Resource lifecycle hooks        | FM-RL-01..04 | 4      |
-| **FrameManager**       | Resize / reconfigure            | FM-RS-01..05 | 5      |
-| **FrameManager**       | Queries                         | FM-QR-01..05 | 5      |
-| **FrameManager**       | WaitAll                         | FM-WA-01..04 | 4      |
-| **FrameManager**       | Multi-frame stress              | FM-MF-01..04 | 4      |
-| **SyncScheduler**      | All behaviors                   | SS-01..10    | 10     |
-| **DeferredDestructor** | All behaviors                   | DD-01..08    | 8      |
-| **Total**              |                                 |              | **83** |
+Test file: `tests/frame/test_command_pool_allocator.cpp`
 
-### 17.18 Test Execution Strategy
+#### 17.18.1 Lifecycle
 
-| Mode                     | Command                                                                             | Coverage                                        |
-| :----------------------- | :---------------------------------------------------------------------------------- | :---------------------------------------------- |
-| **Unit (MockDevice)**    | `ctest -R test_frame_manager`                                                       | All 83 tests, headless, <1s                     |
-| **Integration (Vulkan)** | `ctest -R test_frame_manager --test-dir build -C Debug` with `MIKI_BUILD_VULKAN=ON` | Parameterized subset against real Vulkan device |
-| **Integration (D3D12)**  | Same with `MIKI_BUILD_D3D12=ON`                                                     | Parameterized subset against real D3D12 device  |
-| **CI**                   | GitHub Actions matrix: `{Mock, Vulkan, D3D12}` × `{Debug, Release}`                 | Full matrix                                     |
+```
+CPA-LC-01  GIVEN invalid DeviceHandle
+           WHEN  CommandPoolAllocator::Create(desc) is called
+           THEN  returns error
 
-Tests that require GPU features (e.g., timeline semaphore CPU poll) use `GTEST_SKIP()` when the backend doesn't support them — same pattern as `tests/rhi/RhiTestFixture.h`.
+CPA-LC-02  GIVEN valid device, desc = {2 frames, graphics only}
+           WHEN  Create(desc) succeeds
+           THEN  GetPoolCount() == 2 (2 slots × 1 queue)
+           AND   GetAcquiredCount(0) == 0
+           AND   GetAcquiredCount(1) == 0
+
+CPA-LC-03  GIVEN valid device, desc = {3 frames, graphics + compute + transfer}
+           WHEN  Create(desc) succeeds
+           THEN  GetPoolCount() == 9 (3 slots × 3 queues)
+
+CPA-LC-04  GIVEN valid CPA `a`
+           WHEN  `b = std::move(a)`
+           THEN  b.GetPoolCount() returns correct value
+           AND   b.Acquire(0, Graphics) succeeds
+           AND   a is in moved-from state (impl_ == nullptr)
+
+CPA-LC-05  GIVEN valid CPA
+           WHEN  ~CommandPoolAllocator runs
+           THEN  all native pools destroyed (vkDestroyCommandPool / allocator Release)
+           AND   all async pools destroyed
+           AND   all retained pools destroyed (if any)
+           AND   no resource leaks
+
+CPA-LC-06  GIVEN valid device, desc = {2 frames, graphics only, initialArenaCapacity=32, enableHwmShrink=true}
+           WHEN  Create(desc) succeeds
+           THEN  GetPoolCount() == 2
+           AND   GetStats().hwmShrinkEnabled == true
+           AND   arena pre-reserved to 32 (no realloc for first 32 Acquires)
+```
+
+#### 17.18.2 Acquire / Release / ResetSlot
+
+```
+CPA-AR-01  GIVEN CPA with 2 frames in flight, graphics only
+           WHEN  Acquire(slot=0, Graphics) called 4 times
+           THEN  4 valid CommandListAcquisitions returned (all distinct handles)
+           AND   GetAcquiredCount(0) == 4
+
+CPA-AR-02  GIVEN CPA, slot 0 has 3 acquired buffers
+           WHEN  ResetSlot(0) called
+           THEN  GetAcquiredCount(0) == 0
+           AND   subsequent Acquire(slot=0, Graphics) succeeds (pool reused)
+
+CPA-AR-03  GIVEN CPA with 3 frames in flight, all 3 queues
+           WHEN  ResetSlot(1) called
+           THEN  only slot 1's pools are reset
+           AND   GetAcquiredCount(0) unchanged (INV-SLOT-ISOLATION)
+           AND   GetAcquiredCount(2) unchanged
+
+CPA-AR-04  GIVEN CPA
+           WHEN  Acquire(slot=0, Graphics) returns {acq, arenaIndex}
+           AND   Release(slot=0, Graphics, arenaIndex) called
+           THEN  GetAcquiredCount(0) decremented by 1
+           AND   arena freeMask bit at arenaIndex is set (free)
+
+CPA-AR-05  GIVEN CPA with asyncTransfer=true
+           WHEN  Acquire(slot=0, Transfer) called
+           THEN  uses transfer queue pool (distinct from graphics pool)
+           AND   Acquire(slot=0, Graphics) uses graphics pool
+           AND   both succeed independently
+
+CPA-AR-06  GIVEN CPA with asyncTransfer=false
+           WHEN  Acquire(slot=0, Transfer) called
+           THEN  returns error (no transfer pool exists)
+           AND   graphics pool is unaffected
+
+CPA-AR-07  GIVEN CPA (Vulkan backend)
+           WHEN  Acquire 8 buffers from slot 0, ResetSlot(0), Acquire 8 more
+           THEN  second batch succeeds (pool memory reused, no OOM)
+           AND   total vkCreateCommandPool calls == initial pool creation count only
+```
+
+#### 17.18.3 Backend-Specific Pool Flags
+
+```
+CPA-BK-01  GIVEN CPA (Vulkan backend)
+           WHEN  pools created at Create() time
+           THEN  VkCommandPoolCreateInfo.flags == 0 (no RESET_COMMAND_BUFFER_BIT)
+           NOTE  INV-NO-RESET-BIT
+
+CPA-BK-02  GIVEN CPA (D3D12 backend)
+           WHEN  Acquire called twice for same slot, then ResetSlot, then Acquire twice
+           THEN  ID3D12CommandAllocator::Reset() called once at ResetSlot
+           AND   cached command lists reused on second pair of Acquires (no CreateCommandList1)
+
+CPA-BK-03  GIVEN CPA (WebGPU backend)
+           WHEN  ResetSlot(0) called
+           THEN  no-op (WebGPU manages internally)
+           AND   subsequent Acquire creates new WGPUCommandEncoder (normal path)
+
+CPA-BK-04  GIVEN CPA (OpenGL backend)
+           WHEN  ResetSlot(0) called
+           THEN  deferred command vector cleared
+           AND   subsequent Acquire allocates from arena (normal path)
+```
+
+#### 17.18.4 Multi-Thread Extension
+
+```
+CPA-MT-01  GIVEN CPA with recordingThreadCount=4
+           WHEN  Acquire(slot=0, Graphics, threadIndex=0) and Acquire(slot=0, Graphics, threadIndex=1)
+           THEN  different native pools used (no contention)
+           AND   GetPoolCount() == framesInFlight × queueCount × threadCount
+
+CPA-MT-02  GIVEN CPA with recordingThreadCount=4
+           WHEN  ResetSlot(0) called
+           THEN  all 4 thread pools for slot 0 are reset
+           AND   thread pools for slots 1+ are unaffected
+
+CPA-MT-03  GIVEN CPA with recordingThreadCount=1 (default)
+           WHEN  Acquire(slot=0, Graphics, threadIndex=0) called
+           THEN  succeeds (single-thread mode)
+           AND   GetPoolCount() == framesInFlight × queueCount × 1
+```
+
+#### 17.18.5 Memory Shrink (OOM-Triggered)
+
+```
+CPA-HW-01  GIVEN CPA with enableHwmShrink=false (default)
+           WHEN  Acquire causes internal OOM (mocked VK_ERROR_OUT_OF_DEVICE_MEMORY)
+           THEN  NotifyOom is called internally
+           BUT   next ResetSlot still uses fast-path reset (flags=0)
+           AND   oomObserved flag is ignored (feature disabled)
+
+CPA-HW-02  GIVEN CPA with enableHwmShrink=true
+           WHEN  normal usage (no OOM observed)
+           AND   ResetSlot called
+           THEN  vkResetCommandPool called with flags=0 (fast path, INV-HWM-OOM)
+           AND   no RELEASE_RESOURCES used
+
+CPA-HW-03  GIVEN CPA with enableHwmShrink=true (Vulkan backend)
+           WHEN  Acquire triggers VK_ERROR_OUT_OF_DEVICE_MEMORY → NotifyOom called
+           AND   next ResetSlot called
+           THEN  vkResetCommandPool called with VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT
+           AND   oomObserved flag cleared after shrink
+           AND   subsequent Acquire still succeeds (pool functional after shrink)
+
+CPA-HW-04  GIVEN CPA with enableHwmShrink=true, OOM observed and shrink completed
+           WHEN  next ResetSlot called (no new OOM)
+           THEN  fast-path reset used (oomObserved already cleared)
+           AND   no unnecessary RELEASE_RESOURCES
+```
+
+#### 17.18.6 AsyncTask Pool
+
+```
+CPA-AS-01  GIVEN CPA with AsyncPoolRing
+           WHEN  AcquireAsync(Compute, gpuCompleted=0) called
+           THEN  returns valid AsyncCommandAcquisition
+           AND   async pool is marked inUse
+
+CPA-AS-02  GIVEN async pool acquired, submitted with completionFenceValue=42
+           WHEN  ReleaseAsync called after gpuCompleted >= 42
+           THEN  async pool marked free (inUse=false)
+           AND   subsequent AcquireAsync reuses same pool (no new creation)
+
+CPA-AS-03  GIVEN 4 concurrent async tasks acquired
+           WHEN  all 4 pools in-use, AcquireAsync called again
+           THEN  5th pool created (grow on demand)
+
+CPA-AS-04  GIVEN async pool with completionFenceValue=50, gpuCompleted=40
+           WHEN  AcquireAsync(Compute, gpuCompleted=40) called
+           THEN  that pool NOT reused (INV-ASYNC-COMPLETION)
+           AND   different or new pool returned
+
+CPA-AS-05  GIVEN CPA with active async pools
+           WHEN  ResetSlot(N) called
+           THEN  async pools unaffected (INV-ASYNC-ISOLATION)
+           AND   frame pools for slot N reset normally
+```
+
+#### 17.18.7 Retained Command Buffers
+
+```
+CPA-RT-01  GIVEN CPA with retained buffer support
+           WHEN  AcquireRetained(Graphics) called
+           THEN  returns valid CommandListAcquisition (secondary level)
+           AND   retained pool uses RESET_COMMAND_BUFFER_BIT (INV-RETAINED-RESET-BIT)
+
+CPA-RT-02  GIVEN retained buffer acquired
+           WHEN  ReleaseRetained called
+           THEN  buffer freed from retained pool
+           AND   retained pool itself survives (not destroyed)
+
+CPA-RT-03  GIVEN CPA with retained buffers
+           WHEN  ResetSlot(N) called
+           THEN  retained buffers unaffected (they survive across frames)
+
+CPA-RT-04  GIVEN CPA, no AcquireRetained ever called
+           WHEN  ~CommandPoolAllocator runs
+           THEN  no retained pool created or destroyed (lazy creation)
+```
+
+#### 17.18.8 CommandListArena
+
+```
+CPA-CA-01  GIVEN CommandListArena<T> (empty, Reserve(16) called)
+           WHEN  Acquire called
+           THEN  capacity grows to 1, storage.size() == 1
+           AND   AcquiredCount() == 1
+           AND   freeMask[0] bit 0 cleared
+           AND   Acquire returns {ptr, index=0}
+
+CPA-CA-02  GIVEN CommandListArena with 5 acquired slots
+           WHEN  Release(index=2) called, then Acquire called
+           THEN  Acquire returns {ptr, index=2} (lowest free via countr_zero)
+           AND   AcquiredCount() == 5 (unchanged — released then re-acquired)
+
+CPA-CA-03  GIVEN CommandListArena, 128 Acquires (fill all kMaxSlots)
+           THEN  freeMask[0] == 0, freeMask[1] == 0, AcquiredCount() == 128
+           WHEN  Release(index=30) called
+           THEN  next Acquire returns {ptr, index=30}
+
+CPA-CA-04  GIVEN CommandListArena, 65 Acquires (crosses word boundary)
+           THEN  freeMask[0] == 0 (all 64 bits occupied)
+           AND   freeMask[1] bit 0 cleared (65th slot)
+           AND   AcquiredCount() == 65
+           WHEN  Release(index=0), then Acquire
+           THEN  returns {ptr, index=0} (scans word 0 first)
+
+CPA-CA-05  GIVEN CommandListArena, Acquire 5 then Release all 5
+           WHEN  ResetAll called
+           THEN  freeMask[0] low 5 bits set, AcquiredCount() == 0
+           AND   capacity == 5 (storage not shrunk)
+
+CPA-CA-06  GIVEN CommandListArena, Acquire 3 then ResetAll
+           WHEN  Acquire called again
+           THEN  returns {ptr, index=0} (countr_zero finds first bit)
+           AND   storage NOT reallocated (same capacity, reused)
+
+CPA-CA-07  GIVEN CommandListArena with Reserve(16)
+           WHEN  Acquire called 16 times
+           THEN  no realloc occurred (storage pre-reserved)
+           AND   storage.capacity() >= 16
+
+CPA-CA-08  GIVEN CommandListArena, 128 slots fully acquired
+           WHEN  Acquire called (129th)
+           THEN  succeeds (dynamic fallback, capacity=129)
+           AND   MIKI_LOG warning emitted ("exceeded 128 slots")
+           AND   returned index == 128 (no freemask tracking for this slot)
+```
+
+#### 17.18.9 Steady-State / Stress
+
+```
+CPA-ST-01  GIVEN CPA after 100-frame warm-up loop (Acquire 4, Release 4, ResetSlot per frame)
+           WHEN  profiling Acquire/Release calls on frame 101
+           THEN  zero heap allocations (arena reuse, INV-STEADY-STATE)
+
+CPA-ST-02  GIVEN CPA with 2 frames in flight
+           WHEN  200 frames run: each frame Acquire(currentSlot, Graphics) ×3, EndFrame, ResetSlot
+           THEN  GetPoolCount() unchanged from initial creation
+           AND   no resource leaks on destruction
+```
+
+#### 17.18.10 GetStats / DumpStats / NotifyOom
+
+```
+CPA-GS-01  GIVEN CPA with 2 frames, graphics + transfer
+           WHEN  GetStats() called after Create
+           THEN  framePoolCount == 4 (2 × 2)
+           AND   asyncPoolCount == 0
+           AND   asyncPoolsInUse == 0
+           AND   retainedPoolCount == 0
+           AND   currentAcquired == 0
+           AND   highWaterMark == 0
+           AND   hwmShrinkEnabled == false (default Desc)
+
+CPA-GS-02  GIVEN CPA, Acquire(slot=0, Graphics) ×5
+           WHEN  GetStats() called
+           THEN  currentAcquired == 5
+           AND   highWaterMark >= 5
+
+CPA-GS-03  GIVEN CPA, Acquire 10, ResetSlot, Acquire 3
+           WHEN  GetStats() called
+           THEN  currentAcquired == 3
+           AND   highWaterMark == 10 (tracks historical max)
+
+CPA-GS-04  GIVEN CPA
+           WHEN  DumpStats(tmpFile) called
+           THEN  tmpFile contains human-readable text with pool count, acquired count, HWM
+
+CPA-GS-05  GIVEN CPA with enableHwmShrink=true
+           WHEN  NotifyOom(slot=0, Graphics) called explicitly
+           THEN  internal oomObserved flag set for slot 0 graphics pool
+           AND   next ResetSlot(0) uses RELEASE_RESOURCES
+           AND   GetStats().hwmShrinkEnabled == true
+```
+
+### 17.19 Test Coverage Matrix
+
+| Component                | Behavior Category               | Test IDs      | Count   |
+| :----------------------- | :------------------------------ | :------------ | :------ |
+| **FrameManager**         | Lifecycle (create/destroy/move) | FM-LC-01..07  | 7       |
+| **FrameManager**         | Frame lifecycle (begin/end)     | FM-FL-01..07  | 7       |
+| **FrameManager**         | Timeline semaphore (T1)         | FM-TL-01..04  | 4       |
+| **FrameManager**         | Fence-based (T2)                | FM-T2-01..03  | 3       |
+| **FrameManager**         | Implicit sync (T3/T4)           | FM-IS-01..03  | 3       |
+| **FrameManager**         | Transfer dispatch               | FM-TX-01..09  | 9       |
+| **FrameManager**         | Split submit                    | FM-SS-01..05  | 5       |
+| **FrameManager**         | Cross-queue sync                | FM-XQ-01..05  | 5       |
+| **FrameManager**         | Resource lifecycle hooks        | FM-RL-01..04  | 4       |
+| **FrameManager**         | Resize / reconfigure            | FM-RS-01..05  | 5       |
+| **FrameManager**         | Queries                         | FM-QR-01..05  | 5       |
+| **FrameManager**         | WaitAll                         | FM-WA-01..04  | 4       |
+| **FrameManager**         | Multi-frame stress              | FM-MF-01..04  | 4       |
+| **SyncScheduler**        | All behaviors                   | SS-01..10     | 10      |
+| **DeferredDestructor**   | All behaviors                   | DD-01..08     | 8       |
+| **CommandPoolAllocator** | Lifecycle                       | CPA-LC-01..06 | 6       |
+| **CommandPoolAllocator** | Acquire/Release/ResetSlot       | CPA-AR-01..07 | 7       |
+| **CommandPoolAllocator** | Backend-specific flags          | CPA-BK-01..04 | 4       |
+| **CommandPoolAllocator** | Multi-thread extension          | CPA-MT-01..03 | 3       |
+| **CommandPoolAllocator** | Memory shrink (OOM-triggered)   | CPA-HW-01..04 | 4       |
+| **CommandPoolAllocator** | AsyncTask pool                  | CPA-AS-01..05 | 5       |
+| **CommandPoolAllocator** | Retained command buffers        | CPA-RT-01..04 | 4       |
+| **CommandPoolAllocator** | CommandListArena                | CPA-CA-01..08 | 8       |
+| **CommandPoolAllocator** | Steady-state / stress           | CPA-ST-01..02 | 2       |
+| **CommandPoolAllocator** | GetStats / DumpStats / OOM      | CPA-GS-01..05 | 5       |
+| **Total**                |                                 |               | **131** |
+
+### 17.20 Test Execution Strategy
+
+| Mode                     | Command                                                                                                            | Coverage                                        |
+| :----------------------- | :----------------------------------------------------------------------------------------------------------------- | :---------------------------------------------- |
+| **Unit (MockDevice)**    | `ctest -R test_frame_manager`                                                                                      | All FM/SS/DD tests (83), headless, <1s          |
+| **Unit (MockDevice)**    | `ctest -R test_command_pool_allocator`                                                                             | All CPA tests (48), headless, <1s               |
+| **Integration (Vulkan)** | `ctest -R "test_frame_manager\|test_command_pool_allocator" --test-dir build -C Debug` with `MIKI_BUILD_VULKAN=ON` | Parameterized subset against real Vulkan device |
+| **Integration (D3D12)**  | Same with `MIKI_BUILD_D3D12=ON`                                                                                    | Parameterized subset against real D3D12 device  |
+| **CI**                   | GitHub Actions matrix: `{Mock, Vulkan, D3D12}` × `{Debug, Release}`                                                | Full matrix                                     |
+
+Tests that require GPU features (e.g., timeline semaphore CPU poll, backend-specific pool flags) use `GTEST_SKIP()` when the backend doesn't support them — same pattern as `tests/rhi/RhiTestFixture.h`.
 
 ---
 
@@ -2675,7 +2986,7 @@ Composite tests exercise **behavior combinations across subsystems**. Where §17
 
 Design principles:
 
-1. **Cross-cutting**: every composite test touches ≥2 of {FrameManager, SyncScheduler, DeferredDestructor, transfer dispatch, cross-queue sync, resize, queries}.
+1. **Cross-cutting**: every composite test touches ≥2 of {FrameManager, SyncScheduler, DeferredDestructor, CommandPoolAllocator, transfer dispatch, cross-queue sync, resize, queries}.
 2. **Stateful**: tests run multi-frame sequences where earlier frames' side effects constrain later frames' behavior.
 3. **Realistic**: scenarios mirror real application frame loops (create resources → render → destroy → resize → resume).
 
@@ -3052,7 +3363,161 @@ CT-EDGE-08  GIVEN SyncScheduler
             AND   no crash (empty commit is valid)
 ```
 
-### 18.13 Composite Test Coverage Matrix
+### 18.13 CommandPoolAllocator + FrameManager Integration
+
+```
+CT-CPA-01  GIVEN T1 offscreen FM (2 frames in flight) with CommandPoolAllocator
+           WHEN  frame 1: BeginFrame (ResetSlot(0) called internally)
+           AND   Acquire(0, Graphics) ×3 → record → EndFrame
+           AND   frame 2: BeginFrame (ResetSlot(1) called internally)
+           AND   Acquire(1, Graphics) ×2 → record → EndFrame
+           AND   frame 3: BeginFrame (ResetSlot(0) called — slot 0 recycled)
+           THEN  frame 3's ResetSlot(0) resets slot 0's pool (frame 1's 3 buffers reclaimed)
+           AND   Acquire(0, Graphics) succeeds (pool reused, near-zero cost)
+           AND   GetAcquiredCount(1) still reflects frame 2's buffers (slot isolation)
+
+CT-CPA-02  GIVEN T1 offscreen FM with CPA + DeferredDestructor (2 frames, 2 bins)
+           WHEN  10-frame loop:
+                   each frame:
+                     1. BeginFrame → ResetSlot(idx) + DrainBin(idx)
+                     2. Acquire(idx, Graphics) ×2
+                     3. Destroy(synthetic resource)
+                     4. EndFrame
+           THEN  ResetSlot always called BEFORE DrainBin in BeginFrame
+           AND   pool reset does not interfere with DD drain
+           AND   DD PendingCount ≤ 2 at any BeginFrame boundary
+           AND   no resource leak after WaitAll + DrainAll
+
+CT-CPA-03  GIVEN T1 offscreen FM with CPA, after 5 frames
+           WHEN  WaitAll() called
+           AND   5 more frames run using CPA.Acquire
+           THEN  ResetSlot still succeeds after WaitAll (GPU already idle)
+           AND   timeline continuity preserved (CurrentTimelineValue == 10)
+           AND   no double-reset or skipped slot
+
+CT-CPA-04  GIVEN T1 offscreen FM with CPA
+           WHEN  Resize(3840, 2160) called after 5 frames (WaitAll internally)
+           AND   5 more frames run
+           THEN  CPA pools survive resize (not destroyed/recreated)
+           AND   Acquire succeeds on all post-resize frames
+           AND   GetPoolCount() unchanged
+
+CT-CPA-05  GIVEN FM with CPA, `a` runs 5 frames
+           WHEN  `b = std::move(a)`
+           THEN  b's CPA is functional (Acquire succeeds)
+           AND   b.BeginFrame triggers ResetSlot correctly
+           AND   a is moved-from (CPA impl_ == nullptr)
+
+CT-CPA-06  GIVEN T1 offscreen FM with CPA, hasAsyncTransfer=true, pending copies
+           WHEN  EndFrame auto-dispatches transfer (lazy path)
+           THEN  transfer cmd acquired from CPA.Acquire(slot, Transfer) — not from DeviceBase::AcquireCommandList
+           AND   transfer pool is distinct from graphics pool
+           AND   graphics submit waits on transfer timeline
+
+CT-CPA-07  GIVEN T1 offscreen FM with CPA, hasAsyncTransfer=true
+           WHEN  FlushTransfers() called (eager path)
+           THEN  transfer cmd acquired from CPA.Acquire(slot, Transfer)
+           AND   EndFrame does NOT acquire another transfer cmd
+           AND   ResetSlot at next BeginFrame reclaims both graphics and transfer buffers
+
+CT-CPA-08  GIVEN FM with CPA, hasAsyncTransfer=false, pending copies
+           WHEN  EndFrame auto-dispatches transfer on graphics queue (fallback path)
+           THEN  transfer cmd acquired from CPA.Acquire(slot, Graphics) — same pool as user cmds
+           AND   submit contains user cmds + transfer cmd in single graphics submit
+```
+
+### 18.14 CommandPoolAllocator + EndFrameSplit
+
+```
+CT-CPA-09  GIVEN T1 offscreen FM with CPA
+           WHEN  frame uses EndFrameSplit({batchA, batchB})
+           AND   batchA has 2 cmds, batchB has 1 cmd (all from CPA.Acquire)
+           THEN  all 3 cmds come from same slot's graphics pool
+           AND   timeline values are monotonic across batches
+           AND   ResetSlot at next BeginFrame reclaims all 3 buffers
+
+CT-CPA-10  GIVEN T1 offscreen FM with CPA, alternating EndFrame / EndFrameSplit
+           WHEN  20 frames run: odd=EndFrame(1 cmd), even=EndFrameSplit({2 cmds, 1 cmd})
+           THEN  CPA arena grows to high-water mark (3) and stays there
+           AND   no heap allocation after frame 2 (INV-STEADY-STATE)
+           AND   timeline strictly monotonic across all 20 frames
+```
+
+### 18.15 CommandPoolAllocator + AsyncTaskManager
+
+```
+CT-CPA-11  GIVEN T1 offscreen FM with CPA + AsyncPoolRing
+           WHEN  frame 1: AcquireAsync(Compute) → record BLAS rebuild → submit with completion=5
+           AND   frames 2-6: normal BeginFrame/EndFrame cycle (graphics only)
+           THEN  async pool NOT touched by any ResetSlot(N) during frames 2-6
+           AND   after GPU completes timeline=5: ReleaseAsync succeeds, pool marked free
+
+CT-CPA-12  GIVEN CPA, 3 concurrent async tasks + normal frame loop
+           WHEN  frame loop runs 10 frames while 3 async tasks are in-flight
+           THEN  frame pool ResetSlot never interferes with async pools
+           AND   async pools only released after their individual completion values reached
+           AND   total pool count = frame pools + async pools (no mixing)
+
+CT-CPA-13  GIVEN CPA, async task completes during a frame
+           WHEN  ReleaseAsync called, then AcquireAsync called in same frame
+           THEN  released pool is reused (no new creation)
+           AND   frame pool operations (Acquire/ResetSlot) unaffected
+```
+
+### 18.16 CommandPoolAllocator Memory Shrink Under Frame Loop
+
+```
+CT-CPA-14  GIVEN T1 offscreen FM with CPA (Vulkan, enableHwmShrink=true)
+           WHEN  frame 1: Acquire 50 buffers (spike — large STEP import)
+           AND   frames 2-100: Acquire 2 buffers each (normal rendering)
+           AND   no OOM observed at any point
+           THEN  all ResetSlot calls use fast-path reset (flags=0)
+           AND   no RELEASE_RESOURCES ever used (INV-HWM-OOM: no OOM = no shrink)
+           AND   pool retains high-water memory (320 KB — negligible)
+
+CT-CPA-15  GIVEN T1 offscreen FM with CPA (Vulkan, enableHwmShrink=true)
+           WHEN  Acquire triggers VK_ERROR_OUT_OF_DEVICE_MEMORY (mocked)
+           AND   next BeginFrame calls ResetSlot
+           THEN  ResetSlot uses VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT
+           AND   oomObserved flag cleared after shrink
+           AND   subsequent frames use fast-path reset (no repeated shrink)
+           AND   Acquire still succeeds after shrink
+```
+
+### 18.17 Full CPA End-to-End Simulation
+
+```
+CT-CPA-16  GIVEN T1 offscreen FM (2 frames in flight)
+                 + CommandPoolAllocator (graphics + transfer)
+                 + DeferredDestructor (2 bins)
+                 + SyncScheduler
+           WHEN  50-frame loop:
+                   each frame:
+                     1. BeginFrame → ResetSlot + DrainBin
+                     2. CPA.Acquire(slot, Graphics) ×2
+                     3. SyncScheduler: AllocateSignal(Graphics)
+                     4. On even frames: CPA.Acquire(slot, Transfer) for pending copies
+                     5. Destroy(synthetic resource)
+                     6. EndFrame / EndFrameSplit (alternating)
+                     7. CommitSubmit(Graphics)
+           THEN  FrameNumber() == 50
+           AND   CurrentTimelineValue() == 50 (or higher if split frames)
+           AND   DD PendingCount ≤ 2
+           AND   CPA GetPoolCount() unchanged from creation
+           AND   no crash, no deadlock, no resource leak
+           AND   zero heap allocations after warm-up frame 2
+
+CT-CPA-17  GIVEN CT-CPA-16 scenario extended:
+           WHEN  after 50 frames: Resize(3840, 2160)
+           AND   b = std::move(fm)
+           AND   20 more frames on b
+           THEN  b.FrameNumber() == 70
+           AND   b's CPA fully functional (pools survived move + resize)
+           AND   DD PendingCount ≤ 2 on b
+           AND   original FM moved-from
+```
+
+### 18.18 Composite Test Coverage Matrix
 
 | Category                        | Test IDs       | Behaviors Crossed                                       | Count  |
 | :------------------------------ | :------------- | :------------------------------------------------------ | :----- |
@@ -3068,15 +3533,20 @@ CT-EDGE-08  GIVEN SyncScheduler
 | **End-to-end simulation**       | CT-E2E-01..03  | FM + DD + SS + resize + move (full integration)         | 3      |
 | **SS + DD pure CPU**            | CT-SSDD-01..02 | SyncScheduler × DeferredDestructor (no GPU)             | 2      |
 | **Edge cases / degenerate**     | CT-EDGE-01..08 | Empty submits × self-dependency × single-slot × invalid | 8      |
-| **Total**                       |                |                                                         | **44** |
+| **CPA + FM integration**        | CT-CPA-01..08  | Pool reset × frame lifecycle × transfer dispatch × move | 8      |
+| **CPA + EndFrameSplit**         | CT-CPA-09..10  | Split submit × pool reuse × arena steady state          | 2      |
+| **CPA + AsyncTaskManager**      | CT-CPA-11..13  | Async pool isolation × frame pool × completion fence    | 3      |
+| **CPA + OOM shrink**            | CT-CPA-14..15  | OOM-triggered shrink × frame loop × fast-path default   | 2      |
+| **CPA end-to-end**              | CT-CPA-16..17  | CPA + FM + DD + SS + resize + move (full integration)   | 2      |
+| **Total**                       |                |                                                         | **61** |
 
-### 18.14 Updated Combined Coverage Summary
+### 18.19 Updated Combined Coverage Summary
 
-| Section | Test Type  | Count   |
-| :------ | :--------- | :------ |
-| §17     | Unit tests | 83      |
-| §18     | Composite  | 44      |
-| **Sum** |            | **127** |
+| Section | Test Type       | Count   |
+| :------ | :-------------- | :------ |
+| §17     | Unit tests      | 131     |
+| §18     | Composite tests | 61      |
+| **Sum** |                 | **192** |
 
 ---
 
@@ -3220,8 +3690,20 @@ public:
     struct Desc {
         rhi::DeviceHandle device;
         uint32_t framesInFlight = FrameManager::kDefaultFramesInFlight;
-        bool hasAsyncCompute = false;   ///< Create per-frame compute pools
-        bool hasAsyncTransfer = false;  ///< Create per-frame transfer pools
+        bool hasAsyncCompute = false;       ///< Create per-frame compute pools
+        bool hasAsyncTransfer = false;      ///< Create per-frame transfer pools
+        uint32_t initialArenaCapacity = 16; ///< Pre-reserve arena slots per pool (avoids warm-up realloc)
+        bool enableHwmShrink = false;       ///< Enable HWM adaptive shrink (default: off, see §19.14)
+    };
+
+    struct PoolStats {
+        uint32_t framePoolCount;       ///< Total frame pools (framesInFlight × queueCount)
+        uint32_t asyncPoolCount;       ///< Total async pools (including free)
+        uint32_t asyncPoolsInUse;      ///< Currently in-use async pools
+        uint32_t retainedPoolCount;    ///< Retained pools created (0 if never used)
+        uint32_t currentAcquired;      ///< Buffers currently acquired across all slots
+        uint32_t highWaterMark;        ///< Peak acquired count per slot (historical max)
+        bool hwmShrinkEnabled;         ///< Whether adaptive shrink is active
     };
 
     CommandPoolAllocator() = default;
@@ -3235,31 +3717,32 @@ public:
     /// @brief Create and initialize all native pools.
     /// Called once during FrameManager::Create.
     /// Creates framesInFlight × activeQueueCount pools.
+    /// Arena per pool is pre-reserved to desc.initialArenaCapacity.
     [[nodiscard]] static auto Create(const Desc& desc) -> core::Result<CommandPoolAllocator>;
 
     /// @brief Reset all pools for the given frame slot.
     /// PRECONDITION: GPU has completed all work submitted from this slot.
     /// Called by FrameManager::BeginFrame after WaitForSlot.
-    /// Vulkan: vkResetCommandPool(pool, 0)
-    /// D3D12:  allocator->Reset()
-    /// WebGPU/OpenGL: no-op
+    /// Default: always fast-path reset (vkResetCommandPool flags=0 / allocator->Reset()).
+    /// If enableHwmShrink is true and OOM was previously observed, may use
+    /// VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT (see §19.14).
     void ResetSlot(uint32_t frameSlot);
 
     /// @brief Acquire a command buffer from the current frame slot's pool.
+    /// Returns {CommandListAcquisition, uint32_t arenaIndex} for index-based release.
     /// Vulkan: vkAllocateCommandBuffers (near-zero cost from warm pool)
     /// D3D12:  CreateCommandList1 or Reset(allocator) on cached list
     /// WebGPU: wgpuDeviceCreateCommandEncoder
     /// OpenGL: create deferred command list object
     /// @param frameSlot  Current frame index [0, framesInFlight)
     /// @param queue      Target queue type
-    /// @return CommandListAcquisition with buffer handle + recordable list
     [[nodiscard]] auto Acquire(uint32_t frameSlot, rhi::QueueType queue)
         -> core::Result<rhi::CommandListAcquisition>;
 
-    /// @brief Release a previously acquired command list.
+    /// @brief Release a previously acquired command list by arena index.
     /// Does NOT destroy the native buffer — ResetSlot handles bulk reclamation.
     /// Releases the CommandList wrapper object back to the arena.
-    void Release(const rhi::CommandListAcquisition& acq);
+    void Release(uint32_t frameSlot, rhi::QueueType queue, uint32_t arenaIndex);
 
     /// @brief Query how many command buffers are currently acquired (debug/stats).
     [[nodiscard]] auto GetAcquiredCount(uint32_t frameSlot) const -> uint32_t;
@@ -3267,12 +3750,37 @@ public:
     /// @brief Query total pool count (framesInFlight × activeQueueCount).
     [[nodiscard]] auto GetPoolCount() const -> uint32_t;
 
+    /// @brief Get aggregated statistics (debug/profiling).
+    [[nodiscard]] auto GetStats() const -> PoolStats;
+
+    /// @brief Dump human-readable stats to stream (debug).
+    void DumpStats(FILE* out = stderr) const;
+
+    /// @brief Notify allocator that an OOM was observed during Acquire.
+    /// Enables RELEASE_RESOURCES shrink on next ResetSlot for affected pool.
+    /// Called internally by Acquire on VK_ERROR_OUT_OF_DEVICE_MEMORY / E_OUTOFMEMORY.
+    void NotifyOom(uint32_t frameSlot, rhi::QueueType queue);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
 
 } // namespace miki::frame
+```
+
+**Debug-only submit validation** (§19.3.3 integration, added to `EndFrame` / `EndFrameSplit`):
+
+In debug builds, `FrameManager::EndFrame` asserts that all command buffers passed for submission are in `Executable` state (i.e., `End()` was called after recording). This is verified through the existing `CommandBufferBase::state_` field — no new flag on `CommandListAcquisition` is needed.
+
+```cpp
+// Debug assert in FrameManager::EndFrame, before vkQueueSubmit2:
+#if MIKI_DEBUG
+for (auto& cmd : commandBuffers) {
+    MIKI_ASSERT(cmd.State() == CommandBufferState::Executable,
+                "Submitting command buffer that was not End()'d — state is {}", cmd.State());
+}
+#endif
 ```
 
 ### 19.5 Backend-Specific Implementation Details
@@ -3522,110 +4030,93 @@ The current `commandListArena_` (`std::vector<std::unique_ptr<VulkanCommandBuffe
 1. **Heap allocation** per `Acquire` (`make_unique`)
 2. **O(n) linear search + erase** in `Release`
 
-Replacement: a **pre-allocated, index-based arena** per frame slot:
+Replacement: a **pre-allocated, index-based arena** with hardware-accelerated free-slot lookup.
+
+**Why not `std::vector<bool>`**: `std::vector<bool>` is a C++ standards committee acknowledged design mistake — it stores proxy objects, not actual `bool` values. Linear scanning of proxy bits generates poor machine code that defeats instruction pipelining. Instead, use a 2×`uint64_t` bitmask with `std::countr_zero` (C++20 `<bit>`, maps to CPU `tzcnt`/`bsf`) for **O(1) first-free lookup**.
+
+**Why 128 slots (2 words)**: 64 slots covers 99% of use cases, but extreme scenarios (large STEP assembly import → 100+ transfer copy commands each requiring a secondary command buffer) can exceed 64. 128 slots covers all practical cases with only 1 extra `tzcnt` on the second word. If even 128 is exceeded, a dynamic fallback with MIKI_LOG warning fires (non-fatal, just loses O(1) guarantee).
+
+**Index-based Release**: `Acquire` returns `{T* ptr, uint32_t index}`. `Release` takes `uint32_t index` — no pointer arithmetic, no reliance on `T` being trivially relocatable.
 
 ```cpp
 /// Fixed-capacity arena for CommandBuffer wrapper objects.
-/// No heap allocation after initial frame warm-up.
+/// No heap allocation after initial reserve.
+/// Uses hardware bit-scan for O(1) free-slot discovery.
 template <typename T>
 struct CommandListArena {
-    static constexpr uint32_t kInitialCapacity = 16;
+    static constexpr uint32_t kMaxSlots = 128;  // 2 × uint64_t
+    static constexpr uint32_t kWordsCount = kMaxSlots / 64;
 
-    std::vector<T> storage;         // Pre-allocated, grows only on warm-up
-    std::vector<bool> inUse;        // Bitset for O(1) acquire/release
-    uint32_t nextFreeHint = 0;      // Scan hint for next free slot
+    std::vector<T> storage;                          // Pre-reserved at Create time
+    std::array<uint64_t, kWordsCount> freeMask{};    // 1 = free, 0 = in-use
+    uint32_t capacity = 0;                           // Constructed slot count
 
-    auto Acquire() -> T* {
-        for (uint32_t i = nextFreeHint; i < storage.size(); ++i) {
-            if (!inUse[i]) {
-                inUse[i] = true;
-                nextFreeHint = i + 1;
-                return &storage[i];
+    struct AcquireResult { T* ptr; uint32_t index; };
+
+    void Reserve(uint32_t hint) { storage.reserve(hint); }
+
+    auto Acquire() -> AcquireResult {
+        // Scan 2 words for first free bit — O(1) in practice
+        for (uint32_t w = 0; w < kWordsCount; ++w) {
+            if (freeMask[w] == 0) continue;
+            uint32_t bit = std::countr_zero(freeMask[w]);
+            uint32_t idx = w * 64 + bit;
+            if (idx < capacity) {
+                freeMask[w] &= ~(1ULL << bit);
+                return {&storage[idx], idx};
             }
         }
-        // Grow (only during warm-up frames)
+        // Grow (only during warm-up, or rare spike)
+        if (capacity >= kMaxSlots) {
+            MIKI_LOG(LogCategory::Frame, LogLevel::Warn,
+                     "CommandListArena exceeded {} slots — dynamic fallback", kMaxSlots);
+            // Fallback: append beyond kMaxSlots, no freemask tracking
+            storage.emplace_back();
+            uint32_t idx = capacity++;
+            return {&storage[idx], idx};
+        }
         storage.emplace_back();
-        inUse.push_back(true);
-        nextFreeHint = static_cast<uint32_t>(storage.size());
-        return &storage.back();
+        uint32_t idx = capacity++;
+        uint32_t w = idx / 64, bit = idx % 64;
+        // Bit was implicitly 0 (in-use) since we just grew
+        return {&storage[idx], idx};
     }
 
-    void Release(T* ptr) {
-        auto idx = static_cast<uint32_t>(ptr - storage.data());
-        inUse[idx] = false;
-        if (idx < nextFreeHint) nextFreeHint = idx;
+    void Release(uint32_t index) {
+        if (index < kMaxSlots) {
+            uint32_t w = index / 64, bit = index % 64;
+            freeMask[w] |= (1ULL << bit);
+        }
+        // index >= kMaxSlots: fallback slots, no freemask tracking
     }
 
     void ResetAll() {
-        std::fill(inUse.begin(), inUse.end(), false);
-        nextFreeHint = 0;
+        for (uint32_t w = 0; w < kWordsCount; ++w) {
+            uint32_t bitsInWord = std::min(capacity - w * 64, 64u);
+            freeMask[w] = bitsInWord >= 64 ? ~0ULL : ((1ULL << bitsInWord) - 1);
+        }
+    }
+
+    [[nodiscard]] auto AcquiredCount() const -> uint32_t {
+        uint32_t freeCount = 0;
+        for (uint32_t w = 0; w < kWordsCount; ++w) {
+            uint32_t bitsInWord = std::min(capacity > w * 64 ? capacity - w * 64 : 0u, 64u);
+            uint64_t mask = bitsInWord >= 64 ? ~0ULL : ((1ULL << bitsInWord) - 1);
+            freeCount += std::popcount(freeMask[w] & mask);
+        }
+        return capacity - freeCount;
     }
 };
 ```
 
+**Performance**: `std::countr_zero` compiles to a single `tzcnt` instruction on x86-64 (1 cycle latency, 1 cycle throughput). The steady-state `Acquire` path scans at most 2 words: 2 `tzcnt` + 1 `andn` + 1 array index = **~5 cycles** total, vs. the current `make_unique` + heap allocation (~200+ cycles). Pre-reserving `storage` via `Desc::initialArenaCapacity` eliminates all warm-up realloc in typical workloads.
+
 ### 19.10 Test Specification
 
-Test file: `tests/frame/test_command_pool_allocator.cpp`
+Full unit tests: §17.18 (48 tests in `tests/frame/test_command_pool_allocator.cpp`).
+Composite tests: §18.13–§18.17 (17 tests in `tests/frame/test_frame_manager.cpp`).
 
-```
-CPA-01  GIVEN CommandPoolAllocator with 2 frames in flight, graphics queue only
-        WHEN  Acquire(slot=0, Graphics) called 4 times
-        THEN  4 valid CommandListAcquisitions returned
-        AND   GetAcquiredCount(0) == 4
-        AND   GetPoolCount() == 2 (2 slots × 1 queue)
-
-CPA-02  GIVEN CPA with 2 frames in flight
-        WHEN  slot 0: Acquire 3 buffers, then ResetSlot(0)
-        THEN  GetAcquiredCount(0) == 0
-        AND   subsequent Acquire(slot=0) succeeds (pool reused)
-
-CPA-03  GIVEN CPA with 3 frames in flight, all 3 queues
-        WHEN  ResetSlot(1) called
-        THEN  only slot 1's pools are reset; slot 0 and slot 2 are unaffected
-        AND   buffers acquired from slot 0 remain valid
-
-CPA-04  GIVEN CPA (Vulkan backend)
-        WHEN  Acquire 8 buffers from slot 0, ResetSlot(0), Acquire 8 more
-        THEN  second batch succeeds (pool memory reused, no OOM)
-        AND   total vkCreateCommandPool calls == framesInFlight × queueCount (init only)
-
-CPA-05  GIVEN CPA after 100-frame warm-up loop
-        WHEN  profiling Acquire/Release calls
-        THEN  zero heap allocations in steady state (arena reuse)
-
-CPA-06  GIVEN CPA with moved-from instance (b = std::move(a))
-        WHEN  b.Acquire(0, Graphics) called
-        THEN  succeeds; a is in moved-from state (impl_ == nullptr)
-
-CPA-07  GIVEN CPA
-        WHEN  ~CommandPoolAllocator runs
-        THEN  all native pools destroyed (vkDestroyCommandPool / Release allocator)
-        AND   no resource leaks
-
-CPA-08  GIVEN CPA with asyncTransfer=true
-        WHEN  Acquire(slot=0, Transfer) called
-        THEN  uses transfer queue pool (different VkCommandPool from graphics)
-        AND   Acquire(slot=0, Graphics) uses graphics pool
-
-CPA-09  GIVEN CPA integrated with FrameManager
-        WHEN  FrameManager::BeginFrame called for slot N
-        THEN  CPA.ResetSlot(N) is called after WaitForSlot(N)
-        AND   before DeferredDestructor.DrainBin(N)
-
-CPA-10  GIVEN CPA (Vulkan backend)
-        WHEN  pools created
-        THEN  VkCommandPoolCreateInfo.flags == 0 (no RESET_COMMAND_BUFFER_BIT)
-
-CPA-11  GIVEN CPA with recordingThreadCount=4
-        WHEN  Acquire(slot=0, Graphics, threadIndex=0) and Acquire(slot=0, Graphics, threadIndex=1)
-        THEN  different VkCommandPools used (no contention)
-        AND   GetPoolCount() == framesInFlight × queueCount × threadCount
-
-CPA-12  GIVEN CPA (D3D12 backend)
-        WHEN  Acquire called twice for same slot, then ResetSlot
-        THEN  ID3D12CommandAllocator::Reset() called once
-        AND   cached command lists are reused on next Acquire (no CreateCommandList1)
-```
+See §17.19 and §18.18 for coverage matrices.
 
 ### 19.11 Migration Plan
 
@@ -3638,11 +4129,11 @@ CPA-12  GIVEN CPA (D3D12 backend)
 
 ### 19.12 Files
 
-| File                                          | Namespace     | Purpose                                         |
-| --------------------------------------------- | ------------- | ----------------------------------------------- |
-| `include/miki/frame/CommandPoolAllocator.h`   | `miki::frame` | Public interface                                |
-| `src/miki/frame/CommandPoolAllocator.cpp`     | `miki::frame` | Cross-backend impl via `DeviceHandle::Dispatch` |
-| `tests/frame/test_command_pool_allocator.cpp` | —             | CPA-01..12 tests                                |
+| File                                          | Namespace     | Purpose                                               |
+| --------------------------------------------- | ------------- | ----------------------------------------------------- |
+| `include/miki/frame/CommandPoolAllocator.h`   | `miki::frame` | Public interface                                      |
+| `src/miki/frame/CommandPoolAllocator.cpp`     | `miki::frame` | Cross-backend impl via `DeviceHandle::Dispatch`       |
+| `tests/frame/test_command_pool_allocator.cpp` | —             | 48 unit tests (§17.18) + integration via §18.13–18.17 |
 
 ### 19.13 Invariants
 
@@ -3653,3 +4144,178 @@ CPA-12  GIVEN CPA (D3D12 backend)
 5. **INV-THREAD-ISOLATION**: In multi-thread mode, each `(slot, queue, thread)` triple maps to a unique native pool. No mutex required.
 6. **INV-STEADY-STATE**: After warm-up (typically 2–3 frames), `Acquire`/`Release` perform zero heap allocations.
 7. **INV-ARENA-BOUNDED**: The CommandList wrapper arena per pool grows monotonically to the per-frame high-water mark and never shrinks (avoids realloc churn).
+8. **INV-HWM-OOM**: Memory shrink is only triggered by observed OOM (not by heuristic thresholds). Default policy is always fast-path reset. Shrink is gated behind `Desc::enableHwmShrink`.
+
+### 19.14 Memory Shrink Policy
+
+#### 19.14.1 Problem
+
+Without `RESET_COMMAND_BUFFER_BIT`, `vkResetCommandPool(pool, 0)` retains all physical memory allocated by the pool. D3D12's `ID3D12CommandAllocator::Reset()` similarly retains memory. If a transient spike occurs (e.g., importing a 10GB STEP assembly with thousands of transfer copy commands), the pool's internal memory grows to a high-water mark and stays there permanently.
+
+**Severity**: 🟢 Low for Command Pools specifically. Command recording metadata is small — each `vkCmdCopyBuffer` is ~32 bytes, so even 10,000 copies ≈ 320 KB. The real memory hogs in import spikes are `VkBuffer`/`VkDeviceMemory` in `StagingRing`, not pools. The cost of shrink operations (`VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT` at 5–20 μs, D3D12 destroy+recreate at 50–200 μs) **exceeds** the normal fast-path reset cost by 10–200×.
+
+#### 19.14.2 Design Decision: OOM-Triggered Shrink, Default Off
+
+The previous design (rolling window + cooldown + threshold) was **over-engineered** for the actual problem size. A 320 KB command pool bloat does not justify a 50–200 μs CPU penalty per shrink, nor the complexity of probabilistic shrink heuristics.
+
+**New policy**:
+
+| Default (`enableHwmShrink = false`) | With `enableHwmShrink = true`                                                                                                                    |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Always fast-path reset (flags=0)    | Fast-path reset by default                                                                                                                       |
+| No shrink ever                      | Shrink only on OOM: when `Acquire` observes `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `E_OUTOFMEMORY`, `NotifyOom()` sets a per-pool `oomObserved` flag |
+| Zero overhead                       | Next `ResetSlot` for flagged pool uses RELEASE_RESOURCES; flag cleared after shrink                                                              |
+| Sufficient for 99.9% of workloads   | Safety net for memory-constrained devices (mobile, integrated GPU)                                                                               |
+
+**Shrink action per backend** (only when triggered):
+
+| Backend           | Shrink Action                                                                         | Cost       |
+| ----------------- | ------------------------------------------------------------------------------------- | ---------- |
+| **Vulkan**        | `vkResetCommandPool(pool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT)`               | ~5–20 μs   |
+| **D3D12**         | `allocator.Reset()` then `allocator = nullptr`; `device->CreateCommandAllocator(...)` | ~50–200 μs |
+| **WebGPU/OpenGL** | No-op                                                                                 | 0          |
+
+**Integration into `ResetSlot`**:
+
+```cpp
+void CommandPoolAllocator::ResetSlot(uint32_t frameSlot) {
+    auto& poolSet = poolRing_[frameSlot];
+
+    if (desc_.enableHwmShrink && poolSet.graphics.oomObserved) {
+        // OOM was observed — release physical memory
+        // Vulkan: vkResetCommandPool(pool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT)
+        // D3D12: destroy + recreate allocator
+        ShrinkPool(poolSet.graphics);
+        poolSet.graphics.oomObserved = false;
+    } else {
+        // Fast path (default): vkResetCommandPool(pool, 0) / allocator->Reset()
+        ResetPoolFastPath(poolSet.graphics);
+    }
+    poolSet.graphics.arena.ResetAll();
+}
+```
+
+### 19.15 AsyncTask Pool Ownership
+
+#### 19.15.1 Problem
+
+§19's pool-per-frame model assumes all command buffers are **transient**: recorded once, submitted once, reclaimed at next `BeginFrame` for that slot. However, `AsyncTaskManager` (§12) submits long-running compute tasks (BLAS rebuild, GDeflate decode, GPU QEM) that **span multiple frames**. Their command buffers cannot reside in a frame-rotating pool — `ResetSlot` would invalidate them while the GPU is still consuming them.
+
+§10.2.1 already identifies this problem for D3D12 with the `D3D12AsyncAllocatorPool` sketch, but §19 did not unify it.
+
+#### 19.15.2 Design: Dedicated Async Pool Ring
+
+```cpp
+struct AsyncPoolEntry {
+    VkCommandPool pool = VK_NULL_HANDLE;            // Vulkan
+    // OR: ComPtr<ID3D12CommandAllocator> allocator; // D3D12
+    uint64_t completionFenceValue = 0;  // Timeline value when GPU finishes this task
+    bool inUse = false;
+};
+
+struct AsyncPoolRing {
+    static constexpr uint32_t kInitialPoolCount = 4;
+
+    std::vector<AsyncPoolEntry> pools_;  // Grows on demand, never shrinks
+    rhi::SemaphoreHandle computeTimeline_;
+
+    /// Acquire a pool for a new async task.
+    /// Scans for a pool whose completionFenceValue <= current GPU-completed value.
+    auto Acquire(uint64_t gpuCompletedValue) -> AsyncPoolEntry* {
+        for (auto& entry : pools_) {
+            if (!entry.inUse || entry.completionFenceValue <= gpuCompletedValue) {
+                // Pool is free — reset and reuse
+                ResetPool(entry);  // vkResetCommandPool or allocator->Reset()
+                entry.inUse = true;
+                entry.completionFenceValue = 0;
+                return &entry;
+            }
+        }
+        // All pools busy — create new (rare, only during parallel task spikes)
+        pools_.emplace_back(CreateNewPool());
+        pools_.back().inUse = true;
+        return &pools_.back();
+    }
+
+    /// Mark a pool's task as submitted with expected completion value.
+    void MarkSubmitted(AsyncPoolEntry* entry, uint64_t completionValue) {
+        entry->completionFenceValue = completionValue;
+    }
+
+    /// Release a completed task's pool back to the ring.
+    void Release(AsyncPoolEntry* entry) {
+        entry->inUse = false;
+    }
+};
+```
+
+**Ownership model**:
+
+```
+CommandPoolAllocator (owns)
+├── PoolRing[frameSlot][queue]       ← §19.3: per-frame transient pools
+└── AsyncPoolRing                    ← §19.15: per-task long-lived pools
+    ├── asyncPool[0] (free)
+    ├── asyncPool[1] (in-use, GPU completion at timeline=42)
+    ├── asyncPool[2] (in-use, GPU completion at timeline=50)
+    └── ... (grows on demand)
+```
+
+**Key difference from frame pools**: Async pools are **not** reset by `ResetSlot`. They are individually managed based on per-task GPU completion timeline values. `AsyncTaskManager` calls `AsyncPoolRing::Acquire` when starting a task and `AsyncPoolRing::Release` when the task's fence signals completion.
+
+#### 19.15.3 Integration
+
+```cpp
+class CommandPoolAllocator {
+public:
+    // ... existing frame pool API ...
+
+    /// @brief Acquire a command buffer for an async task (not tied to frame rotation).
+    /// The returned pool must be explicitly released after GPU completion.
+    [[nodiscard]] auto AcquireAsync(rhi::QueueType queue, uint64_t gpuCompletedValue)
+        -> core::Result<AsyncCommandAcquisition>;
+
+    /// @brief Release an async task's pool after GPU completion confirmed.
+    void ReleaseAsync(const AsyncCommandAcquisition& acq);
+};
+```
+
+### 19.16 Retained Command Buffer Extension
+
+#### 19.16.1 Problem
+
+§19 assumes all command buffers are transient (one-shot). Future use cases may require **retained** (reusable) command buffers:
+
+- **UI overlay**: If the UI is static between frames, re-recording identical draw commands wastes CPU. A retained secondary command buffer can be replayed via `vkCmdExecuteCommands`.
+- **Static scene portions**: Pre-built command buffers for unchanging geometry.
+
+#### 19.16.2 Design Direction
+
+Retained command buffers are **not** managed by the frame-rotating pool — they must survive across frame slot resets. Two approaches:
+
+| Approach                    | Mechanism                                                                       | Pros                                | Cons                                                |
+| --------------------------- | ------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------- |
+| **Dedicated retained pool** | Separate `VkCommandPool` (with `RESET_COMMAND_BUFFER_BIT`) for retained buffers | Individual buffer reset; long-lived | Extra pool per queue; per-buffer allocator overhead |
+| **External ownership**      | Application owns the `VkCommandPool`; CPA provides factory method               | Full control                        | Breaks CPA encapsulation                            |
+
+**Recommended**: Dedicated retained pool per queue (not per frame). Created on first `AcquireRetained` call (lazy).
+
+```cpp
+/// @brief Acquire a retained secondary command buffer.
+/// Not tied to frame rotation. Must be explicitly destroyed via ReleaseRetained.
+/// Pool uses RESET_COMMAND_BUFFER_BIT to allow individual buffer reset.
+[[nodiscard]] auto AcquireRetained(rhi::QueueType queue)
+    -> core::Result<rhi::CommandListAcquisition>;
+
+/// @brief Release and destroy a retained command buffer.
+void ReleaseRetained(const rhi::CommandListAcquisition& acq);
+```
+
+**Note**: Retained buffers are a Phase 2+ feature. §19.11 Phase 1 focuses on transient frame pools only.
+
+### 19.17 Updated Invariants (Addendum)
+
+8. **INV-HWM-OOM**: Memory shrink is only triggered by observed OOM (`VK_ERROR_OUT_OF_DEVICE_MEMORY` / `E_OUTOFMEMORY`), never by heuristic thresholds. Default: always fast-path reset. Gated behind `Desc::enableHwmShrink = true`.
+9. **INV-ASYNC-ISOLATION**: Async task pools are independent of frame slot rotation. `ResetSlot(N)` never touches async pools.
+10. **INV-ASYNC-COMPLETION**: An async pool is only reset/reused after its `completionFenceValue` is confirmed reached by the GPU timeline.
+11. **INV-RETAINED-RESET-BIT**: Retained pools are created **with** `RESET_COMMAND_BUFFER_BIT` (unlike transient pools). Individual `vkResetCommandBuffer` is valid on retained buffers.
