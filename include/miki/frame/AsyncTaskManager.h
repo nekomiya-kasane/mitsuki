@@ -31,12 +31,6 @@ namespace miki::frame {
         [[nodiscard]] constexpr auto IsValid() const noexcept -> bool { return id != 0; }
     };
 
-    /// @brief Sync point for cross-queue dependency: {semaphore, value}.
-    struct TimelineSyncPoint {
-        rhi::SemaphoreHandle semaphore;
-        uint64_t value = 0;
-    };
-
     // =========================================================================
     // AsyncTaskManager
     // =========================================================================

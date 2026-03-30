@@ -90,3 +90,10 @@ miki_add_rhi_test(test_rhi_integration     tests/rhi/test_rhi_integration.cpp)
 if(TARGET test_rhi_integration)
     set_tests_properties(test_rhi_integration PROPERTIES TIMEOUT 300)
 endif()
+
+# -- Frame tests (§17 FrameManager / SyncScheduler / DeferredDestructor) ------
+miki_add_test(test_frame_manager tests/frame/test_frame_manager.cpp)
+if(TARGET test_frame_manager)
+    target_include_directories(test_frame_manager PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_frame_manager PROPERTIES TIMEOUT 300)
+endif()
