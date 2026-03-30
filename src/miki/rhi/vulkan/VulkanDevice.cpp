@@ -300,12 +300,17 @@ namespace miki::rhi {
         features2.features.multiDrawIndirect = supported2.features.multiDrawIndirect;
         features2.features.drawIndirectFirstInstance = supported2.features.drawIndirectFirstInstance;
 
+        VkPhysicalDeviceVulkan11Features features11{};
         VkPhysicalDeviceVulkan12Features features12{};
         VkPhysicalDeviceVulkan13Features features13{};
 
         if (tier_ == BackendType::Vulkan14) {
             // Full Vulkan 1.4 — request all critical + nice-to-have features
+            features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+            features11.shaderDrawParameters = VK_TRUE;  // Required for SPIR-V DrawParameters (gl_DrawID)
+
             features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+            features12.pNext = &features11;
             features12.timelineSemaphore = VK_TRUE;
             features12.bufferDeviceAddress = VK_TRUE;
             features12.descriptorIndexing = VK_TRUE;
@@ -347,6 +352,9 @@ namespace miki::rhi {
             }
             if (hasExt(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+            }
+            if (hasExt(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
             }
         }
 
@@ -437,7 +445,7 @@ namespace miki::rhi {
     // =========================================================================
 
     auto VulkanDevice::CreateTimelineSemaphores() -> RhiResult<void> {
-        auto createTimeline = [&](VkSemaphore& outSem) -> VkResult {
+        auto createAndRegister = [&](SemaphoreHandle& outHandle) -> RhiResult<void> {
             VkSemaphoreTypeCreateInfo typeInfo{};
             typeInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
             typeInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -552,6 +560,7 @@ namespace miki::rhi {
         vkGetPhysicalDeviceFeatures(physicalDevice_, &deviceFeatures);
 
         capabilities_.hasAsyncCompute = (queueFamilies_.compute != queueFamilies_.graphics);
+        capabilities_.hasAsyncTransfer = (queueFamilies_.transfer != queueFamilies_.graphics);
         capabilities_.hasMultiDrawIndirect = (deviceFeatures.multiDrawIndirect == VK_TRUE);
         capabilities_.hasSubgroupOps = true;  // Vulkan 1.1+ always has subgroup ops
         capabilities_.hasPushDescriptors = false;

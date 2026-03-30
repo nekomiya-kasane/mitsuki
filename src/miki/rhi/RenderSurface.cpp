@@ -124,6 +124,8 @@ namespace miki::rhi {
             impl_->device.Dispatch([&](auto& dev) { dev.DestroySwapchain(impl_->swapchain); });
             impl_->swapchain = {};
         }
+
+        // Create new swapchain if exists
         auto result = impl_->device.Dispatch([&](auto& dev) { return dev.CreateSwapchain(desc); });
         if (!result) {
             return std::unexpected(core::ErrorCode::InvalidState);

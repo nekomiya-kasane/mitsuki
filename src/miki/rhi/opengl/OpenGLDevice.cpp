@@ -126,6 +126,7 @@ namespace miki::rhi {
         // OpenGL has single queue, no async compute, no ray tracing
         capabilities_.hasTimelineSemaphore = false;
         capabilities_.hasAsyncCompute = false;
+        capabilities_.hasAsyncTransfer = false;
         capabilities_.hasMultiDrawIndirect = true;        // GL 4.3 core
         capabilities_.hasMultiDrawIndirectCount = false;  // Requires GL_ARB_indirect_parameters
         capabilities_.hasBindless = false;                // GL_ARB_bindless_texture — not guaranteed

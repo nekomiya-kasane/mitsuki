@@ -231,6 +231,7 @@ namespace miki::rhi {
 
         // Compute
         cap.hasAsyncCompute = false;
+        cap.hasAsyncTransfer = false;
         cap.hasTimelineSemaphore = false;
         cap.maxComputeWorkGroupCount[0] = lim.maxComputeWorkgroupsPerDimension;
         cap.maxComputeWorkGroupCount[1] = lim.maxComputeWorkgroupsPerDimension;

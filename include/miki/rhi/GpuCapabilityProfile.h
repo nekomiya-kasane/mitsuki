@@ -88,6 +88,7 @@ namespace miki::rhi {
         // Compute
         // =====================================================================
         bool hasAsyncCompute = false;
+        bool hasAsyncTransfer = false;  ///< Dedicated transfer/DMA queue available
         bool hasTimelineSemaphore = false;
         bool hasGlobalPriority = false;        ///< VK_EXT_global_priority / D3D12 queue priority
         uint32_t computeQueueFamilyCount = 0;  ///< Number of distinct compute queue families (Vulkan)

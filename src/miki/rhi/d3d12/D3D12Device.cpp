@@ -259,6 +259,7 @@ namespace miki::rhi {
         // Feature level determines many capabilities
         capabilities_.hasTimelineSemaphore = true;  // D3D12 fences are inherently timeline
         capabilities_.hasAsyncCompute = (queues_.compute.Get() != queues_.graphics.Get());
+        capabilities_.hasAsyncTransfer = true;  // D3D12 always has a dedicated copy command queue
         capabilities_.hasMultiDrawIndirect = true;
         capabilities_.hasMultiDrawIndirectCount = true;  // ExecuteIndirect
         capabilities_.hasBindless = true;
