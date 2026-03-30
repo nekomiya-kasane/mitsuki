@@ -81,7 +81,10 @@ namespace miki::resource {
                 return std::unexpected(core::ErrorCode::OutOfMemory);
             }
             std::memcpy(*mapResult, iData, iSize);
-            impl_->device.Dispatch([&](auto& dev) { dev.UnmapBuffer(*bufResult); });
+            impl_->device.Dispatch([&](auto& dev) {
+                dev.FlushMappedRange(*bufResult, 0, iSize);
+                dev.UnmapBuffer(*bufResult);
+            });
 
             // Enqueue for deferred destruction after GPU consumes the copy
             if (impl_->deferredDestructor) {
@@ -104,6 +107,18 @@ namespace miki::resource {
 
         UploadPath path = (iSize <= kStagingRingThreshold) ? UploadPath::StagingRing : UploadPath::StagingRingLarge;
         return UploadResult{.path = path, .size = iSize};
+    }
+
+    auto UploadManager::UploadTexture(
+        std::span<const std::byte> iData, rhi::TextureHandle iDst, const TextureUploadRegion& iRegion
+    ) -> core::Result<void> {
+        assert(impl_ && "UploadManager used after move");
+        if (iData.empty()) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
+        }
+        // Texture uploads always route through StagingRing — layout transitions
+        // require graphics queue, so dedicated buffer or ReBAR paths don't apply.
+        return impl_->stagingRing->UploadTexture(iData, iDst, iRegion);
     }
 
 }  // namespace miki::resource

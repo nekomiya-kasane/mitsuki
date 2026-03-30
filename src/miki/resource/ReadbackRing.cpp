@@ -7,6 +7,8 @@
 #include "miki/resource/ReadbackRing.h"
 #include "ChunkPool.h"
 
+#include "miki/rhi/backend/AllCommandBuffers.h"
+
 #include <algorithm>
 #include <cassert>
 #include <vector>
@@ -24,6 +26,8 @@ namespace miki::resource {
         uint64_t writePos = 0;
         bool alive = true;
         uint64_t retiredAtFence = ~0ull;
+        uint32_t generation = 0;           ///< Incremented on each reuse; tickets carry a snapshot for stale detection
+        mutable bool invalidated = false;  ///< True after InvalidateMappedRange called for this retirement cycle
     };
 
     struct PendingBufferReadback {
@@ -75,6 +79,8 @@ namespace miki::resource {
                 auto& c = pool.chunks[ci];
                 c.writePos = 0;
                 c.retiredAtFence = ~0ull;
+                ++c.generation;
+                c.invalidated = false;
                 if (iSize <= c.capacity) {
                     pool.freeChunks[i] = pool.freeChunks.back();
                     pool.freeChunks.pop_back();
@@ -154,7 +160,9 @@ namespace miki::resource {
             {.chunkIndex = ci, .dstOffset = off, .size = iSize, .src = iSrc, .srcOffset = iSrcOffset}
         );
         impl_->bytesReadbackThisFrame += iSize;
-        return ReadbackTicket{.chunkIndex_ = ci, .chunkOffset_ = off, .size = iSize};
+        return ReadbackTicket{
+            .chunkIndex_ = ci, .chunkOffset_ = off, .size = iSize, .generation_ = impl_->pool.chunks[ci].generation
+        };
     }
 
     auto ReadbackRing::EnqueueTextureReadback(
@@ -172,7 +180,55 @@ namespace miki::resource {
             {.chunkIndex = ci, .dstOffset = off, .size = iDataSize, .src = iSrc, .region = iRegion}
         );
         impl_->bytesReadbackThisFrame += iDataSize;
-        return ReadbackTicket{.chunkIndex_ = ci, .chunkOffset_ = off, .size = iDataSize};
+        return ReadbackTicket{
+            .chunkIndex_ = ci, .chunkOffset_ = off, .size = iDataSize, .generation_ = impl_->pool.chunks[ci].generation
+        };
+    }
+
+    // =========================================================================
+    // Record GPU copy commands
+    // =========================================================================
+
+    auto ReadbackRing::RecordTransfers(rhi::CommandListHandle& iCmd) -> uint32_t {
+        uint32_t count = 0;
+
+        for (auto const& rb : impl_->pendingBufferReadbacks) {
+            auto const& c = impl_->pool.chunks[rb.chunkIndex];
+            iCmd.Dispatch([&](auto& cmd) { cmd.CmdCopyBuffer(rb.src, rb.srcOffset, c.buffer, rb.dstOffset, rb.size); });
+            ++count;
+        }
+
+        for (auto const& tr : impl_->pendingTextureReadbacks) {
+            auto const& c = impl_->pool.chunks[tr.chunkIndex];
+            rhi::BufferTextureCopyRegion region{
+                .bufferOffset = tr.dstOffset,
+                .bufferRowLength = tr.region.rowLength,
+                .bufferImageHeight = tr.region.imageHeight,
+                .subresource
+                = {.baseMipLevel = tr.region.mipLevel,
+                   .mipLevelCount = 1,
+                   .baseArrayLayer = tr.region.arrayLayer,
+                   .arrayLayerCount = 1},
+                .textureOffset
+                = {.x = static_cast<int32_t>(tr.region.offsetX),
+                   .y = static_cast<int32_t>(tr.region.offsetY),
+                   .z = static_cast<int32_t>(tr.region.offsetZ)},
+                .textureExtent = {.width = tr.region.width, .height = tr.region.height, .depth = tr.region.depth},
+            };
+            iCmd.Dispatch([&](auto& cmd) { cmd.CmdCopyTextureToBuffer(tr.src, c.buffer, region); });
+            ++count;
+        }
+
+        impl_->pendingBufferReadbacks.clear();
+        impl_->pendingTextureReadbacks.clear();
+        return count;
+    }
+
+    auto ReadbackRing::GetPendingCopyCount() const noexcept -> uint32_t {
+        if (!impl_) {
+            return 0;
+        }
+        return static_cast<uint32_t>(impl_->pendingBufferReadbacks.size() + impl_->pendingTextureReadbacks.size());
     }
 
     // =========================================================================
@@ -187,8 +243,6 @@ namespace miki::resource {
             impl_->pool.chunks[ci].retiredAtFence = iFenceValue;
         }
         impl_->pool.FlushFrame(iFenceValue);
-        impl_->pendingBufferReadbacks.clear();
-        impl_->pendingTextureReadbacks.clear();
         impl_->bytesReadbackThisFrame = 0;
     }
 
@@ -209,8 +263,8 @@ namespace miki::resource {
             return false;
         }
         auto const& c = impl_->pool.chunks[iTicket.chunkIndex_];
-        if (!c.alive || c.retiredAtFence == ~0ull) {
-            return false;
+        if (!c.alive || c.generation != iTicket.generation_ || c.retiredAtFence == ~0ull) {
+            return false;  // Stale ticket or chunk not yet retired
         }
         return impl_->lastCompletedFence >= c.retiredAtFence;
     }
@@ -222,14 +276,15 @@ namespace miki::resource {
         if (iTicket.chunkIndex_ >= impl_->pool.chunks.size()) {
             return {};
         }
-        auto const& c = impl_->pool.chunks[iTicket.chunkIndex_];
-        if (!c.alive || iTicket.chunkOffset_ + iTicket.size > c.capacity) {
-            return {};
+        auto& c = impl_->pool.chunks[iTicket.chunkIndex_];
+        if (!c.alive || c.generation != iTicket.generation_ || iTicket.chunkOffset_ + iTicket.size > c.capacity) {
+            return {};  // Stale ticket or out-of-bounds
         }
-        // Invalidate CPU cache for non-coherent memory before reading GPU-written data
-        impl_->pool.device.Dispatch([&](auto& dev) {
-            dev.InvalidateMappedRange(c.buffer, iTicket.chunkOffset_, iTicket.size);
-        });
+        // Invalidate CPU cache once per chunk retirement (non-coherent memory correctness)
+        if (!c.invalidated) {
+            impl_->pool.device.Dispatch([&](auto& dev) { dev.InvalidateMappedRange(c.buffer, 0, c.writePos); });
+            c.invalidated = true;
+        }
         return {c.mapped + iTicket.chunkOffset_, iTicket.size};
     }
 

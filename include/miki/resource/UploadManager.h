@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 
 #include "miki/core/Result.h"
 #include "miki/rhi/Device.h"
@@ -25,6 +26,7 @@ namespace miki::frame {
 
 namespace miki::resource {
 
+    struct TextureUploadRegion;  // Forward-declared from StagingRing.h
     class StagingRing;
 
     static constexpr uint64_t kStagingRingThreshold = 256ULL * 1024;  // 256KB
@@ -59,9 +61,10 @@ namespace miki::resource {
         /// @param iDeferredDestructor Pointer to deferred destructor for Path C cleanup (must outlive).
         /// @param iRebarAvailable     Whether ReBAR (resizable BAR) is available for direct VRAM writes.
         /// @param iRebarBudget        Maximum size for ReBAR direct writes (bytes).
-        [[nodiscard]] static auto Create(rhi::DeviceHandle iDevice, StagingRing* iStagingRing,
-                                         frame::DeferredDestructor* iDeferredDestructor, bool iRebarAvailable = false,
-                                         uint64_t iRebarBudget = 0) -> core::Result<UploadManager>;
+        [[nodiscard]] static auto Create(
+            rhi::DeviceHandle iDevice, StagingRing* iStagingRing, frame::DeferredDestructor* iDeferredDestructor,
+            bool iRebarAvailable = false, uint64_t iRebarBudget = 0
+        ) -> core::Result<UploadManager>;
 
         /// @brief Upload data to a GPU buffer, automatically choosing the optimal path.
         /// @param iDst   Destination GPU buffer.
@@ -71,6 +74,13 @@ namespace miki::resource {
         /// @return UploadResult describing which path was used and staging info for copy recording.
         [[nodiscard]] auto Upload(rhi::BufferHandle iDst, uint64_t iDstOffset, const void* iData, uint64_t iSize)
             -> core::Result<UploadResult>;
+
+        /// @brief Upload texture data, routing through StagingRing (Path A/B).
+        /// Texture upload always goes through staging ring — no ReBAR or dedicated buffer path
+        /// because texture copies require layout transitions on the graphics queue.
+        [[nodiscard]] auto UploadTexture(
+            std::span<const std::byte> iData, rhi::TextureHandle iDst, const TextureUploadRegion& iRegion
+        ) -> core::Result<void>;
 
        private:
         struct Impl;

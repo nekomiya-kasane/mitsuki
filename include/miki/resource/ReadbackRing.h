@@ -27,6 +27,7 @@
 #include <span>
 
 #include "miki/core/Result.h"
+#include "miki/rhi/CommandBuffer.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Handle.h"
 
@@ -43,6 +44,7 @@ namespace miki::resource {
         uint32_t chunkIndex_ = ~0u;
         uint64_t chunkOffset_ = 0;
         uint64_t size = 0;
+        uint32_t generation_ = 0;  ///< Matches chunk generation at allocation time
         [[nodiscard]] constexpr auto IsValid() const noexcept -> bool { return chunkIndex_ != ~0u && size > 0; }
     };
 
@@ -75,6 +77,17 @@ namespace miki::resource {
         [[nodiscard]] auto EnqueueTextureReadback(
             rhi::TextureHandle iSrc, const TextureReadbackRegion& iRegion, uint64_t iDataSize
         ) -> core::Result<ReadbackTicket>;
+
+        // ── Record GPU copy commands ──────────────────────────────────
+
+        /// @brief Record all pending GPU→readback buffer copies into a command buffer.
+        /// Emits CmdCopyBuffer and CmdCopyTextureToBuffer for all enqueued readbacks.
+        /// Clears the pending lists after recording.
+        /// @return Number of copy commands recorded.
+        auto RecordTransfers(rhi::CommandListHandle& iCmd) -> uint32_t;
+
+        /// @brief Number of pending copies not yet recorded.
+        [[nodiscard]] auto GetPendingCopyCount() const noexcept -> uint32_t;
 
         // ── Frame lifecycle ─────────────────────────────────────────
 

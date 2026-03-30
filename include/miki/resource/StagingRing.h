@@ -12,8 +12,7 @@
  *    - Unified buffer + texture upload path
  *    - Per-frame fence retirement (no manual Reset/WaitIdle)
  *    - Oversized allocs get dedicated chunks (no multi-batch flush)
- *    - ReBAR tiered fast-path for small allocs (zero DMA copy)
- *    - WebGPU shadow buffer fallback (no persistent mapping)
+ *    - ReBAR tiered fast-path (HOST_VISIBLE|DEVICE_LOCAL, zero DMA copy)
  *    - FlushMappedRange for non-coherent memory (mobile Vulkan)
  *    - ShrinkToFit for long-running VRAM reclaim
  *
@@ -29,12 +28,14 @@
 #include <span>
 
 #include "miki/core/Result.h"
+#include "miki/rhi/CommandBuffer.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Handle.h"
 
 namespace miki::resource {
 
-    inline constexpr uint64_t kStagingAlignment = 256;  ///< Covers Vulkan/D3D12/WebGPU requirements
+    inline constexpr uint64_t kStagingAlignment = 256;        ///< Covers Vulkan/D3D12/WebGPU requirements
+    inline constexpr uint32_t kBlockingAllocTimeoutMs = 100;  ///< Default timeout for AllocateBlocking (ms)
 
     struct StagingRingDesc {
         uint64_t chunkSize = uint64_t{4} << 20;  ///< Per-chunk capacity (default 4 MB)
@@ -78,6 +79,15 @@ namespace miki::resource {
         [[nodiscard]] auto Allocate(uint64_t iSize, uint64_t iAlignment = kStagingAlignment)
             -> core::Result<StagingAllocation>;
 
+        /// @brief Blocking allocate: retries Allocate() after triggering reclaim on the device.
+        /// Designed for Path B (256KB-64MB) where the ring may be temporarily full.
+        /// @param iSize           Allocation size.
+        /// @param iAlignment      Alignment (default 256).
+        /// @param iTimeoutMs      Max milliseconds to spin before returning OutOfMemory.
+        [[nodiscard]] auto AllocateBlocking(
+            uint64_t iSize, uint64_t iAlignment = kStagingAlignment, uint32_t iTimeoutMs = kBlockingAllocTimeoutMs
+        ) -> core::Result<StagingAllocation>;
+
         void EnqueueBufferCopy(const StagingAllocation& iAlloc, rhi::BufferHandle iDst, uint64_t iDstOffset);
         void EnqueueTextureCopy(
             const StagingAllocation& iAlloc, rhi::TextureHandle iDst, const TextureUploadRegion& iRegion
@@ -90,6 +100,17 @@ namespace miki::resource {
         [[nodiscard]] auto UploadTexture(
             std::span<const std::byte> iData, rhi::TextureHandle iDst, const TextureUploadRegion& iRegion
         ) -> core::Result<void>;
+
+        // ── Record GPU copy commands ─────────────────────────────────
+
+        /// @brief Record all pending buffer and texture copies into a command buffer.
+        /// Caller decides which queue's cmd to pass (graphics or transfer).
+        /// Clears the pending copy lists after recording.
+        /// @return Number of copy commands recorded.
+        auto RecordTransfers(rhi::CommandListHandle& iCmd) -> uint32_t;
+
+        /// @brief Number of pending copies not yet recorded.
+        [[nodiscard]] auto GetPendingCopyCount() const noexcept -> uint32_t;
 
         // ── Frame lifecycle ─────────────────────────────────────────
 

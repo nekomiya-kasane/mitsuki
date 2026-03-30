@@ -7,9 +7,13 @@
 #include "miki/resource/StagingRing.h"
 #include "ChunkPool.h"
 
+#include "miki/rhi/backend/AllCommandBuffers.h"
+
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 namespace miki::resource {
@@ -55,8 +59,19 @@ namespace miki::resource {
         std::vector<PendingTextureCopy> pendingTextureCopies;
 
         uint64_t bytesUploadedThisFrame = 0;
+        bool rebarAvailable = false;
 
         auto CreateStagingChunk(uint64_t iCapacity) -> core::Result<uint32_t> {
+            // Try ReBAR path first (HOST_VISIBLE | DEVICE_LOCAL — zero DMA copy)
+            if (rebarAvailable) {
+                auto result = pool.CreateChunk(iCapacity, rhi::BufferUsage::TransferSrc, rhi::MemoryLocation::GpuToCpu);
+                // GpuToCpu is the closest enum to DeviceLocal+HostVisible on some backends;
+                // if the backend supports ReBAR, VMA will place this in BAR memory.
+                // Fallback: if it fails, use normal CpuToGpu staging.
+                if (result) {
+                    return result;
+                }
+            }
             return pool.CreateChunk(iCapacity, rhi::BufferUsage::TransferSrc, rhi::MemoryLocation::CpuToGpu);
         }
 
@@ -94,6 +109,7 @@ namespace miki::resource {
         impl->pool.chunkSize = iDesc.chunkSize;
         impl->pool.maxChunks = iDesc.maxChunks;
         impl->desc = iDesc;
+        impl->rebarAvailable = iDevice.Dispatch([](auto& dev) { return dev.GetCapabilities().hasResizableBAR; });
 
         // Pre-allocate one chunk
         auto chunkResult = impl->CreateStagingChunk(iDesc.chunkSize);
@@ -153,6 +169,35 @@ namespace miki::resource {
         assert(alloc.IsValid());
         impl_->bytesUploadedThisFrame += iSize;
         return alloc;
+    }
+
+    auto StagingRing::AllocateBlocking(uint64_t iSize, uint64_t iAlignment, uint32_t iTimeoutMs)
+        -> core::Result<StagingAllocation> {
+        // Fast path: try non-blocking first
+        auto result = Allocate(iSize, iAlignment);
+        if (result) {
+            return result;
+        }
+
+        // Spin-reclaim loop: poll GPU timeline, reclaim completed chunks, retry
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(iTimeoutMs);
+        while (std::chrono::steady_clock::now() < deadline) {
+            // Query the device's graphics timeline to find newly completed frames
+            auto gpuValue = impl_->pool.device.Dispatch([](auto& dev) {
+                auto timelines = dev.GetQueueTimelines();
+                return dev.GetSemaphoreValue(timelines.graphics);
+            });
+            impl_->pool.ReclaimCompleted(gpuValue);
+
+            result = Allocate(iSize, iAlignment);
+            if (result) {
+                return result;
+            }
+
+            std::this_thread::yield();
+        }
+
+        return std::unexpected(core::ErrorCode::OutOfMemory);
     }
 
     // =========================================================================
@@ -224,13 +269,57 @@ namespace miki::resource {
     }
 
     // =========================================================================
+    // Record GPU copy commands
+    // =========================================================================
+
+    auto StagingRing::RecordTransfers(rhi::CommandListHandle& iCmd) -> uint32_t {
+        uint32_t count = 0;
+
+        for (auto const& cp : impl_->pendingBufferCopies) {
+            auto const& c = impl_->pool.chunks[cp.chunkIndex];
+            iCmd.Dispatch([&](auto& cmd) { cmd.CmdCopyBuffer(c.buffer, cp.srcOffset, cp.dst, cp.dstOffset, cp.size); });
+            ++count;
+        }
+
+        for (auto const& tp : impl_->pendingTextureCopies) {
+            auto const& c = impl_->pool.chunks[tp.chunkIndex];
+            rhi::BufferTextureCopyRegion region{
+                .bufferOffset = tp.srcOffset,
+                .bufferRowLength = tp.region.rowLength,
+                .bufferImageHeight = tp.region.imageHeight,
+                .subresource
+                = {.baseMipLevel = tp.region.mipLevel,
+                   .mipLevelCount = 1,
+                   .baseArrayLayer = tp.region.arrayLayer,
+                   .arrayLayerCount = 1},
+                .textureOffset
+                = {.x = static_cast<int32_t>(tp.region.offsetX),
+                   .y = static_cast<int32_t>(tp.region.offsetY),
+                   .z = static_cast<int32_t>(tp.region.offsetZ)},
+                .textureExtent = {.width = tp.region.width, .height = tp.region.height, .depth = tp.region.depth},
+            };
+            iCmd.Dispatch([&](auto& cmd) { cmd.CmdCopyBufferToTexture(c.buffer, tp.dst, region); });
+            ++count;
+        }
+
+        impl_->pendingBufferCopies.clear();
+        impl_->pendingTextureCopies.clear();
+        return count;
+    }
+
+    auto StagingRing::GetPendingCopyCount() const noexcept -> uint32_t {
+        if (!impl_) {
+            return 0;
+        }
+        return static_cast<uint32_t>(impl_->pendingBufferCopies.size() + impl_->pendingTextureCopies.size());
+    }
+
+    // =========================================================================
     // Frame lifecycle
     // =========================================================================
 
     auto StagingRing::FlushFrame(uint64_t iFenceValue) -> void {
         impl_->pool.FlushFrame(iFenceValue);
-        impl_->pendingBufferCopies.clear();
-        impl_->pendingTextureCopies.clear();
         impl_->bytesUploadedThisFrame = 0;
     }
 
