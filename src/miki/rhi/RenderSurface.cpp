@@ -172,10 +172,13 @@ namespace miki::rhi {
         if (!impl_ || !impl_->swapchain.IsValid()) {
             return std::unexpected(core::ErrorCode::InvalidState);
         }
+        // Note: inFlightFence is NOT passed here — it is exclusively signaled by
+        // vkQueueSubmit2 in EndFrame (CPU wait for GPU work completion).
+        // Passing it to both Acquire and Submit would double-signal the fence,
+        // violating VUID-vkQueueSubmit2-fence-04895.
+        // GPU-side acquire sync is handled by imageAvailable binary semaphore.
         auto result = impl_->device.Dispatch([&](auto& dev) {
-            return dev.AcquireNextImage(
-                impl_->swapchain, impl_->syncInfo.imageAvailable, impl_->syncInfo.inFlightFence
-            );
+            return dev.AcquireNextImage(impl_->swapchain, impl_->syncInfo.imageAvailable, {});
         });
         if (!result) {
             return std::unexpected(core::ErrorCode::InvalidState);

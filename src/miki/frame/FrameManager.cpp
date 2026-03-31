@@ -134,7 +134,7 @@ namespace miki::frame {
             } else if (IsFenceBased()) {
                 // T2: CPU wait on per-slot fence, then reset for next use
                 // Note: Fence is created signaled, so first frame skips wait but still resets.
-                // vkAcquireNextImageKHR requires unsignaled fence.
+                // vkQueueSubmit2 requires unsignaled fence (VUID-vkQueueSubmit2-fence-04895).
                 if (slot.fence.IsValid()) {
                     if (slot.timelineValue > 0) {
                         device.Dispatch([&](auto& dev) { dev.WaitFence(slot.fence, UINT64_MAX); });

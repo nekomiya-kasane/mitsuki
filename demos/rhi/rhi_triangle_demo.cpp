@@ -219,9 +219,10 @@ struct TriangleRenderer {
         }
         pipelineLayout = *pl;
 
-        // Graphics pipeline
+        // Graphics pipeline — query actual swapchain format from the attached surface
         ColorAttachmentBlend blend{};
-        Format colorFmt = Format::BGRA8_UNORM;
+        auto* rs = surfaceManager->GetRenderSurface(window);
+        Format colorFmt = rs ? rs->GetFormat() : Format::BGRA8_SRGB;
         GraphicsPipelineDesc gpd{};
         gpd.vertexShader = vertShader;
         gpd.fragmentShader = fragShader;
