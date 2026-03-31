@@ -1143,10 +1143,12 @@ The cascade destruction protocol (01-window-manager.md §6) calls `FrameManager:
 | --------- | -------------------------------------------------------------------------------------- | -------------------------------------- |
 | T1 Vulkan | `vkWaitSemaphores` on `{graphicsTimeline, lastSubmittedValue}`                         | Only this surface's in-flight frames   |
 | T1 D3D12  | `ID3D12Fence::SetEventOnCompletion(lastSubmittedValue, event)` + `WaitForSingleObject` | Only this surface's in-flight frames   |
-| T2 Compat | `vkWaitForFences` on this surface's per-slot fences                                    | Only this surface's 2 in-flight frames |
+| T2 Compat | `vkWaitForFences` on this surface's per-slot fences (**wait-only, no reset**)          | Only this surface's 2 in-flight frames |
 | T3/T4     | Implicit (single queue, blocking present already drained)                              | N/A                                    |
 
 **Critical**: This is NOT `device->WaitIdle()`. Each window's FrameManager tracks its own ring of submitted timeline values (§8.3). WaitAll() waits only for the highest value this specific surface submitted. Other windows' GPU work is completely unaffected.
+
+**T2 fence lifecycle invariant**: `WaitAll()` is a **pure drain** operation with no side effects on sync objects. It does NOT reset fences. Fence reset is the exclusive responsibility of `BeginFrame` (via `ResetSlotFence`), which runs immediately after `WaitForSlot` confirms GPU completion. This separation prevents a deadlock that would occur if `WaitAll()` reset a fence with no subsequent `vkQueueSubmit` to re-signal it (e.g., resize or reconfigure path where `WaitAll` → swapchain recreation → next `BeginFrame`). On an already-signaled fence, `vkWaitForFences` returns `VK_SUCCESS` immediately (Vulkan spec §7.3), so the redundant wait in the next `BeginFrame` has zero performance cost.
 
 ### 9.2 Destruction Sequence (Sync Details)
 
