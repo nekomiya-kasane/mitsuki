@@ -203,12 +203,12 @@ RenderGraphBuilder  ->  RenderGraphCompiler  ->  RenderGraphExecutor
 
 ### 2.2 Backend-Specific Execution
 
-| Backend | Render Pass Model                            | Barrier Model         | Async Compute         |
-| ------- | -------------------------------------------- | --------------------- | --------------------- |
-| Vulkan  | Dynamic rendering (VK_KHR_dynamic_rendering) | vkCmdPipelineBarrier2 | Timeline semaphore    |
-| D3D12   | BeginRenderPass/EndRenderPass                | ResourceBarrier       | Fence + secondary cmd |
-| OpenGL  | FBO bind/unbind                              | glMemoryBarrier       | N/A (single queue)    |
-| WebGPU  | Render pass encoder                          | Implicit (Dawn)       | N/A (single queue)    |
+| Backend | Render Pass Model                            | Barrier Model         | Async Compute                          |
+| ------- | -------------------------------------------- | --------------------- | -------------------------------------- |
+| Vulkan  | Dynamic rendering (VK_KHR_dynamic_rendering) | vkCmdPipelineBarrier2 | Timeline semaphore                     |
+| D3D12   | BeginRenderPass/EndRenderPass                | ResourceBarrier       | ID3D12Fence (timeline) + compute queue |
+| OpenGL  | FBO bind/unbind                              | glMemoryBarrier       | N/A (single queue)                     |
+| WebGPU  | Render pass encoder                          | Implicit (Dawn)       | N/A (single queue)                     |
 
 ### 2.3 Resource Lifetime
 
@@ -217,11 +217,13 @@ Create (CPU) -> Upload (StagingRing) -> Register (BindlessTable) -> Use (GPU sha
                                                                        |
                                       ResidencyFeedback <- GPU counters (ReadbackRing)
                                                                        |
-                                      MemoryBudget -> LRU Evict -> Destroy (deferred, 2-frame latency)
+                                      MemoryBudget -> LRU Evict -> Destroy (deferred, framesInFlight latency; see 03-sync.md §6)
 
 GPU -> CPU readback path (timestamps, shader printf, breadcrumbs, telemetry):
-  GPU write -> CmdCopyBuffer -> ReadbackRing (GpuToCpu, persistent-mapped) -> CPU read (after fence)
+  GPU write -> CmdCopyBuffer -> ReadbackRing (GpuToCpu, persistent-mapped) -> CPU read (after timeline wait at BeginFrame on T1; fence on T2; see 03-sync.md §7)
 ```
+
+> **Cross-ref**: Frame pipelining (BeginFrame/EndFrame semantics, CPU wait formula, split-submit, multi-window frame pacing) is specified in `03-sync.md` §4-§9.
 
 ---
 
@@ -532,15 +534,15 @@ GPU -> CPU readback path (timestamps, shader printf, breadcrumbs, telemetry):
 
 #### Pass #85: DDGI Probes
 
-| Item          | Specification                                                                                                                       |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Condition** | T1 + RT HW. Enhanced/Ultra preset. Phase 19.                                                                                        |
-| **Input**     | `BLAS/TLAS` + `ProbeGrid` SSBO: `{float3 position, float3[9] irradianceSH, float[8] visibilityOct}` per probe                       |
-| **Output**    | Updated `ProbeGrid` SSBO (irradiance + visibility octahedral maps, exponential moving average)                                      |
-| **Algorithm** | Per probe: trace 32-64 short rays -> update irradiance SH + visibility octahedral via EMA. Probe relocation (move out of geometry). |
-| **Dispatch**  | Compute (ray query): `ceil(probeCount/32)` workgroups, 32-64 rays per probe                                                         |
-| **Consumer**  | Deferred Resolve (#18) samples probe grid for stable diffuse GI (trilinear + Chebyshev visibility)                                  |
-| **Budget**    | <2ms @1K probes                                                                                                                     |
+| Item          | Specification                                                                                                                                                                                                                                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Condition** | T1 + RT HW. Enhanced/Ultra preset. Phase 19.                                                                                                                                                                                                                                                                                                         |
+| **Input**     | `BLAS/TLAS` + `ProbeGrid` SSBO: `{float3 position, float3[9] irradianceSH, float[8] visibilityOct}` per probe                                                                                                                                                                                                                                        |
+| **Output**    | Updated `ProbeGrid` SSBO (irradiance + visibility octahedral maps, exponential moving average). **Double-buffered**: write to `ProbeGrid[writeIndex]`, Deferred Resolve (#18) reads `ProbeGrid[readIndex]`; indices swap each frame. Required to prevent cross-frame write/read race when async compute overlaps graphics (see `03-sync.md` §7.4.2). |
+| **Algorithm** | Per probe: trace 32-64 short rays -> update irradiance SH + visibility octahedral via EMA. Probe relocation (move out of geometry).                                                                                                                                                                                                                  |
+| **Dispatch**  | Compute (ray query): `ceil(probeCount/32)` workgroups, 32-64 rays per probe                                                                                                                                                                                                                                                                          |
+| **Consumer**  | Deferred Resolve (#18) samples probe grid for stable diffuse GI (trilinear + Chebyshev visibility)                                                                                                                                                                                                                                                   |
+| **Budget**    | <2ms @1K probes                                                                                                                                                                                                                                                                                                                                      |
 
 #### Pass #86: GPU Debug Visualization
 
@@ -595,13 +597,13 @@ Frame N:
 | |TLAS  | |Cull   | |VisBuffer(1 PSO)  | |(dirty pg)| |Res.| |->Tone  ||
 | +------+ +-------+ +-----------------+ +----------+ +----+ +--------+|
 |                                                                        |
-| Async Compute Queue (optional)                                         |
+| Async Compute Queue (optional; see 03-sync.md §5.8.2 ComputeQueueLevel A-D degradation) |
 | +----------+ +--------------+                                         |
 | |GTAO      | |Material Sort |                                         |
 | |(half-res)| |+ Resolve     |                                         |
 | +----------+ +--------------+                                         |
 |                                                                        |
-| Transfer Queue (Vulkan 1.4 streaming)                                  |
+| Transfer Queue (Vulkan 1.4 streaming; see 03-sync.md §7 for sync)     |
 | +-------------------------+                                            |
 | |Cluster stream upload    |                                            |
 | |(non-blocking)           |                                            |
@@ -692,7 +694,7 @@ Every step references the DAG pass number from §3.
 | 6    | #4          | Macro-Binning           | Compute              | Classify visible instances into 3 buckets: Opaque / Transparent / Edge                                                                 |
 | 7    | #5→#6→#9    | Task→Mesh→VisBuffer     | Graphics             | Single PSO, 1 draw call. Task shader emits meshlet groups → Mesh shader outputs triangles → VisBuffer R32G32_UINT                      |
 | 8    | #7          | SW Rasterizer (opt)     | Compute              | Small triangles (<4px²) → uint64 SSBO atomicMax → resolve pass → VisBuffer                                                             |
-| 9    | #10         | Material Resolve        | Compute              | Tile-based (16×16): BDA vertex fetch → DSPBR 8-layer BSDF → GBuffer MRT (RT0 albedo+metallic, RT1 normal+roughness, RT2 motion, Depth) |
+| 9    | #10         | Material Resolve        | Compute (Async)      | Tile-based (16×16): BDA vertex fetch → DSPBR 8-layer BSDF → GBuffer MRT (RT0 albedo+metallic, RT1 normal+roughness, RT2 motion, Depth) |
 | 10   | #12         | VSM Render              | Graphics (Mesh)      | Virtual Shadow Maps: render only dirty pages (128×128 tiles, 16K² virtual)                                                             |
 | 11   | #14         | Shadow Atlas            | Graphics             | Point/spot light shadow: LRU tile atlas, distance-scaled resolution                                                                    |
 | 12   | #15         | GTAO                    | Compute              | Half-res, 8 directions × 2 horizon steps, bilateral upsample. Async compute candidate                                                  |
