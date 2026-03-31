@@ -32,6 +32,109 @@
 namespace miki::rhi {
 
     // =========================================================================
+    // volk KHR/EXT → core aliasing
+    // =========================================================================
+
+    namespace {
+        // Patch volk function pointers: if a core function is NULL but its KHR/EXT
+        // alias exists, assign the alias to the core name. This allows all call sites
+        // to use canonical (non-suffixed) names regardless of API version.
+        // Called after volkLoadDevice() for any tier.
+        void volkPatchPromotedExtensions() {
+            // clang-format off
+            // ----- Vulkan 1.1 promoted (from KHR) -----
+            if (!vkBindBufferMemory2 && vkBindBufferMemory2KHR) vkBindBufferMemory2 = vkBindBufferMemory2KHR;
+            if (!vkBindImageMemory2 && vkBindImageMemory2KHR) vkBindImageMemory2 = vkBindImageMemory2KHR;
+            if (!vkCmdDispatchBase && vkCmdDispatchBaseKHR) vkCmdDispatchBase = vkCmdDispatchBaseKHR;
+            if (!vkCmdSetDeviceMask && vkCmdSetDeviceMaskKHR) vkCmdSetDeviceMask = vkCmdSetDeviceMaskKHR;
+            if (!vkCreateDescriptorUpdateTemplate && vkCreateDescriptorUpdateTemplateKHR) vkCreateDescriptorUpdateTemplate = vkCreateDescriptorUpdateTemplateKHR;
+            if (!vkCreateSamplerYcbcrConversion && vkCreateSamplerYcbcrConversionKHR) vkCreateSamplerYcbcrConversion = vkCreateSamplerYcbcrConversionKHR;
+            if (!vkDestroyDescriptorUpdateTemplate && vkDestroyDescriptorUpdateTemplateKHR) vkDestroyDescriptorUpdateTemplate = vkDestroyDescriptorUpdateTemplateKHR;
+            if (!vkDestroySamplerYcbcrConversion && vkDestroySamplerYcbcrConversionKHR) vkDestroySamplerYcbcrConversion = vkDestroySamplerYcbcrConversionKHR;
+            if (!vkGetBufferMemoryRequirements2 && vkGetBufferMemoryRequirements2KHR) vkGetBufferMemoryRequirements2 = vkGetBufferMemoryRequirements2KHR;
+            if (!vkGetDescriptorSetLayoutSupport && vkGetDescriptorSetLayoutSupportKHR) vkGetDescriptorSetLayoutSupport = vkGetDescriptorSetLayoutSupportKHR;
+            if (!vkGetDeviceGroupPeerMemoryFeatures && vkGetDeviceGroupPeerMemoryFeaturesKHR) vkGetDeviceGroupPeerMemoryFeatures = vkGetDeviceGroupPeerMemoryFeaturesKHR;
+            if (!vkGetImageMemoryRequirements2 && vkGetImageMemoryRequirements2KHR) vkGetImageMemoryRequirements2 = vkGetImageMemoryRequirements2KHR;
+            if (!vkGetImageSparseMemoryRequirements2 && vkGetImageSparseMemoryRequirements2KHR) vkGetImageSparseMemoryRequirements2 = vkGetImageSparseMemoryRequirements2KHR;
+            if (!vkTrimCommandPool && vkTrimCommandPoolKHR) vkTrimCommandPool = vkTrimCommandPoolKHR;
+            if (!vkUpdateDescriptorSetWithTemplate && vkUpdateDescriptorSetWithTemplateKHR) vkUpdateDescriptorSetWithTemplate = vkUpdateDescriptorSetWithTemplateKHR;
+
+            // ----- Vulkan 1.2 promoted (from KHR/EXT) -----
+            if (!vkCmdBeginRenderPass2 && vkCmdBeginRenderPass2KHR) vkCmdBeginRenderPass2 = vkCmdBeginRenderPass2KHR;
+            if (!vkCmdDrawIndexedIndirectCount && vkCmdDrawIndexedIndirectCountKHR) vkCmdDrawIndexedIndirectCount = vkCmdDrawIndexedIndirectCountKHR;
+            if (!vkCmdDrawIndirectCount && vkCmdDrawIndirectCountKHR) vkCmdDrawIndirectCount = vkCmdDrawIndirectCountKHR;
+            if (!vkCmdEndRenderPass2 && vkCmdEndRenderPass2KHR) vkCmdEndRenderPass2 = vkCmdEndRenderPass2KHR;
+            if (!vkCmdNextSubpass2 && vkCmdNextSubpass2KHR) vkCmdNextSubpass2 = vkCmdNextSubpass2KHR;
+            if (!vkCreateRenderPass2 && vkCreateRenderPass2KHR) vkCreateRenderPass2 = vkCreateRenderPass2KHR;
+            if (!vkGetBufferDeviceAddress && vkGetBufferDeviceAddressKHR) vkGetBufferDeviceAddress = vkGetBufferDeviceAddressKHR;
+            if (!vkGetBufferOpaqueCaptureAddress && vkGetBufferOpaqueCaptureAddressKHR) vkGetBufferOpaqueCaptureAddress = vkGetBufferOpaqueCaptureAddressKHR;
+            if (!vkGetDeviceMemoryOpaqueCaptureAddress && vkGetDeviceMemoryOpaqueCaptureAddressKHR) vkGetDeviceMemoryOpaqueCaptureAddress = vkGetDeviceMemoryOpaqueCaptureAddressKHR;
+            if (!vkGetSemaphoreCounterValue && vkGetSemaphoreCounterValueKHR) vkGetSemaphoreCounterValue = vkGetSemaphoreCounterValueKHR;
+            if (!vkResetQueryPool && vkResetQueryPoolEXT) vkResetQueryPool = vkResetQueryPoolEXT;
+            if (!vkSignalSemaphore && vkSignalSemaphoreKHR) vkSignalSemaphore = vkSignalSemaphoreKHR;
+            if (!vkWaitSemaphores && vkWaitSemaphoresKHR) vkWaitSemaphores = vkWaitSemaphoresKHR;
+
+            // ----- Vulkan 1.3 promoted (from KHR/EXT) -----
+            if (!vkCmdBeginRendering && vkCmdBeginRenderingKHR) vkCmdBeginRendering = vkCmdBeginRenderingKHR;
+            if (!vkCmdBindVertexBuffers2 && vkCmdBindVertexBuffers2EXT) vkCmdBindVertexBuffers2 = vkCmdBindVertexBuffers2EXT;
+            if (!vkCmdBlitImage2 && vkCmdBlitImage2KHR) vkCmdBlitImage2 = vkCmdBlitImage2KHR;
+            if (!vkCmdCopyBuffer2 && vkCmdCopyBuffer2KHR) vkCmdCopyBuffer2 = vkCmdCopyBuffer2KHR;
+            if (!vkCmdCopyBufferToImage2 && vkCmdCopyBufferToImage2KHR) vkCmdCopyBufferToImage2 = vkCmdCopyBufferToImage2KHR;
+            if (!vkCmdCopyImage2 && vkCmdCopyImage2KHR) vkCmdCopyImage2 = vkCmdCopyImage2KHR;
+            if (!vkCmdCopyImageToBuffer2 && vkCmdCopyImageToBuffer2KHR) vkCmdCopyImageToBuffer2 = vkCmdCopyImageToBuffer2KHR;
+            if (!vkCmdEndRendering && vkCmdEndRenderingKHR) vkCmdEndRendering = vkCmdEndRenderingKHR;
+            if (!vkCmdPipelineBarrier2 && vkCmdPipelineBarrier2KHR) vkCmdPipelineBarrier2 = vkCmdPipelineBarrier2KHR;
+            if (!vkCmdResetEvent2 && vkCmdResetEvent2KHR) vkCmdResetEvent2 = vkCmdResetEvent2KHR;
+            if (!vkCmdResolveImage2 && vkCmdResolveImage2KHR) vkCmdResolveImage2 = vkCmdResolveImage2KHR;
+            if (!vkCmdSetCullMode && vkCmdSetCullModeEXT) vkCmdSetCullMode = vkCmdSetCullModeEXT;
+            if (!vkCmdSetDepthBiasEnable && vkCmdSetDepthBiasEnableEXT) vkCmdSetDepthBiasEnable = vkCmdSetDepthBiasEnableEXT;
+            if (!vkCmdSetDepthBoundsTestEnable && vkCmdSetDepthBoundsTestEnableEXT) vkCmdSetDepthBoundsTestEnable = vkCmdSetDepthBoundsTestEnableEXT;
+            if (!vkCmdSetDepthCompareOp && vkCmdSetDepthCompareOpEXT) vkCmdSetDepthCompareOp = vkCmdSetDepthCompareOpEXT;
+            if (!vkCmdSetDepthTestEnable && vkCmdSetDepthTestEnableEXT) vkCmdSetDepthTestEnable = vkCmdSetDepthTestEnableEXT;
+            if (!vkCmdSetDepthWriteEnable && vkCmdSetDepthWriteEnableEXT) vkCmdSetDepthWriteEnable = vkCmdSetDepthWriteEnableEXT;
+            if (!vkCmdSetEvent2 && vkCmdSetEvent2KHR) vkCmdSetEvent2 = vkCmdSetEvent2KHR;
+            if (!vkCmdSetFrontFace && vkCmdSetFrontFaceEXT) vkCmdSetFrontFace = vkCmdSetFrontFaceEXT;
+            if (!vkCmdSetPrimitiveRestartEnable && vkCmdSetPrimitiveRestartEnableEXT) vkCmdSetPrimitiveRestartEnable = vkCmdSetPrimitiveRestartEnableEXT;
+            if (!vkCmdSetPrimitiveTopology && vkCmdSetPrimitiveTopologyEXT) vkCmdSetPrimitiveTopology = vkCmdSetPrimitiveTopologyEXT;
+            if (!vkCmdSetRasterizerDiscardEnable && vkCmdSetRasterizerDiscardEnableEXT) vkCmdSetRasterizerDiscardEnable = vkCmdSetRasterizerDiscardEnableEXT;
+            if (!vkCmdSetScissorWithCount && vkCmdSetScissorWithCountEXT) vkCmdSetScissorWithCount = vkCmdSetScissorWithCountEXT;
+            if (!vkCmdSetStencilOp && vkCmdSetStencilOpEXT) vkCmdSetStencilOp = vkCmdSetStencilOpEXT;
+            if (!vkCmdSetStencilTestEnable && vkCmdSetStencilTestEnableEXT) vkCmdSetStencilTestEnable = vkCmdSetStencilTestEnableEXT;
+            if (!vkCmdSetViewportWithCount && vkCmdSetViewportWithCountEXT) vkCmdSetViewportWithCount = vkCmdSetViewportWithCountEXT;
+            if (!vkCmdWaitEvents2 && vkCmdWaitEvents2KHR) vkCmdWaitEvents2 = vkCmdWaitEvents2KHR;
+            if (!vkCmdWriteTimestamp2 && vkCmdWriteTimestamp2KHR) vkCmdWriteTimestamp2 = vkCmdWriteTimestamp2KHR;
+            if (!vkCreatePrivateDataSlot && vkCreatePrivateDataSlotEXT) vkCreatePrivateDataSlot = vkCreatePrivateDataSlotEXT;
+            if (!vkDestroyPrivateDataSlot && vkDestroyPrivateDataSlotEXT) vkDestroyPrivateDataSlot = vkDestroyPrivateDataSlotEXT;
+            if (!vkGetDeviceBufferMemoryRequirements && vkGetDeviceBufferMemoryRequirementsKHR) vkGetDeviceBufferMemoryRequirements = vkGetDeviceBufferMemoryRequirementsKHR;
+            if (!vkGetDeviceImageMemoryRequirements && vkGetDeviceImageMemoryRequirementsKHR) vkGetDeviceImageMemoryRequirements = vkGetDeviceImageMemoryRequirementsKHR;
+            if (!vkGetDeviceImageSparseMemoryRequirements && vkGetDeviceImageSparseMemoryRequirementsKHR) vkGetDeviceImageSparseMemoryRequirements = vkGetDeviceImageSparseMemoryRequirementsKHR;
+            if (!vkGetPrivateData && vkGetPrivateDataEXT) vkGetPrivateData = vkGetPrivateDataEXT;
+            if (!vkQueueSubmit2 && vkQueueSubmit2KHR) vkQueueSubmit2 = vkQueueSubmit2KHR;
+            if (!vkSetPrivateData && vkSetPrivateDataEXT) vkSetPrivateData = vkSetPrivateDataEXT;
+
+            // ----- Vulkan 1.4 promoted (from KHR/EXT) -----
+            if (!vkCmdBindDescriptorSets2 && vkCmdBindDescriptorSets2KHR) vkCmdBindDescriptorSets2 = vkCmdBindDescriptorSets2KHR;
+            if (!vkCmdBindIndexBuffer2 && vkCmdBindIndexBuffer2KHR) vkCmdBindIndexBuffer2 = vkCmdBindIndexBuffer2KHR;
+            if (!vkCmdPushConstants2 && vkCmdPushConstants2KHR) vkCmdPushConstants2 = vkCmdPushConstants2KHR;
+            if (!vkCmdPushDescriptorSet && vkCmdPushDescriptorSetKHR) vkCmdPushDescriptorSet = vkCmdPushDescriptorSetKHR;
+            if (!vkCmdPushDescriptorSetWithTemplate && vkCmdPushDescriptorSetWithTemplateKHR) vkCmdPushDescriptorSetWithTemplate = vkCmdPushDescriptorSetWithTemplateKHR;
+            if (!vkCmdSetLineStipple && vkCmdSetLineStippleKHR) vkCmdSetLineStipple = vkCmdSetLineStippleKHR;
+            if (!vkCmdSetRenderingAttachmentLocations && vkCmdSetRenderingAttachmentLocationsKHR) vkCmdSetRenderingAttachmentLocations = vkCmdSetRenderingAttachmentLocationsKHR;
+            if (!vkCmdSetRenderingInputAttachmentIndices && vkCmdSetRenderingInputAttachmentIndicesKHR) vkCmdSetRenderingInputAttachmentIndices = vkCmdSetRenderingInputAttachmentIndicesKHR;
+            if (!vkCopyImageToImage && vkCopyImageToImageEXT) vkCopyImageToImage = vkCopyImageToImageEXT;
+            if (!vkCopyImageToMemory && vkCopyImageToMemoryEXT) vkCopyImageToMemory = vkCopyImageToMemoryEXT;
+            if (!vkCopyMemoryToImage && vkCopyMemoryToImageEXT) vkCopyMemoryToImage = vkCopyMemoryToImageEXT;
+            if (!vkGetDeviceImageSubresourceLayout && vkGetDeviceImageSubresourceLayoutKHR) vkGetDeviceImageSubresourceLayout = vkGetDeviceImageSubresourceLayoutKHR;
+            if (!vkGetImageSubresourceLayout2 && vkGetImageSubresourceLayout2KHR) vkGetImageSubresourceLayout2 = vkGetImageSubresourceLayout2KHR;
+            if (!vkGetRenderingAreaGranularity && vkGetRenderingAreaGranularityKHR) vkGetRenderingAreaGranularity = vkGetRenderingAreaGranularityKHR;
+            if (!vkMapMemory2 && vkMapMemory2KHR) vkMapMemory2 = vkMapMemory2KHR;
+            if (!vkTransitionImageLayout && vkTransitionImageLayoutEXT) vkTransitionImageLayout = vkTransitionImageLayoutEXT;
+            if (!vkUnmapMemory2 && vkUnmapMemory2KHR) vkUnmapMemory2 = vkUnmapMemory2KHR;
+            // clang-format on
+        }
+    }  // namespace
+
+    // =========================================================================
     // Debug messenger callback
     // =========================================================================
 
@@ -413,6 +516,7 @@ namespace miki::rhi {
         }
 
         volkLoadDevice(device_);
+        volkPatchPromotedExtensions();
 
         vkGetDeviceQueue(device_, queueFamilies_.graphics, 0, &graphicsQueue_);
         vkGetDeviceQueue(device_, queueFamilies_.present, 0, &presentQueue_);
