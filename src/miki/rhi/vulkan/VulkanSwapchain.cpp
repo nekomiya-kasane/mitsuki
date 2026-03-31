@@ -398,6 +398,14 @@ namespace miki::rhi {
         return data->textureHandles[imageIndex];
     }
 
+    auto VulkanDevice::GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle {
+        auto* data = swapchains_.Lookup(h);
+        if (!data || imageIndex >= data->textureViewHandles.size()) {
+            return {};
+        }
+        return data->textureViewHandles[imageIndex];
+    }
+
     // =========================================================================
     // PresentImpl
     // =========================================================================

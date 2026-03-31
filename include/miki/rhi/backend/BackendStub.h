@@ -43,6 +43,7 @@
         return std::unexpected(RhiError::NotImplemented); }                                                            \
     auto CreateTextureViewImpl(const TextureViewDesc&) -> RhiResult<TextureViewHandle> {                               \
         return std::unexpected(RhiError::NotImplemented); }                                                            \
+    auto GetTextureViewTextureImpl(TextureViewHandle) -> TextureHandle { return {}; }                                  \
     void DestroyTextureViewImpl(TextureViewHandle) {}                                                                  \
     void DestroyTextureImpl(TextureHandle) {}                                                                          \
                                                                                                                        \

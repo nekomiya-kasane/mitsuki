@@ -255,21 +255,15 @@ struct TriangleRenderer {
         return *acq;
     }
 
-    auto RecordFrame(TextureHandle colorTex, uint32_t w, uint32_t h) -> std::optional<CommandBufferHandle> {
+    auto RecordFrame(TextureViewHandle colorView, uint32_t w, uint32_t h) -> std::optional<CommandBufferHandle> {
         auto cmdAcqOpt = AcquireCommandList();
         if (!cmdAcqOpt) {
             return std::nullopt;
         }
         auto cmdAcq = *cmdAcqOpt;
 
-        auto tvRes = device.Dispatch([&](auto& d) -> RhiResult<TextureViewHandle> {
-            TextureViewDesc tvd{.texture = colorTex};
-            return d.CreateTextureView(tvd);
-        });
-        if (!tvRes) {
-            return std::nullopt;
-        }
-        TextureViewHandle colorView = *tvRes;
+        // Query parent texture from view — avoids redundant parameter
+        TextureHandle colorTex = device.Dispatch([&](auto& d) { return d.GetTextureViewTexture(colorView); });
 
         (void)cmdAcq.listHandle.Dispatch([&](auto& cmd) {
             cmd.Begin();
@@ -328,10 +322,6 @@ struct TriangleRenderer {
             return 0;
         });
 
-        (void)device.Dispatch([&](auto& d) {
-            d.DestroyTextureView(colorView);
-            return 0;
-        });
         return cmdAcq.bufferHandle;
     }
 
@@ -401,7 +391,7 @@ static void MainLoopIteration() {
     auto& frame = *frameResult;
 
     // Record rendering commands (acquires per-frame cmd buffer from pool)
-    auto cmdBuf = g_renderer->RecordFrame(frame.swapchainImage, frame.width, frame.height);
+    auto cmdBuf = g_renderer->RecordFrame(frame.swapchainImageView, frame.width, frame.height);
     if (!cmdBuf) {
         return;
     }

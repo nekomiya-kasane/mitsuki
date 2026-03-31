@@ -410,6 +410,11 @@ namespace miki::rhi {
         return handle;
     }
 
+    auto WebGPUDevice::GetTextureViewTextureImpl(TextureViewHandle h) -> TextureHandle {
+        auto* data = textureViews_.Lookup(h);
+        return data ? data->parentTexture : TextureHandle{};
+    }
+
     void WebGPUDevice::DestroyTextureViewImpl(TextureViewHandle h) {
         auto* data = textureViews_.Lookup(h);
         if (!data) {

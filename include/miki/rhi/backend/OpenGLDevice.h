@@ -288,6 +288,7 @@ namespace miki::rhi {
 
         auto CreateTextureImpl(const TextureDesc& desc) -> RhiResult<TextureHandle>;
         auto CreateTextureViewImpl(const TextureViewDesc& desc) -> RhiResult<TextureViewHandle>;
+        auto GetTextureViewTextureImpl(TextureViewHandle h) -> TextureHandle;
         void DestroyTextureViewImpl(TextureViewHandle h);
         void DestroyTextureImpl(TextureHandle h);
 

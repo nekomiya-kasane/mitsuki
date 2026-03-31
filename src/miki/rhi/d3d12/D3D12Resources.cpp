@@ -506,6 +506,11 @@ namespace miki::rhi {
         return handle;
     }
 
+    auto D3D12Device::GetTextureViewTextureImpl(TextureViewHandle h) -> TextureHandle {
+        auto* data = textureViews_.Lookup(h);
+        return data ? data->parentTexture : TextureHandle{};
+    }
+
     void D3D12Device::DestroyTextureViewImpl(TextureViewHandle h) {
         auto* data = textureViews_.Lookup(h);
         if (!data) {

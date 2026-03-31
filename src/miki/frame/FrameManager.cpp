@@ -453,11 +453,18 @@ namespace miki::frame {
             swapchainImage = impl_->surface->GetCurrentTexture();
         }
 
+        // Get pre-created texture view from swapchain
+        rhi::TextureViewHandle swapchainImageView;
+        if (impl_->surface) {
+            swapchainImageView = impl_->surface->GetCurrentTextureView();
+        }
+
         // 5. Build FrameContext
         FrameContext ctx{
             .frameIndex = impl_->frameIndex,
             .frameNumber = impl_->frameNumber,
             .swapchainImage = swapchainImage,
+            .swapchainImageView = swapchainImageView,
             .width = width,
             .height = height,
             .graphicsTimelineTarget = targetTimeline,

@@ -99,6 +99,9 @@ namespace miki::rhi {
         [[nodiscard]] auto CreateTextureView(const TextureViewDesc& desc) -> RhiResult<TextureViewHandle> {
             return Self().CreateTextureViewImpl(desc);
         }
+        [[nodiscard]] auto GetTextureViewTexture(TextureViewHandle h) -> TextureHandle {
+            return Self().GetTextureViewTextureImpl(h);
+        }
         void DestroyTextureView(TextureViewHandle h) { Self().DestroyTextureViewImpl(h); }
         void DestroyTexture(TextureHandle h) { Self().DestroyTextureImpl(h); }
 
@@ -243,6 +246,9 @@ namespace miki::rhi {
         }
         [[nodiscard]] auto GetSwapchainTexture(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle {
             return Self().GetSwapchainTextureImpl(h, imageIndex);
+        }
+        [[nodiscard]] auto GetSwapchainTextureView(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle {
+            return Self().GetSwapchainTextureViewImpl(h, imageIndex);
         }
         void Present(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores) {
             Self().PresentImpl(h, waitSemaphores);
