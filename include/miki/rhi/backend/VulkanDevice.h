@@ -210,6 +210,11 @@ namespace miki::rhi {
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
         void DestroySwapchainImpl(SwapchainHandle h);
         auto ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void>;
+        // Swapchain helpers (internal)
+        void ReleaseSwapchainResources(VulkanSwapchainData* data);
+        auto RegisterSwapchainImages(VulkanSwapchainData* data, VkExtent2D extent) -> RhiResult<void>;
+        auto ResolveSwapchainExtent(VkSurfaceKHR surface, uint32_t requestedW, uint32_t requestedH)
+            -> std::pair<VkSurfaceCapabilitiesKHR, VkExtent2D>;
         auto AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence) -> RhiResult<uint32_t>;
         auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
         auto GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle;

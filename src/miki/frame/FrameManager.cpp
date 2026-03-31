@@ -131,6 +131,9 @@ namespace miki::frame {
             return tier == rhi::CapabilityTier::Tier3_WebGPU || tier == rhi::CapabilityTier::Tier4_OpenGL;
         }
 
+        // Pure wait — blocks until the GPU work submitted on this slot is complete.
+        // Does NOT reset fences. This is safe to call from both BeginFrame and WaitAll.
+        // On an already-signaled fence (e.g. after WaitAll), vkWaitForFences returns immediately.
         void WaitForSlot(uint32_t slotIdx) {
             auto& slot = slots[slotIdx];
 
@@ -142,17 +145,29 @@ namespace miki::frame {
                     });
                 }
             } else if (IsFenceBased()) {
-                // T2: CPU wait on per-slot fence, then reset for next use
-                // Note: Fence is created signaled, so first frame skips wait but still resets.
-                // vkQueueSubmit2 requires unsignaled fence (VUID-vkQueueSubmit2-fence-04895).
-                if (slot.fence.IsValid()) {
-                    if (slot.timelineValue > 0) {
-                        device.Dispatch([&](auto& dev) { dev.WaitFence(slot.fence, UINT64_MAX); });
-                    }
-                    device.Dispatch([&](auto& dev) { dev.ResetFence(slot.fence); });
+                // T2: CPU wait on per-slot fence (does NOT reset — see ResetSlotFence)
+                if (slot.fence.IsValid() && slot.timelineValue > 0) {
+                    device.Dispatch([&](auto& dev) { dev.WaitFence(slot.fence, UINT64_MAX); });
                 }
             }
             // T3/T4: implicit sync, no CPU wait needed
+        }
+
+        // Reset the slot's fence so it can be reused by the next vkQueueSubmit.
+        // Must be called AFTER WaitForSlot confirms GPU completion.
+        // Separated from WaitForSlot so that WaitAll (drain-only) doesn't reset fences
+        // that have no subsequent submit — which would cause the next BeginFrame to
+        // deadlock on an unsignaled fence.
+        void ResetSlotFence(uint32_t slotIdx) {
+            if (!IsFenceBased()) {
+                return;
+            }
+            auto& slot = slots[slotIdx];
+            // Reset is needed even on first frame (fence created signaled) because
+            // vkQueueSubmit2 requires an unsignaled fence (VUID-vkQueueSubmit2-fence-04895).
+            if (slot.fence.IsValid()) {
+                device.Dispatch([&](auto& dev) { dev.ResetFence(slot.fence); });
+            }
         }
 
         [[nodiscard]] auto HasPendingTransfers() const -> bool {
@@ -438,6 +453,10 @@ namespace miki::frame {
 
         // 1. CPU wait: ensure this slot's previous GPU work is complete
         impl_->WaitForSlot(impl_->frameIndex);
+
+        // 1.0a. Reset fence for reuse by the next submit (T2 only; T1/T3/T4 no-op).
+        // Must happen after wait confirms GPU completion, before any new submit on this slot.
+        impl_->ResetSlotFence(impl_->frameIndex);
 
         // 1a. Reset command pools for this slot (§19 — after GPU completion confirmed)
         impl_->commandPoolAllocator.ResetSlot(impl_->frameIndex);
@@ -1026,14 +1045,15 @@ namespace miki::frame {
                 dev.WaitSemaphore(impl_->graphicsTimeline, impl_->currentTimelineValue, UINT64_MAX);
             });
         } else if (impl_->IsFenceBased()) {
-            // T2: Wait on all slot fences
+            // T2: Pure wait on all slot fences — no reset.
+            // Fences remain signaled; the next BeginFrame's WaitForSlot returns immediately,
+            // then ResetSlotFence prepares the fence for reuse.
             for (uint32_t i = 0; i < impl_->framesInFlight; ++i) {
                 impl_->WaitForSlot(i);
             }
         } else if (impl_->IsImplicitSync()) {
-            // T3/T4: A device tick / processEvents ensures GPU idle.
-            // For correctness, do a lightweight device-level wait.
-            // This is only called during surface detach / resize — not per-frame.
+            // T3/T4: No per-slot sync objects. A device-level wait ensures GPU idle.
+            // Only called during resize / detach — not per-frame.
             impl_->device.Dispatch([](auto& dev) { dev.WaitIdle(); });
         }
     }

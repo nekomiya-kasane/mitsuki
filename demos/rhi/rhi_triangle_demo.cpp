@@ -360,16 +360,38 @@ static void MainLoopIteration() {
     auto events = g_wm->PollEvents();
     for (auto& ev : events) {
         std::visit(
-            [](auto& e) {
+            [&](auto& e) {
+                using enum ::miki::debug::LogCategory;
                 using T = std::decay_t<decltype(e)>;
                 if constexpr (std::is_same_v<T, neko::platform::KeyDown>) {
+                    MIKI_LOG_DEBUG(
+                        Demo, "[Win{}] KeyDown: key={} mods={}", ev.window.id, static_cast<int>(e.key),
+                        static_cast<int>(e.mods)
+                    );
                     if (e.key == neko::platform::Key::Escape) {
                         g_shouldQuit = true;
                     }
-                } else if constexpr (std::is_same_v<T, neko::platform::CloseRequested>) {
-                    g_shouldQuit = true;
+                } else if constexpr (std::is_same_v<T, neko::platform::KeyUp>) {
+                    MIKI_LOG_DEBUG(Demo, "[Win{}] KeyUp: key={}", ev.window.id, static_cast<int>(e.key));
+                } else if constexpr (std::is_same_v<T, neko::platform::MouseButton>) {
+                    MIKI_LOG_DEBUG(
+                        Demo, "[Win{}] MouseButton: btn={} action={}", ev.window.id, static_cast<int>(e.button),
+                        static_cast<int>(e.action)
+                    );
+                } else if constexpr (std::is_same_v<T, neko::platform::Scroll>) {
+                    MIKI_LOG_DEBUG(Demo, "[Win{}] Scroll: dx={:.2f} dy={:.2f}", ev.window.id, e.dx, e.dy);
                 } else if constexpr (std::is_same_v<T, neko::platform::Resize>) {
+                    MIKI_LOG_INFO(Demo, "[Win{}] Resize: {}x{}", ev.window.id, e.width, e.height);
                     (void)g_sm->ResizeSurface(g_mainWindow, e.width, e.height);
+                } else if constexpr (std::is_same_v<T, neko::platform::Focus>) {
+                    MIKI_LOG_DEBUG(Demo, "[Win{}] Focus: {}", ev.window.id, e.focused ? "gained" : "lost");
+                } else if constexpr (std::is_same_v<T, neko::platform::CloseRequested>) {
+                    MIKI_LOG_INFO(Demo, "[Win{}] CloseRequested", ev.window.id);
+                    g_shouldQuit = true;
+                } else if constexpr (std::is_same_v<T, neko::platform::TextInput>) {
+                    MIKI_LOG_DEBUG(
+                        Demo, "[Win{}] TextInput: U+{:04X}", ev.window.id, static_cast<unsigned>(e.codepoint)
+                    );
                 }
             },
             ev.event
