@@ -13,6 +13,7 @@
 #include "miki/platform/WindowManager.h"
 #include "miki/platform/glfw/GlfwWindowBackend.h"
 #include "miki/rhi/backend/AllBackends.h"
+#include "miki/debug/StructuredLogger.h"
 #if MIKI_BUILD_VULKAN
 #    include "miki/rhi/backend/VulkanCommandBuffer.h"
 #endif
@@ -414,6 +415,11 @@ static void MainLoopIteration() {
 // ============================================================================
 
 int main(int argc, char** argv) {
+    // Initialize logger
+    auto& logger = miki::debug::StructuredLogger::Instance();
+    logger.AddSink(miki::debug::ConsoleSink{});
+    logger.StartDrainThread();
+
     // Parse CLI
     BackendType backend = BackendType::VulkanCompat;
 #if defined(__EMSCRIPTEN__)
@@ -507,6 +513,9 @@ int main(int argc, char** argv) {
     }
     renderer.Cleanup();
     // sm, device, wm destroyed in reverse order by RAII
+
+    // Shutdown logger
+    logger.Shutdown();
 #endif
     return 0;
 }
