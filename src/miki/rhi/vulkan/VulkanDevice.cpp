@@ -208,6 +208,8 @@ namespace miki::rhi {
     // =========================================================================
 
     auto VulkanDevice::CreateLogicalDevice() -> RhiResult<void> {
+        using enum ::miki::debug::LogCategory;
+
         std::vector<uint32_t> uniqueFamilies = {queueFamilies_.graphics};
         auto addUnique = [&](uint32_t idx) {
             if (idx != UINT32_MAX && std::ranges::find(uniqueFamilies, idx) == uniqueFamilies.end()) {
@@ -303,6 +305,10 @@ namespace miki::rhi {
         VkPhysicalDeviceVulkan11Features features11{};
         VkPhysicalDeviceVulkan12Features features12{};
         VkPhysicalDeviceVulkan13Features features13{};
+        VkPhysicalDeviceDynamicRenderingFeaturesKHR dynRenderFeature{};
+        VkPhysicalDeviceSynchronization2FeaturesKHR sync2Feature{};
+        VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeature{};
+        VkPhysicalDeviceShaderDrawParametersFeatures drawParamsFeature{};
 
         if (tier_ == BackendType::Vulkan14) {
             // Full Vulkan 1.4 — request all critical + nice-to-have features
@@ -331,10 +337,7 @@ namespace miki::rhi {
             features2.features.shaderFloat64 = supported2.features.shaderFloat64;
             features2.features.shaderInt64 = supported2.features.shaderInt64;
         } else {
-            // VulkanCompat — only 1.0/1.1 core, no pNext chain for 1.2/1.3 features
-            features2.pNext = nullptr;
-
-            // Compat may still need VK_KHR_timeline_semaphore if available as extension
+            // VulkanCompat — Vulkan 1.1 core + KHR extensions for critical features
             uint32_t extCount = 0;
             vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
             std::vector<VkExtensionProperties> availableExts(extCount);
@@ -344,17 +347,55 @@ namespace miki::rhi {
                     return std::strcmp(e.extensionName, name) == 0;
                 });
             };
+
+            // VK_KHR_dynamic_rendering is mandatory — no VkRenderPass fallback path exists
+            if (!hasExt(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+                MIKI_LOG_ERROR(
+                    Rhi, "[Vulkan] VulkanCompat requires VK_KHR_dynamic_rendering; use OpenGL (Tier4) for this GPU"
+                );
+                return std::unexpected(RhiError::FeatureNotSupported);
+            }
+            deviceExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+            // dependency chain: dynamic_rendering -> depth_stencil_resolve -> create_renderpass2
+            if (hasExt(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
+            }
+            if (hasExt(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+            }
             if (hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
-            }
-            if (hasExt(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
-                deviceExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
             }
             if (hasExt(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
             }
             if (hasExt(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
+            }
+
+            // Build pNext feature chain — without these, extensions load but features stay disabled
+            dynRenderFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
+            dynRenderFeature.dynamicRendering = VK_TRUE;
+            features2.pNext = &dynRenderFeature;
+            void** pNextTail = &dynRenderFeature.pNext;
+
+            if (hasExt(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
+                sync2Feature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
+                sync2Feature.synchronization2 = VK_TRUE;
+                *pNextTail = &sync2Feature;
+                pNextTail = &sync2Feature.pNext;
+            }
+            if (hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
+                timelineFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+                timelineFeature.timelineSemaphore = VK_TRUE;
+                *pNextTail = &timelineFeature;
+                pNextTail = &timelineFeature.pNext;
+            }
+            if (hasExt(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME)) {
+                drawParamsFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
+                drawParamsFeature.shaderDrawParameters = VK_TRUE;
+                *pNextTail = &drawParamsFeature;
+                pNextTail = &drawParamsFeature.pNext;
             }
         }
 
