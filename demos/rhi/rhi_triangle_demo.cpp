@@ -415,7 +415,7 @@ static void MainLoopIteration() {
 
 int main(int argc, char** argv) {
     // Parse CLI
-    BackendType backend = BackendType::Vulkan14;
+    BackendType backend = BackendType::VulkanCompat;
 #if defined(__EMSCRIPTEN__)
     backend = BackendType::WebGPU;
 #else
