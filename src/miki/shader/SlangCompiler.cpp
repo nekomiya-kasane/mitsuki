@@ -33,12 +33,12 @@ namespace miki::shader {
     // Helpers -- miki enum <-> Slang enum mapping
     // ===========================================================================
 
-    static auto ToSlangTarget(ShaderTarget iTarget) -> SlangCompileTarget {
-        switch (iTarget) {
-            case ShaderTarget::SPIRV: return SLANG_SPIRV;
-            case ShaderTarget::DXIL: return SLANG_DXIL;
-            case ShaderTarget::GLSL: return SLANG_GLSL;
-            case ShaderTarget::WGSL: return SLANG_WGSL;
+    static auto ToSlangTarget(ShaderTargetType iType) -> SlangCompileTarget {
+        switch (iType) {
+            case ShaderTargetType::SPIRV: return SLANG_SPIRV;
+            case ShaderTargetType::DXIL: return SLANG_DXIL;
+            case ShaderTargetType::GLSL: return SLANG_GLSL;
+            case ShaderTargetType::WGSL: return SLANG_WGSL;
         }
         return SLANG_TARGET_UNKNOWN;
     }
@@ -233,8 +233,8 @@ namespace miki::shader {
         Slang::ComPtr<slang::IGlobalSession> globalSession;
         std::vector<std::string> searchPaths;
 
-        // Session pool: one cached session per ShaderTarget (no permutation macros)
-        std::unordered_map<uint8_t, Slang::ComPtr<slang::ISession>> sessionPool;
+        // Session pool: one cached session per ShaderTarget (type + version, no permutation macros)
+        std::unordered_map<uint16_t, Slang::ComPtr<slang::ISession>> sessionPool;
         std::mutex sessionPoolMutex;
 
         // Diagnostics from last compilation
@@ -258,11 +258,24 @@ namespace miki::shader {
         }
 
         auto GetSlangProfile(ShaderTarget iTarget) -> SlangProfileID {
-            switch (iTarget) {
-                case ShaderTarget::DXIL: return globalSession->findProfile("sm_6_6");
-                case ShaderTarget::SPIRV: return globalSession->findProfile("spirv_1_5");
-                case ShaderTarget::GLSL: return globalSession->findProfile("glsl_430");
-                case ShaderTarget::WGSL: return globalSession->findProfile("wgsl");
+            char profileStr[32];
+            switch (iTarget.type) {
+                case ShaderTargetType::SPIRV:
+                    std::snprintf(
+                        profileStr, sizeof(profileStr), "spirv_%u_%u", iTarget.versionMajor, iTarget.versionMinor
+                    );
+                    return globalSession->findProfile(profileStr);
+                case ShaderTargetType::DXIL:
+                    std::snprintf(
+                        profileStr, sizeof(profileStr), "sm_%u_%u", iTarget.versionMajor, iTarget.versionMinor
+                    );
+                    return globalSession->findProfile(profileStr);
+                case ShaderTargetType::GLSL:
+                    std::snprintf(
+                        profileStr, sizeof(profileStr), "glsl_%u%02u", iTarget.versionMajor, iTarget.versionMinor
+                    );
+                    return globalSession->findProfile(profileStr);
+                case ShaderTargetType::WGSL: return globalSession->findProfile("wgsl");
             }
             return globalSession->findProfile("spirv_1_5");
         }
@@ -271,7 +284,7 @@ namespace miki::shader {
             -> core::Result<Slang::ComPtr<slang::ISession>> {
             slang::TargetDesc targetDesc = {};
             targetDesc.structureSize = sizeof(slang::TargetDesc);
-            targetDesc.format = ToSlangTarget(iTarget);
+            targetDesc.format = ToSlangTarget(iTarget.type);
             targetDesc.profile = GetSlangProfile(iTarget);
 
             std::vector<char const*> pathPtrs;
@@ -299,7 +312,9 @@ namespace miki::shader {
 
         /** @brief Get or create a cached session for the given target (no custom macros). */
         auto GetPooledSession(ShaderTarget iTarget) -> core::Result<slang::ISession*> {
-            auto key = static_cast<uint8_t>(iTarget);
+            // Key combines type (4 bits) + versionMajor (4 bits) + versionMinor (8 bits)
+            auto key = static_cast<uint16_t>(iTarget.type) | (static_cast<uint16_t>(iTarget.versionMajor) << 4)
+                       | (static_cast<uint16_t>(iTarget.versionMinor) << 8);
             std::lock_guard lock(sessionPoolMutex);
             auto it = sessionPool.find(key);
             if (it != sessionPool.end()) {
@@ -320,7 +335,7 @@ namespace miki::shader {
             std::vector<std::string> permBitValues;
 
             for (auto const& [key, val] : iDesc.defines) {
-                slang::PreprocessorMacroDesc m;
+                slang::PreprocessorMacroDesc m{};
                 m.name = key.c_str();
                 m.value = val.c_str();
                 macros.push_back(m);
@@ -329,7 +344,7 @@ namespace miki::shader {
             for (uint32_t bit = 0; bit < 64; ++bit) {
                 if (iDesc.permutation.GetBit(bit)) {
                     auto& name = permBitValues.emplace_back("MIKI_PERMUTATION_BIT_" + std::to_string(bit));
-                    slang::PreprocessorMacroDesc m;
+                    slang::PreprocessorMacroDesc m{};
                     m.name = name.c_str();
                     m.value = "1";
                     macros.push_back(m);
@@ -652,20 +667,22 @@ namespace miki::shader {
         }
         auto pathStr = iSourcePath.string();
 
-        auto spirvSession = impl_->GetPooledSession(ShaderTarget::SPIRV);
+        auto spirvTarget = ShaderTarget::SPIRV_1_5();
+        auto spirvSession = impl_->GetPooledSession(spirvTarget);
         if (!spirvSession) {
             return std::unexpected(spirvSession.error());
         }
-        auto spirvBlob = impl_->CompileToBlob(*spirvSession, source, pathStr, iEntryPoint, iStage, ShaderTarget::SPIRV);
+        auto spirvBlob = impl_->CompileToBlob(*spirvSession, source, pathStr, iEntryPoint, iStage, spirvTarget);
         if (!spirvBlob) {
             return std::unexpected(spirvBlob.error());
         }
 
-        auto dxilSession = impl_->GetPooledSession(ShaderTarget::DXIL);
+        auto dxilTarget = ShaderTarget::DXIL_6_6();
+        auto dxilSession = impl_->GetPooledSession(dxilTarget);
         if (!dxilSession) {
             return std::unexpected(dxilSession.error());
         }
-        auto dxilBlob = impl_->CompileToBlob(*dxilSession, source, pathStr, iEntryPoint, iStage, ShaderTarget::DXIL);
+        auto dxilBlob = impl_->CompileToBlob(*dxilSession, source, pathStr, iEntryPoint, iStage, dxilTarget);
         if (!dxilBlob) {
             return std::unexpected(dxilBlob.error());
         }
@@ -684,7 +701,7 @@ namespace miki::shader {
         auto pathStr = iSourcePath.string();
 
         static constexpr std::array<ShaderTarget, kTargetCount> kTargets
-            = {ShaderTarget::SPIRV, ShaderTarget::DXIL, ShaderTarget::GLSL, ShaderTarget::WGSL};
+            = {ShaderTarget::SPIRV_1_5(), ShaderTarget::DXIL_6_6(), ShaderTarget::GLSL_430(), ShaderTarget::WGSL_1_0()};
 
         std::array<ShaderBlob, kTargetCount> blobs;
         for (size_t i = 0; i < kTargetCount; ++i) {

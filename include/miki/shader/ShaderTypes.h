@@ -19,15 +19,47 @@
 
 namespace miki::shader {
 
-    /** @brief Compilation target backend. */
-    enum class ShaderTarget : uint8_t {
+    /** @brief Shader compilation target type. */
+    enum class ShaderTargetType : uint8_t {
         SPIRV,  // Vulkan (Tier1/Tier2), OpenGL (via GL_ARB_gl_spirv)
         DXIL,   // D3D12
         GLSL,   // Reserved -- not used at runtime (GL consumes SPIR-V)
         WGSL,   // WebGPU (Dawn)
     };
 
-    /** @brief Map RHI backend type to shader compilation target.
+    /** @brief Shader compilation target with version info.
+     *
+     * Encapsulates target type (SPIRV/DXIL/GLSL/WGSL) and version (major.minor).
+     * Use factory methods for common configurations.
+     */
+    struct ShaderTarget {
+        ShaderTargetType type = ShaderTargetType::SPIRV;
+        uint8_t versionMajor = 1;
+        uint8_t versionMinor = 5;
+
+        constexpr auto operator==(ShaderTarget const&) const noexcept -> bool = default;
+
+        static constexpr auto SPIRV_1_3() noexcept -> ShaderTarget {
+            return {.type = ShaderTargetType::SPIRV, .versionMajor = 1, .versionMinor = 3};
+        }
+        static constexpr auto SPIRV_1_5() noexcept -> ShaderTarget {
+            return {.type = ShaderTargetType::SPIRV, .versionMajor = 1, .versionMinor = 5};
+        }
+        static constexpr auto SPIRV_1_6() noexcept -> ShaderTarget {
+            return {.type = ShaderTargetType::SPIRV, .versionMajor = 1, .versionMinor = 6};
+        }
+        static constexpr auto DXIL_6_6() noexcept -> ShaderTarget {
+            return {.type = ShaderTargetType::DXIL, .versionMajor = 6, .versionMinor = 6};
+        }
+        static constexpr auto GLSL_430() noexcept -> ShaderTarget {
+            return {.type = ShaderTargetType::GLSL, .versionMajor = 4, .versionMinor = 30};
+        }
+        static constexpr auto WGSL_1_0() noexcept -> ShaderTarget {
+            return {.type = ShaderTargetType::WGSL, .versionMajor = 1, .versionMinor = 0};
+        }
+    };
+
+    /** @brief Map RHI backend type to shader compilation target with appropriate version.
      *
      * Canonical mapping used by all render passes. GL uses SPIR-V
      * (consumed via GL_ARB_gl_spirv) to avoid Slang GLSL codegen issues.
@@ -35,10 +67,12 @@ namespace miki::shader {
      */
     [[nodiscard]] constexpr auto ShaderTargetForBackend(rhi::BackendType iBackend) noexcept -> ShaderTarget {
         switch (iBackend) {
-            case rhi::BackendType::D3D12: return ShaderTarget::DXIL;
-            case rhi::BackendType::WebGPU: return ShaderTarget::WGSL;
-            case rhi::BackendType::OpenGL43: return ShaderTarget::SPIRV;  // GL_ARB_gl_spirv
-            default: return ShaderTarget::SPIRV;                          // Vulkan14, VulkanCompat, Mock
+            case rhi::BackendType::Vulkan14: return ShaderTarget::SPIRV_1_5();
+            case rhi::BackendType::VulkanCompat: return ShaderTarget::SPIRV_1_3();
+            case rhi::BackendType::OpenGL43: return ShaderTarget::SPIRV_1_5();  // GL_ARB_gl_spirv
+            case rhi::BackendType::D3D12: return ShaderTarget::DXIL_6_6();
+            case rhi::BackendType::WebGPU: return ShaderTarget::WGSL_1_0();
+            default: return ShaderTarget::SPIRV_1_5();  // Mock
         }
     }
 
@@ -117,7 +151,7 @@ namespace miki::shader {
     /** @brief Compiled shader bytecode blob. Move-only. */
     struct ShaderBlob {
         std::vector<uint8_t> data;
-        ShaderTarget target = ShaderTarget::SPIRV;
+        ShaderTarget target;  // Default: SPIRV 1.5
         ShaderStage stage = ShaderStage::Vertex;
         std::string entryPoint;
 
@@ -154,7 +188,7 @@ namespace miki::shader {
         std::string sourceCode;            ///< If non-empty, compile from this string instead of reading sourcePath
         std::string entryPoint;
         ShaderStage stage = ShaderStage::Vertex;
-        ShaderTarget target = ShaderTarget::SPIRV;
+        ShaderTarget target;  ///< Target type + version (use ShaderTargetForBackend() or factory methods)
         ShaderPermutationKey permutation;
         std::vector<std::pair<std::string, std::string>> defines;
     };

@@ -43,7 +43,11 @@ namespace miki::shader {
         auto operator()(CacheKey const& k) const noexcept -> size_t {
             size_t h = std::hash<std::string>{}(k.sourcePath);
             h ^= std::hash<std::string>{}(k.entryPoint) + 0x9e3779b9 + (h << 6) + (h >> 2);
-            h ^= std::hash<uint8_t>{}(static_cast<uint8_t>(k.target)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            // Hash ShaderTarget: combine type + versionMajor + versionMinor
+            uint32_t targetKey = static_cast<uint32_t>(k.target.type)
+                                 | (static_cast<uint32_t>(k.target.versionMajor) << 8)
+                                 | (static_cast<uint32_t>(k.target.versionMinor) << 16);
+            h ^= std::hash<uint32_t>{}(targetKey) + 0x9e3779b9 + (h << 6) + (h >> 2);
             h ^= std::hash<uint8_t>{}(static_cast<uint8_t>(k.stage)) + 0x9e3779b9 + (h << 6) + (h >> 2);
             h ^= std::hash<uint64_t>{}(k.permutation.bits) + 0x9e3779b9 + (h << 6) + (h >> 2);
             return h;
@@ -144,11 +148,11 @@ namespace miki::shader {
     static auto DiskCachePath(fs::path const& iCacheDir, CacheKey const& iKey) -> fs::path {
         auto hash = CacheKeyHash{}(iKey);
         auto filename = std::to_string(hash);
-        switch (iKey.target) {
-            case ShaderTarget::SPIRV: filename += ".spv"; break;
-            case ShaderTarget::DXIL: filename += ".dxil"; break;
-            case ShaderTarget::GLSL: filename += ".glsl"; break;
-            case ShaderTarget::WGSL: filename += ".wgsl"; break;
+        switch (iKey.target.type) {
+            case ShaderTargetType::SPIRV: filename += ".spv"; break;
+            case ShaderTargetType::DXIL: filename += ".dxil"; break;
+            case ShaderTargetType::GLSL: filename += ".glsl"; break;
+            case ShaderTargetType::WGSL: filename += ".wgsl"; break;
         }
         return iCacheDir / filename;
     }
