@@ -175,53 +175,48 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
-        if (poolData->nextFreeIndex < poolData->cachedBuffers.size()) {
-            // Fast path: reuse cached VkCommandBuffer + wrapper (spec §19, zero-alloc steady state)
-            auto& entry = poolData->cachedBuffers[poolData->nextFreeIndex];
-            poolData->nextFreeIndex++;
-            entry.wrapper->Init(this, entry.vkCB, poolData->pool, poolData->queueType);
-            auto* bufData = commandBuffers_.Lookup(entry.bufHandle);
+        // Helper: populate HandlePool data and build acquisition result
+        auto buildAcquisition = [&](CommandBufferHandle bufHandle, VkCommandBuffer vkCB,
+                                    VulkanCommandBuffer* wrapper) -> CommandListAcquisition {
+            auto* bufData = commandBuffers_.Lookup(bufHandle);
             bufData->pool = poolData->pool;
-            bufData->buffer = entry.vkCB;
+            bufData->buffer = vkCB;
             bufData->queueType = poolData->queueType;
-            CommandListHandle listHandle(entry.wrapper.get(), tier_);
-            return CommandListAcquisition{.bufferHandle = entry.bufHandle, .listHandle = listHandle};
+            wrapper->Init(this, vkCB, poolData->pool, poolData->queueType);
+            return {.bufferHandle = bufHandle, .listHandle = CommandListHandle(wrapper, tier_)};
+        };
+
+        // ----- Fast path: reuse cached entry (steady-state, zero-alloc) -----
+        if (poolData->nextFreeIndex < poolData->cachedBuffers.size()) {
+            auto& entry = poolData->cachedBuffers[poolData->nextFreeIndex++];
+            return buildAcquisition(entry.bufHandle, entry.vkCB, entry.wrapper.get());
         }
 
-        // Cold path: allocate new VkCommandBuffer (only during warm-up)
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = poolData->pool;
-        allocInfo.level = secondary ? VK_COMMAND_BUFFER_LEVEL_SECONDARY : VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1;
-
-        VkCommandBuffer cmdBuffer = VK_NULL_HANDLE;
-        VkResult r = vkAllocateCommandBuffers(device_, &allocInfo, &cmdBuffer);
-        if (r != VK_SUCCESS) {
+        // ----- Cold path: allocate new VkCommandBuffer (warm-up only) -----
+        VkCommandBufferAllocateInfo allocInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .commandPool = poolData->pool,
+            .level = secondary ? VK_COMMAND_BUFFER_LEVEL_SECONDARY : VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        VkCommandBuffer vkCB = VK_NULL_HANDLE;
+        if (vkAllocateCommandBuffers(device_, &allocInfo, &vkCB) != VK_SUCCESS) {
             return std::unexpected(RhiError::OutOfDeviceMemory);
         }
 
         auto [bufHandle, bufData] = commandBuffers_.Allocate();
         if (!bufData) {
-            vkFreeCommandBuffers(device_, poolData->pool, 1, &cmdBuffer);
+            vkFreeCommandBuffers(device_, poolData->pool, 1, &vkCB);
             return std::unexpected(RhiError::TooManyObjects);
         }
-        bufData->pool = poolData->pool;
-        bufData->buffer = cmdBuffer;
-        bufData->queueType = poolData->queueType;
 
         auto wrapper = std::make_unique<VulkanCommandBuffer>();
-        wrapper->Init(this, cmdBuffer, poolData->pool, poolData->queueType);
-        CommandListHandle listHandle(wrapper.get(), tier_);
+        auto acq = buildAcquisition(bufHandle, vkCB, wrapper.get());
 
-        poolData->cachedBuffers.push_back({
-            .vkCB = cmdBuffer,
-            .bufHandle = bufHandle,
-            .wrapper = std::move(wrapper),
-        });
+        poolData->cachedBuffers.push_back({.vkCB = vkCB, .bufHandle = bufHandle, .wrapper = std::move(wrapper)});
         poolData->nextFreeIndex++;
-
-        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+        return acq;
     }
 
     void VulkanDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& /*acq*/) {

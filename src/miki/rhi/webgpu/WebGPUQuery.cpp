@@ -221,41 +221,36 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
-        if (poolData->nextFreeIndex < poolData->cachedEntries.size()) {
-            // Fast path: reuse cached wrapper (spec §19, zero-alloc steady state)
-            auto& entry = poolData->cachedEntries[poolData->nextFreeIndex];
-            poolData->nextFreeIndex++;
-            auto* bufData = commandBuffers_.Lookup(entry.bufHandle);
+        // Helper: populate HandlePool data and build acquisition result
+        auto buildAcquisition
+            = [&](CommandBufferHandle bufHandle, WebGPUCommandBuffer* wrapper) -> CommandListAcquisition {
+            auto* bufData = commandBuffers_.Lookup(bufHandle);
             bufData->queueType = poolData->queueType;
             bufData->isSecondary = false;
             bufData->encoder = nullptr;
             bufData->finishedBuffer = nullptr;
-            entry.wrapper->Init(this, entry.bufHandle);
-            CommandListHandle listHandle(entry.wrapper.get(), BackendType::WebGPU);
-            return CommandListAcquisition{.bufferHandle = entry.bufHandle, .listHandle = listHandle};
+            wrapper->Init(this, bufHandle);
+            return {.bufferHandle = bufHandle, .listHandle = CommandListHandle(wrapper, BackendType::WebGPU)};
+        };
+
+        // ----- Fast path: reuse cached entry (steady-state, zero-alloc) -----
+        if (poolData->nextFreeIndex < poolData->cachedEntries.size()) {
+            auto& entry = poolData->cachedEntries[poolData->nextFreeIndex++];
+            return buildAcquisition(entry.bufHandle, entry.wrapper.get());
         }
 
-        // Cold path: create new wrapper (only during warm-up)
+        // ----- Cold path: create new wrapper (warm-up only) -----
         auto [bufHandle, bufData] = commandBuffers_.Allocate();
         if (!bufData) {
             return std::unexpected(RhiError::TooManyObjects);
         }
-        bufData->queueType = poolData->queueType;
-        bufData->isSecondary = false;
-        bufData->encoder = nullptr;
-        bufData->finishedBuffer = nullptr;
 
         auto wrapper = std::make_unique<WebGPUCommandBuffer>();
-        wrapper->Init(this, bufHandle);
-        CommandListHandle listHandle(wrapper.get(), BackendType::WebGPU);
+        auto acq = buildAcquisition(bufHandle, wrapper.get());
 
-        poolData->cachedEntries.push_back({
-            .bufHandle = bufHandle,
-            .wrapper = std::move(wrapper),
-        });
+        poolData->cachedEntries.push_back({.bufHandle = bufHandle, .wrapper = std::move(wrapper)});
         poolData->nextFreeIndex++;
-
-        return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
+        return acq;
     }
 
     void WebGPUDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& /*acq*/) {
