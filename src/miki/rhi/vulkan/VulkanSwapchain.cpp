@@ -279,6 +279,8 @@ namespace miki::rhi {
 
     auto VulkanDevice::AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence)
         -> RhiResult<uint32_t> {
+        using enum ::miki::debug::LogCategory;
+
         auto* scData = swapchains_.Lookup(h);
         if (!scData) {
             return std::unexpected(RhiError::InvalidHandle);
@@ -299,6 +301,11 @@ namespace miki::rhi {
                 vkFence = fenceData->fence;
             }
         }
+
+        MIKI_LOG_INFO(
+            Rhi, "AcquireNextImage: vkSem = {} (0x{:x}), vkFence = {} (0x{:x})", static_cast<void*>(vkSem),
+            reinterpret_cast<uintptr_t>(vkSem), static_cast<void*>(vkFence), reinterpret_cast<uintptr_t>(vkFence)
+        );
 
         uint32_t imageIndex = 0;
         VkResult result = vkAcquireNextImageKHR(

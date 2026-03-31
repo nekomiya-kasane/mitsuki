@@ -165,7 +165,9 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/debug-full/rhi_triangle_demo.exe",
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "",
+            "stopAtEntry": false
         },
         {
             "name": "[Full] rhi_triangle_demo --backend vulkan",

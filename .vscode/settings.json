@@ -54,5 +54,11 @@
         "source.fixAll.clangtidy": "explicit"
     },
     "debug.inlineValues": "on",
-    "debug.terminal.clearBeforeReusing": true
+    "debug.terminal.clearBeforeReusing": true,
+    "debug.terminal.showExitAlert": false,
+    "debug.variable.exclude": {
+        "__builtin_.*": true,
+        "_M_.*": true
+    },
+    "debug.console.wordWrap": true
 }
