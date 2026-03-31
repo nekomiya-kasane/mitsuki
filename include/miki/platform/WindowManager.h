@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -208,6 +209,26 @@ namespace miki::platform {
             (void)iGamepadId;
             return {};
         }
+
+        // -- Live resize callback ------------------------------------------------
+
+        /** @brief Register a callback invoked synchronously during OS modal resize.
+         *
+         *  On Windows, dragging a window border enters a modal message loop
+         *  (DefWindowProc WM_SIZING) that blocks the application's main loop.
+         *  This callback fires from within that modal loop on each WM_SIZE, allowing the application to render a frame
+         *  and keep the display responsive.
+         *
+         *  The callback receives (WindowHandle, newWidth, newHeight).
+         *  Set to nullptr to disable. Default: no-op.
+         *
+         *  Thread safety: called on the main thread, from within glfwPollEvents().
+         *
+         * TODO (Nekomiya) remove this once you have integrated misaki 3+N arch. It is only needed when the render
+         * thread is identical to the event thread
+         */
+        using LiveResizeCallback = std::function<void(WindowHandle, uint32_t, uint32_t)>;
+        virtual auto SetLiveResizeCallback(LiveResizeCallback iCallback) -> void { (void)iCallback; }
 
         // -- OpenGL-specific operations (default no-op for non-GL backends) ----
         // TODO (Nekomiya) this is bad architecture

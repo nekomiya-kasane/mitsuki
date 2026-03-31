@@ -517,6 +517,23 @@ int main(int argc, char** argv) {
     }
     std::println("[demo] {} triangle running. ESC to quit.", BackendName(backend));
 
+    // 5a. Live resize callback — renders during Win32 modal drag resize
+#ifndef __EMSCRIPTEN__
+    backendPtr->SetLiveResizeCallback([](WindowHandle w, uint32_t width, uint32_t height) {
+        (void)g_sm->ResizeSurface(w, width, height);
+        auto frameResult = g_sm->BeginFrame(w);
+        if (!frameResult) {
+            return;
+        }
+        auto& frame = *frameResult;
+        auto cmdBuf = g_renderer->RecordFrame(frame.swapchainImageView, frame.width, frame.height);
+        if (!cmdBuf) {
+            return;
+        }
+        (void)g_sm->EndFrame(w, *cmdBuf);
+    });
+#endif
+
     // 6. Main loop
 #if defined(__EMSCRIPTEN__)
     emscripten_set_main_loop(MainLoopIteration, 0, true);

@@ -682,10 +682,21 @@ namespace miki::platform {
             return;
         }
 
-        data->owner->pendingEvents_.push_back(
-            {data->handle,
-             neko::platform::Resize{.width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height)}}
-        );
+        auto w32 = static_cast<uint32_t>(width);
+        auto h32 = static_cast<uint32_t>(height);
+
+        data->owner->pendingEvents_.push_back({data->handle, neko::platform::Resize{.width = w32, .height = h32}});
+
+        // During Win32 modal resize (WM_SIZING), glfwPollEvents blocks in DefWindowProc's
+        // internal message loop. This callback is the only opportunity to render a frame.
+        // The live resize callback lets the application do resize + render synchronously.
+        if (data->owner->liveResizeCallback_ && w32 > 0 && h32 > 0) {
+            data->owner->liveResizeCallback_(data->handle, w32, h32);
+        }
+    }
+
+    auto GlfwWindowBackend::SetLiveResizeCallback(LiveResizeCallback iCallback) -> void {
+        liveResizeCallback_ = std::move(iCallback);
     }
 
     auto GlfwWindowBackend::CharCallback(GLFWwindow* w, unsigned int codepoint) -> void {

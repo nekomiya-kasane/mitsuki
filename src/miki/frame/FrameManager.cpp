@@ -957,6 +957,13 @@ namespace miki::frame {
             return {};  // Minimized — no-op, will skip frames in BeginFrame
         }
 
+        // Same-size short-circuit: skip expensive WaitAll + swapchain recreation when the surface is already at the
+        // requested dimensions (e.g. live resize callback already handled this size during Win32 modal drag).
+        auto currentExtent = impl_->surface->GetExtent();
+        if (currentExtent.width == iWidth && currentExtent.height == iHeight) {
+            return {};
+        }
+
         // Wait for all in-flight frames before recreating swapchain
         WaitAll();
 

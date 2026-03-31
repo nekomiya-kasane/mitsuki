@@ -79,6 +79,9 @@ namespace miki::platform {
             return pendingEvents_;
         }
 
+        // -- Live resize callback --
+        auto SetLiveResizeCallback(LiveResizeCallback iCallback) -> void override;
+
         // -- OpenGL-specific operations --
         [[nodiscard]] auto GetGLProcLoader() const noexcept -> GLProcLoader override;
         auto SwapBuffers(void* iNativeToken) -> void override;
@@ -108,6 +111,9 @@ namespace miki::platform {
 
         // Accumulated events during glfwPollEvents callback storm
         std::vector<miki::platform::WindowEvent> pendingEvents_;
+
+        // Live resize callback (invoked from FramebufferSizeCallback during OS modal resize)
+        LiveResizeCallback liveResizeCallback_;
 
         // -- Gamepad state tracking --
         static constexpr float kAxisDeadzone = 0.05f;
