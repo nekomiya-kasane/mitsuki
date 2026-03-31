@@ -52,5 +52,7 @@
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
         "source.fixAll.clangtidy": "explicit"
-    }
+    },
+    "debug.inlineValues": "on",
+    "debug.terminal.clearBeforeReusing": true
 }
