@@ -30,6 +30,27 @@ namespace miki::rhi {
     // SurfaceEntry — per-window owned resources
     // =========================================================================
 
+    // TODO(architecture): Resource overhead of per-window FrameManager
+    //
+    // Current design: Each window has an independent FrameManager with its own CommandPoolAllocator.
+    // Resource overhead: N windows × (slots × queues × threads) CommandPools + synchronization primitives.
+    //
+    // Advantages:
+    //   - Complete isolation, no synchronization issues
+    //   - Independent lifecycle management per window
+    //   - Simple implementation
+    //
+    // Disadvantages:
+    //   - 8 windows = 16 CommandPools + 16 Fences + 32 Semaphores (default config)
+    //   - Resource waste in extreme multi-window scenarios (CAD multi-viewport)
+    //
+    // Potential optimizations (if needed):
+    //   - Share CommandPoolAllocator, keep only FrameContext (sync primitives) per window
+    //   - References: UE5 global CommandPool pool, Godot 4 per-window RenderingDevice
+    //
+    // Conclusion: Current design is correct and safe, overhead is acceptable for 8-window limit. No changes for now.
+    // References: Vulkan Guide multithreading, ARM Mobile Best Practices
+    //
     struct SurfaceEntry {
         std::unique_ptr<RenderSurface> surface;
         frame::FrameManager frameManager;
