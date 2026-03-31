@@ -377,13 +377,20 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
+        // Resolve "all remaining" counts (0 means all remaining mips/layers).
+        // WebGPU uses WGPU_MIP_LEVEL_COUNT_UNDEFINED / WGPU_ARRAY_LAYER_COUNT_UNDEFINED for "all remaining".
+        uint32_t effectiveMipCount = (desc.mipLevelCount == 0) ? WGPU_MIP_LEVEL_COUNT_UNDEFINED : desc.mipLevelCount;
+        uint32_t effectiveLayerCount
+            = (desc.arrayLayerCount == 0) ? WGPU_ARRAY_LAYER_COUNT_UNDEFINED : desc.arrayLayerCount;
+
         WGPUTextureViewDescriptor viewDesc{};
-        viewDesc.format = ToWGPUTextureFormat(desc.format);
+        // Inherit format from parent texture if not explicitly specified.
+        viewDesc.format = (desc.format == Format::Undefined) ? texData->format : ToWGPUTextureFormat(desc.format);
         viewDesc.dimension = ToWGPUTextureViewDimension(desc.viewDimension);
         viewDesc.baseMipLevel = desc.baseMipLevel;
-        viewDesc.mipLevelCount = desc.mipLevelCount;
+        viewDesc.mipLevelCount = effectiveMipCount;
         viewDesc.baseArrayLayer = desc.baseArrayLayer;
-        viewDesc.arrayLayerCount = desc.arrayLayerCount;
+        viewDesc.arrayLayerCount = effectiveLayerCount;
 
         switch (desc.aspect) {
             case TextureAspect::Color: viewDesc.aspect = WGPUTextureAspect_All; break;

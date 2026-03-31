@@ -168,7 +168,7 @@ namespace miki::rhi {
         std::vector<VkImage> images(actualImageCount);
         vkGetSwapchainImagesKHR(device_, swapchain, &actualImageCount, images.data());
 
-        // Register swapchain images in textures_ pool so CreateTextureView works
+        // Register swapchain images in textures_ pool
         std::vector<TextureHandle> textureHandles;
         textureHandles.reserve(actualImageCount);
         for (uint32_t i = 0; i < actualImageCount; ++i) {
@@ -189,7 +189,8 @@ namespace miki::rhi {
             texData->extent = {extent.width, extent.height, 1};
             texData->mipLevels = 1;
             texData->arrayLayers = 1;
-            texData->ownsImage = false;  // Swapchain owns the image
+            texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
+            texData->ownsImage = false;                    // Swapchain owns the image
             textureHandles.push_back(texHandle);
         }
 
@@ -325,6 +326,7 @@ namespace miki::rhi {
             texData->extent = {extent.width, extent.height, 1};
             texData->mipLevels = 1;
             texData->arrayLayers = 1;
+            texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
             texData->ownsImage = false;
             data->textureHandles.push_back(texHandle);
         }

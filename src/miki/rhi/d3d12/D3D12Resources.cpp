@@ -376,6 +376,7 @@ namespace miki::rhi {
         data->depth = desc.depth;
         data->mipLevels = desc.mipLevels;
         data->arrayLayers = desc.arrayLayers;
+        data->dimension = desc.dimension;
         data->ownsResource = true;
 
         if (desc.debugName) {
@@ -408,7 +409,14 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
-        DXGI_FORMAT viewFormat = ToDxgiFormat(desc.format);
+        // Inherit format from parent texture if not explicitly specified.
+        DXGI_FORMAT viewFormat = (desc.format == Format::Undefined) ? texData->format : ToDxgiFormat(desc.format);
+
+        // Resolve "all remaining" counts (0 means all remaining mips/layers).
+        uint32_t effectiveMipCount
+            = (desc.mipLevelCount == 0) ? (texData->mipLevels - desc.baseMipLevel) : desc.mipLevelCount;
+        uint32_t effectiveLayerCount
+            = (desc.arrayLayerCount == 0) ? (texData->arrayLayers - desc.baseArrayLayer) : desc.arrayLayerCount;
 
         auto [handle, data] = textureViews_.Allocate();
         if (!data) {
@@ -430,31 +438,31 @@ namespace miki::rhi {
                 switch (srvDesc.ViewDimension) {
                     case D3D12_SRV_DIMENSION_TEXTURE1D:
                         srvDesc.Texture1D.MostDetailedMip = desc.baseMipLevel;
-                        srvDesc.Texture1D.MipLevels = desc.mipLevelCount;
+                        srvDesc.Texture1D.MipLevels = effectiveMipCount;
                         break;
                     case D3D12_SRV_DIMENSION_TEXTURE2D:
                         srvDesc.Texture2D.MostDetailedMip = desc.baseMipLevel;
-                        srvDesc.Texture2D.MipLevels = desc.mipLevelCount;
+                        srvDesc.Texture2D.MipLevels = effectiveMipCount;
                         break;
                     case D3D12_SRV_DIMENSION_TEXTURE3D:
                         srvDesc.Texture3D.MostDetailedMip = desc.baseMipLevel;
-                        srvDesc.Texture3D.MipLevels = desc.mipLevelCount;
+                        srvDesc.Texture3D.MipLevels = effectiveMipCount;
                         break;
                     case D3D12_SRV_DIMENSION_TEXTURECUBE:
                         srvDesc.TextureCube.MostDetailedMip = desc.baseMipLevel;
-                        srvDesc.TextureCube.MipLevels = desc.mipLevelCount;
+                        srvDesc.TextureCube.MipLevels = effectiveMipCount;
                         break;
                     case D3D12_SRV_DIMENSION_TEXTURE2DARRAY:
                         srvDesc.Texture2DArray.MostDetailedMip = desc.baseMipLevel;
-                        srvDesc.Texture2DArray.MipLevels = desc.mipLevelCount;
+                        srvDesc.Texture2DArray.MipLevels = effectiveMipCount;
                         srvDesc.Texture2DArray.FirstArraySlice = desc.baseArrayLayer;
-                        srvDesc.Texture2DArray.ArraySize = desc.arrayLayerCount;
+                        srvDesc.Texture2DArray.ArraySize = effectiveLayerCount;
                         break;
                     case D3D12_SRV_DIMENSION_TEXTURECUBEARRAY:
                         srvDesc.TextureCubeArray.MostDetailedMip = desc.baseMipLevel;
-                        srvDesc.TextureCubeArray.MipLevels = desc.mipLevelCount;
+                        srvDesc.TextureCubeArray.MipLevels = effectiveMipCount;
                         srvDesc.TextureCubeArray.First2DArrayFace = desc.baseArrayLayer;
-                        srvDesc.TextureCubeArray.NumCubes = desc.arrayLayerCount / 6;
+                        srvDesc.TextureCubeArray.NumCubes = effectiveLayerCount / 6;
                         break;
                     default: break;
                 }

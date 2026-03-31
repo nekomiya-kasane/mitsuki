@@ -35,7 +35,7 @@
         "--fallback-style=LLVM",
         "--log=info",
         "--pretty",
-        "--compile-commands-dir=c:\\mitsuki\\build\\debug"
+        "--compile-commands-dir=c:\\mitsuki\\build\\debug-full"
     ],
     "clangd.checkUpdates": false,
     "clangd.onConfigChanged": "restart",

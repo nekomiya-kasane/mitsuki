@@ -65,7 +65,8 @@ namespace miki::rhi {
         uint32_t width = 0, height = 0, depth = 0;
         uint32_t mipLevels = 1;
         uint32_t arrayLayers = 1;
-        bool ownsResource = true;  // false for swapchain images
+        TextureDimension dimension = TextureDimension::Tex2D;  // For view type inference
+        bool ownsResource = true;                              // false for swapchain images
     };
 
     struct D3D12TextureViewData {

@@ -27,6 +27,7 @@ namespace miki::rhi {
         texData->depth = 1;
         texData->mipLevels = 1;
         texData->arrayLayers = 1;
+        texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
         texData->ownsTexture = false;
 
         auto [handle, data] = swapchains_.Allocate();

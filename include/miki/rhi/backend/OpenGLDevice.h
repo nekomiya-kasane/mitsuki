@@ -74,7 +74,8 @@ namespace miki::rhi {
         uint32_t width = 0, height = 0, depth = 0;
         uint32_t mipLevels = 1;
         uint32_t arrayLayers = 1;
-        bool ownsTexture = true;  // false for swapchain (external FBO)
+        TextureDimension dimension = TextureDimension::Tex2D;  // For view type inference
+        bool ownsTexture = true;                               // false for swapchain (external FBO)
     };
 
     struct GLTextureViewData {

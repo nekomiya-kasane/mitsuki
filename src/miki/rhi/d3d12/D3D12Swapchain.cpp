@@ -124,6 +124,7 @@ namespace miki::rhi {
             texData->depth = 1;
             texData->mipLevels = 1;
             texData->arrayLayers = 1;
+            texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
             texData->ownsResource = false;
             textureHandles.push_back(texHandle);
 
@@ -229,6 +230,7 @@ namespace miki::rhi {
             texData->depth = 1;
             texData->mipLevels = 1;
             texData->arrayLayers = 1;
+            texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
             texData->ownsResource = false;
             data->textureHandles.push_back(texHandle);
 

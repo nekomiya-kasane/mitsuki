@@ -60,7 +60,8 @@ namespace miki::rhi {
         VkExtent3D extent{};
         uint32_t mipLevels = 1;
         uint32_t arrayLayers = 1;
-        bool ownsImage = true;  // false for swapchain images
+        TextureDimension dimension = TextureDimension::Tex2D;  // For view type inference
+        bool ownsImage = true;                                 // false for swapchain images
     };
 
     struct VulkanTextureViewData {

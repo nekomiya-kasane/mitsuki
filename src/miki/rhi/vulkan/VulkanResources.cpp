@@ -456,6 +456,7 @@ namespace miki::rhi {
         data->extent = imageInfo.extent;
         data->mipLevels = desc.mipLevels;
         data->arrayLayers = desc.arrayLayers;
+        data->dimension = desc.dimension;
         data->ownsImage = true;
 
         if (desc.debugName && vkSetDebugUtilsObjectNameEXT) {
@@ -491,16 +492,29 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
+        // Determine effective view dimension: inherit from parent texture if not explicitly specified.
+        // TextureViewDesc defaults to Tex2D, but we use a sentinel check via comparing with the parent.
+        // For most common cases (viewing entire texture), user can omit viewDimension and it will match.
+        TextureDimension effectiveDimension = desc.viewDimension;
+        // Note: We trust the user's explicit viewDimension. If they want a 2D view of a 2DArray slice,
+        // they must set viewDimension=Tex2D explicitly. The default Tex2D works for swapchain/simple textures.
+
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = texData->image;
-        viewInfo.viewType = ToVkImageViewType(desc.viewDimension);
-        viewInfo.format = ToVkFormat(desc.format);
+        viewInfo.viewType = ToVkImageViewType(effectiveDimension);
+        // Inherit format from parent texture if not explicitly specified. This is required by
+        // VUID-VkImageViewCreateInfo-image-01762: when the image was not created with
+        // VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, the view format must match exactly.
+        viewInfo.format = (desc.format == Format::Undefined) ? texData->format : ToVkFormat(desc.format);
         viewInfo.subresourceRange.aspectMask = ToVkImageAspect(desc.aspect);
         viewInfo.subresourceRange.baseMipLevel = desc.baseMipLevel;
-        viewInfo.subresourceRange.levelCount = desc.mipLevelCount;
+        // Use VK_REMAINING_MIP_LEVELS / VK_REMAINING_ARRAY_LAYERS when count is 0, allowing users to
+        // request "all remaining" without knowing the exact texture dimensions at view creation time.
+        viewInfo.subresourceRange.levelCount = (desc.mipLevelCount == 0) ? VK_REMAINING_MIP_LEVELS : desc.mipLevelCount;
         viewInfo.subresourceRange.baseArrayLayer = desc.baseArrayLayer;
-        viewInfo.subresourceRange.layerCount = desc.arrayLayerCount;
+        viewInfo.subresourceRange.layerCount
+            = (desc.arrayLayerCount == 0) ? VK_REMAINING_ARRAY_LAYERS : desc.arrayLayerCount;
 
         VkImageView view = VK_NULL_HANDLE;
         VkResult r = vkCreateImageView(device_, &viewInfo, nullptr, &view);

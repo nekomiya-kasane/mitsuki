@@ -346,6 +346,7 @@ namespace miki::rhi {
         data->depth = desc.depth;
         data->mipLevels = desc.mipLevels;
         data->arrayLayers = desc.arrayLayers;
+        data->dimension = desc.dimension;
         data->ownsTexture = true;
 
         if (desc.debugName && gl_->KHR_debug) {
@@ -376,14 +377,23 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
-        GLFormatInfo fmtInfo = ToGLFormat(desc.format);
-        GLenum viewTarget = ToGLTextureTarget(desc.viewDimension, desc.arrayLayerCount);
+        // Inherit format from parent texture if not explicitly specified.
+        GLenum internalFormat
+            = (desc.format == Format::Undefined) ? texData->internalFormat : ToGLFormat(desc.format).internalFormat;
+
+        // Resolve "all remaining" counts (0 means all remaining mips/layers).
+        uint32_t effectiveMipCount
+            = (desc.mipLevelCount == 0) ? (texData->mipLevels - desc.baseMipLevel) : desc.mipLevelCount;
+        uint32_t effectiveLayerCount
+            = (desc.arrayLayerCount == 0) ? (texData->arrayLayers - desc.baseArrayLayer) : desc.arrayLayerCount;
+
+        GLenum viewTarget = ToGLTextureTarget(desc.viewDimension, effectiveLayerCount);
 
         GLuint viewTex = 0;
         gl_->GenTextures(1, &viewTex);
         gl_->TextureView(
-            viewTex, viewTarget, texData->texture, fmtInfo.internalFormat, desc.baseMipLevel, desc.mipLevelCount,
-            desc.baseArrayLayer, desc.arrayLayerCount
+            viewTex, viewTarget, texData->texture, internalFormat, desc.baseMipLevel, effectiveMipCount,
+            desc.baseArrayLayer, effectiveLayerCount
         );
 
         auto [handle, data] = textureViews_.Allocate();
