@@ -157,6 +157,13 @@ namespace miki::rhi {
 
     struct WGPUCommandPoolData {
         QueueType queueType = QueueType::Graphics;
+        // Cached C++ wrappers + handles for pool-reset reuse (spec §19)
+        struct CachedEntry {
+            CommandBufferHandle bufHandle;
+            std::unique_ptr<WebGPUCommandBuffer> wrapper;
+        };
+        std::vector<CachedEntry> cachedEntries;
+        uint32_t nextFreeIndex = 0;
     };
 
     // =========================================================================
@@ -383,9 +390,6 @@ namespace miki::rhi {
         HandlePool<WGPUSwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<WGPUCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
         HandlePool<WGPUCommandPoolData, CommandPoolTag, kMaxCommandPools> commandPools_;
-
-        // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
-        std::vector<std::unique_ptr<WebGPUCommandBuffer>> commandListArena_;
 
         // -- Init helpers --
         void PopulateCapabilities();

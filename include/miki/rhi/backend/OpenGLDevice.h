@@ -216,6 +216,13 @@ namespace miki::rhi {
 
     struct GLCommandPoolData {
         QueueType queueType = QueueType::Graphics;
+        // Cached C++ wrappers + handles for pool-reset reuse (spec §19)
+        struct CachedEntry {
+            CommandBufferHandle bufHandle;
+            std::unique_ptr<OpenGLCommandBuffer> wrapper;
+        };
+        std::vector<CachedEntry> cachedEntries;
+        uint32_t nextFreeIndex = 0;
     };
 
     // =========================================================================
@@ -436,9 +443,6 @@ namespace miki::rhi {
         HandlePool<GLSwapchainData, SwapchainTag, kMaxSwapchains> swapchains_;
         HandlePool<GLCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
         HandlePool<GLCommandPoolData, CommandPoolTag, kMaxCommandPools> commandPools_;
-
-        // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
-        std::vector<std::unique_ptr<OpenGLCommandBuffer>> commandListArena_;
 
         // -- Init helpers --
         void PopulateCapabilities();

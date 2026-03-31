@@ -266,11 +266,8 @@ namespace miki::frame {
         assert(threadIndex < impl.recordingThreadCount);
         uint32_t qi = impl.QueueIndex(queue);
         auto& slot = impl.poolRing_[frameSlot][qi][threadIndex];
-
-        auto* acq = slot.arena.Lookup(arenaIndex);
-        if (acq) {
-            impl.device.Dispatch([&](auto& dev) { dev.FreeFromPool(slot.poolHandle, *acq); });
-        }
+        // No FreeFromPool call — pool-reset model (spec §19) handles bulk reclaim.
+        // Just release the arena slot so it can be reused within the same frame.
         slot.arena.Release(arenaIndex);
     }
 

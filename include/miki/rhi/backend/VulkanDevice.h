@@ -149,6 +149,14 @@ namespace miki::rhi {
         VkCommandPool pool = VK_NULL_HANDLE;
         uint32_t queueFamilyIndex = UINT32_MAX;
         QueueType queueType = QueueType::Graphics;
+        // Cached VkCommandBuffers + C++ wrappers for pool-reset reuse (spec §19)
+        struct CachedEntry {
+            VkCommandBuffer vkCB = VK_NULL_HANDLE;
+            CommandBufferHandle bufHandle;
+            std::unique_ptr<VulkanCommandBuffer> wrapper;
+        };
+        std::vector<CachedEntry> cachedBuffers;
+        uint32_t nextFreeIndex = 0;
     };
 
     struct VulkanDeviceMemoryData {
@@ -399,9 +407,6 @@ namespace miki::rhi {
         HandlePool<VulkanCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
         HandlePool<VulkanCommandPoolData, CommandPoolTag, kMaxCommandPools> commandPools_;
         HandlePool<VulkanDeviceMemoryData, DeviceMemoryTag, kMaxDeviceMemory> deviceMemory_;
-
-        // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
-        std::vector<std::unique_ptr<VulkanCommandBuffer>> commandListArena_;
 
         // -- Init helpers --
         auto CreateInstance(const VulkanDeviceDesc& desc) -> RhiResult<void>;

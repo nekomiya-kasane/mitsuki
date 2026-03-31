@@ -6,8 +6,6 @@
 
 #include "miki/rhi/backend/VulkanCommandBuffer.h"
 
-#include <algorithm>
-
 namespace miki::rhi {
 
     namespace {
@@ -133,6 +131,13 @@ namespace miki::rhi {
         if (!data) {
             return;
         }
+        // Free cached HandlePool entries before destroying the native pool
+        for (auto& entry : data->cachedBuffers) {
+            if (entry.bufHandle.IsValid()) {
+                commandBuffers_.Free(entry.bufHandle);
+            }
+        }
+        data->cachedBuffers.clear();
         vkDestroyCommandPool(device_, data->pool, nullptr);
         commandPools_.Free(h);
     }
@@ -143,10 +148,24 @@ namespace miki::rhi {
             return;
         }
         VkCommandPoolResetFlags vkFlags = 0;
-        if (static_cast<uint8_t>(flags) & static_cast<uint8_t>(CommandPoolResetFlags::ReleaseResources)) {
+        bool releaseResources
+            = static_cast<uint8_t>(flags) & static_cast<uint8_t>(CommandPoolResetFlags::ReleaseResources);
+        if (releaseResources) {
             vkFlags = VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT;
         }
         vkResetCommandPool(device_, data->pool, vkFlags);
+        if (releaseResources) {
+            // RELEASE_RESOURCES invalidates all VkCommandBuffers — must clear cache and free handles
+            for (auto& entry : data->cachedBuffers) {
+                if (entry.bufHandle.IsValid()) {
+                    commandBuffers_.Free(entry.bufHandle);
+                }
+            }
+            data->cachedBuffers.clear();
+        }
+        // Reset reuse cursor — cached VkCommandBuffers survive normal pool reset and are
+        // implicitly returned to Initial state by vkResetCommandPool (spec §19).
+        data->nextFreeIndex = 0;
     }
 
     auto VulkanDevice::AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary)
@@ -156,6 +175,20 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
+        if (poolData->nextFreeIndex < poolData->cachedBuffers.size()) {
+            // Fast path: reuse cached VkCommandBuffer + wrapper (spec §19, zero-alloc steady state)
+            auto& entry = poolData->cachedBuffers[poolData->nextFreeIndex];
+            poolData->nextFreeIndex++;
+            entry.wrapper->Init(this, entry.vkCB, poolData->pool, poolData->queueType);
+            auto* bufData = commandBuffers_.Lookup(entry.bufHandle);
+            bufData->pool = poolData->pool;
+            bufData->buffer = entry.vkCB;
+            bufData->queueType = poolData->queueType;
+            CommandListHandle listHandle(entry.wrapper.get(), tier_);
+            return CommandListAcquisition{.bufferHandle = entry.bufHandle, .listHandle = listHandle};
+        }
+
+        // Cold path: allocate new VkCommandBuffer (only during warm-up)
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.commandPool = poolData->pool;
@@ -177,32 +210,23 @@ namespace miki::rhi {
         bufData->buffer = cmdBuffer;
         bufData->queueType = poolData->queueType;
 
-        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<VulkanCommandBuffer>());
-        cmdBuf->Init(this, cmdBuffer, poolData->pool, poolData->queueType);
+        auto wrapper = std::make_unique<VulkanCommandBuffer>();
+        wrapper->Init(this, cmdBuffer, poolData->pool, poolData->queueType);
+        CommandListHandle listHandle(wrapper.get(), tier_);
 
-        CommandListHandle listHandle(cmdBuf.get(), tier_);
+        poolData->cachedBuffers.push_back({
+            .vkCB = cmdBuffer,
+            .bufHandle = bufHandle,
+            .wrapper = std::move(wrapper),
+        });
+        poolData->nextFreeIndex++;
+
         return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
     }
 
-    void VulkanDevice::FreeFromPoolImpl(CommandPoolHandle pool, const CommandListAcquisition& acq) {
-        auto* poolData = commandPools_.Lookup(pool);
-        auto* bufData = commandBuffers_.Lookup(acq.bufferHandle);
-
-        if (poolData && bufData) {
-            vkFreeCommandBuffers(device_, poolData->pool, 1, &bufData->buffer);
-        }
-
-        void* raw = acq.listHandle.GetRawPtr();
-        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
-            return p.get() == raw;
-        });
-        if (it != commandListArena_.end()) {
-            commandListArena_.erase(it);
-        }
-
-        if (acq.bufferHandle.IsValid()) {
-            commandBuffers_.Free(acq.bufferHandle);
-        }
+    void VulkanDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& /*acq*/) {
+        // No-op: pool-reset model (spec §19) reclaims all buffers via ResetCommandPool.
+        // Individual free is unnecessary — cached entries persist until pool destruction.
     }
 
 }  // namespace miki::rhi

@@ -7,7 +7,6 @@
 #include "miki/rhi/backend/WebGPUCommandBuffer.h"
 #include "miki/debug/StructuredLogger.h"
 
-#include <algorithm>
 #include <dawn/webgpu.h>
 
 namespace miki::rhi {
@@ -171,11 +170,48 @@ namespace miki::rhi {
     }
 
     void WebGPUDevice::DestroyCommandPoolImpl(CommandPoolHandle h) {
+        auto* data = commandPools_.Lookup(h);
+        if (data) {
+            for (auto& entry : data->cachedEntries) {
+                auto* bufData = commandBuffers_.Lookup(entry.bufHandle);
+                if (bufData && bufData->encoder) {
+                    wgpuCommandEncoderRelease(bufData->encoder);
+                    bufData->encoder = nullptr;
+                }
+                if (entry.bufHandle.IsValid()) {
+                    commandBuffers_.Free(entry.bufHandle);
+                }
+            }
+            data->cachedEntries.clear();
+        }
         commandPools_.Free(h);
     }
 
-    void WebGPUDevice::ResetCommandPoolImpl(CommandPoolHandle /*h*/, CommandPoolResetFlags /*flags*/) {
-        // WebGPU: no native pool concept — reset is a no-op
+    void WebGPUDevice::ResetCommandPoolImpl(CommandPoolHandle h, CommandPoolResetFlags flags) {
+        auto* data = commandPools_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        // Release any live encoders from previous frame
+        for (uint32_t i = 0; i < data->nextFreeIndex && i < data->cachedEntries.size(); ++i) {
+            auto* bufData = commandBuffers_.Lookup(data->cachedEntries[i].bufHandle);
+            if (bufData && bufData->encoder) {
+                wgpuCommandEncoderRelease(bufData->encoder);
+                bufData->encoder = nullptr;
+            }
+            if (bufData) {
+                bufData->finishedBuffer = nullptr;
+            }
+        }
+        if (static_cast<uint8_t>(flags) & static_cast<uint8_t>(CommandPoolResetFlags::ReleaseResources)) {
+            for (auto& entry : data->cachedEntries) {
+                if (entry.bufHandle.IsValid()) {
+                    commandBuffers_.Free(entry.bufHandle);
+                }
+            }
+            data->cachedEntries.clear();
+        }
+        data->nextFreeIndex = 0;
     }
 
     auto WebGPUDevice::AllocateFromPoolImpl(CommandPoolHandle pool, bool /*secondary*/)
@@ -184,6 +220,22 @@ namespace miki::rhi {
         if (!poolData) {
             return std::unexpected(RhiError::InvalidHandle);
         }
+
+        if (poolData->nextFreeIndex < poolData->cachedEntries.size()) {
+            // Fast path: reuse cached wrapper (spec §19, zero-alloc steady state)
+            auto& entry = poolData->cachedEntries[poolData->nextFreeIndex];
+            poolData->nextFreeIndex++;
+            auto* bufData = commandBuffers_.Lookup(entry.bufHandle);
+            bufData->queueType = poolData->queueType;
+            bufData->isSecondary = false;
+            bufData->encoder = nullptr;
+            bufData->finishedBuffer = nullptr;
+            entry.wrapper->Init(this, entry.bufHandle);
+            CommandListHandle listHandle(entry.wrapper.get(), BackendType::WebGPU);
+            return CommandListAcquisition{.bufferHandle = entry.bufHandle, .listHandle = listHandle};
+        }
+
+        // Cold path: create new wrapper (only during warm-up)
         auto [bufHandle, bufData] = commandBuffers_.Allocate();
         if (!bufData) {
             return std::unexpected(RhiError::TooManyObjects);
@@ -191,28 +243,24 @@ namespace miki::rhi {
         bufData->queueType = poolData->queueType;
         bufData->isSecondary = false;
         bufData->encoder = nullptr;
-        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<WebGPUCommandBuffer>());
-        cmdBuf->Init(this, bufHandle);
-        CommandListHandle listHandle(cmdBuf.get(), BackendType::WebGPU);
+        bufData->finishedBuffer = nullptr;
+
+        auto wrapper = std::make_unique<WebGPUCommandBuffer>();
+        wrapper->Init(this, bufHandle);
+        CommandListHandle listHandle(wrapper.get(), BackendType::WebGPU);
+
+        poolData->cachedEntries.push_back({
+            .bufHandle = bufHandle,
+            .wrapper = std::move(wrapper),
+        });
+        poolData->nextFreeIndex++;
+
         return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
     }
 
-    void WebGPUDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& acq) {
-        void* raw = acq.listHandle.GetRawPtr();
-        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
-            return p.get() == raw;
-        });
-        if (it != commandListArena_.end()) {
-            commandListArena_.erase(it);
-        }
-        auto* bufData = commandBuffers_.Lookup(acq.bufferHandle);
-        if (bufData) {
-            if (bufData->encoder) {
-                wgpuCommandEncoderRelease(bufData->encoder);
-                bufData->encoder = nullptr;
-            }
-            commandBuffers_.Free(acq.bufferHandle);
-        }
+    void WebGPUDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& /*acq*/) {
+        // No-op: pool-reset model (spec §19) reclaims all buffers via ResetCommandPool.
+        // Encoder release is handled by ResetCommandPool. Cached entries persist until pool destruction.
     }
 
 }  // namespace miki::rhi

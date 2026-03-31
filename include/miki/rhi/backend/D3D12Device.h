@@ -173,8 +173,14 @@ namespace miki::rhi {
         ComPtr<ID3D12CommandAllocator> allocator;
         D3D12_COMMAND_LIST_TYPE listType = D3D12_COMMAND_LIST_TYPE_DIRECT;
         QueueType queueType = QueueType::Graphics;
-        std::vector<ComPtr<ID3D12GraphicsCommandList7>> cachedLists;
-        uint32_t nextFreeList = 0;
+        // Cached D3D12 command lists + C++ wrappers for pool-reset reuse (spec §19)
+        struct CachedEntry {
+            ComPtr<ID3D12GraphicsCommandList7> list;
+            CommandBufferHandle bufHandle;
+            std::unique_ptr<D3D12CommandBuffer> wrapper;
+        };
+        std::vector<CachedEntry> cachedEntries;
+        uint32_t nextFreeIndex = 0;
     };
 
     struct D3D12DeviceMemoryData {
@@ -440,9 +446,6 @@ namespace miki::rhi {
         HandlePool<D3D12CommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
         HandlePool<D3D12CommandPoolData, CommandPoolTag, kMaxCommandPools> commandPools_;
         HandlePool<D3D12DeviceMemoryData, DeviceMemoryTag, kMaxDeviceMemory> deviceMemory_;
-
-        // -- Command list arena (owned concrete CommandBuffer objects for AcquireCommandList) --
-        std::vector<std::unique_ptr<D3D12CommandBuffer>> commandListArena_;
 
         // -- Init helpers --
         auto CreateFactory(bool enableValidation) -> RhiResult<void>;

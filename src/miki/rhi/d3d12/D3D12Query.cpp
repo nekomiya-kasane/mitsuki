@@ -7,8 +7,6 @@
 
 #include "miki/rhi/backend/D3D12CommandBuffer.h"
 
-#include <algorithm>
-
 #if defined(__clang__)
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wlanguage-extension-token"
@@ -148,7 +146,7 @@ namespace miki::rhi {
         data->allocator = std::move(allocator);
         data->listType = type;
         data->queueType = desc.queue;
-        data->nextFreeList = 0;
+        data->nextFreeIndex = 0;
         return handle;
     }
 
@@ -157,7 +155,12 @@ namespace miki::rhi {
         if (!data) {
             return;
         }
-        data->cachedLists.clear();
+        for (auto& entry : data->cachedEntries) {
+            if (entry.bufHandle.IsValid()) {
+                commandBuffers_.Free(entry.bufHandle);
+            }
+        }
+        data->cachedEntries.clear();
         data->allocator.Reset();
         commandPools_.Free(h);
     }
@@ -169,9 +172,14 @@ namespace miki::rhi {
         }
         data->allocator->Reset();
         if (static_cast<uint8_t>(flags) & static_cast<uint8_t>(CommandPoolResetFlags::ReleaseResources)) {
-            data->cachedLists.clear();
+            for (auto& entry : data->cachedEntries) {
+                if (entry.bufHandle.IsValid()) {
+                    commandBuffers_.Free(entry.bufHandle);
+                }
+            }
+            data->cachedEntries.clear();
         }
-        data->nextFreeList = 0;
+        data->nextFreeIndex = 0;
     }
 
     auto D3D12Device::AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary)
@@ -181,22 +189,35 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
-        ComPtr<ID3D12GraphicsCommandList7> cmdList;
-        if (poolData->nextFreeList < poolData->cachedLists.size()) {
-            cmdList = poolData->cachedLists[poolData->nextFreeList];
-            HRESULT hr = cmdList->Reset(poolData->allocator.Get(), nullptr);
+        if (poolData->nextFreeIndex < poolData->cachedEntries.size()) {
+            // Fast path: reuse cached D3D12 command list + wrapper (spec §19, zero-alloc steady state)
+            auto& entry = poolData->cachedEntries[poolData->nextFreeIndex];
+            poolData->nextFreeIndex++;
+            HRESULT hr = entry.list->Reset(poolData->allocator.Get(), nullptr);
             if (FAILED(hr)) {
                 return std::unexpected(RhiError::OutOfDeviceMemory);
             }
-        } else {
-            auto type = secondary ? D3D12_COMMAND_LIST_TYPE_BUNDLE : poolData->listType;
-            HRESULT hr = device_->CreateCommandList1(0, type, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&cmdList));
-            if (FAILED(hr)) {
-                return std::unexpected(RhiError::OutOfDeviceMemory);
-            }
-            poolData->cachedLists.push_back(cmdList);
+            entry.wrapper->Init(this, entry.list.Get(), poolData->allocator.Get(), poolData->queueType);
+            auto* bufData = commandBuffers_.Lookup(entry.bufHandle);
+            bufData->allocator = poolData->allocator;
+            bufData->list = entry.list;
+            bufData->queueType = poolData->queueType;
+            bufData->isSecondary = secondary;
+            CommandListHandle listHandle(entry.wrapper.get(), BackendType::D3D12);
+            return CommandListAcquisition{.bufferHandle = entry.bufHandle, .listHandle = listHandle};
         }
-        poolData->nextFreeList++;
+
+        // Cold path: create new command list (only during warm-up)
+        auto type = secondary ? D3D12_COMMAND_LIST_TYPE_BUNDLE : poolData->listType;
+        ComPtr<ID3D12GraphicsCommandList7> cmdList;
+        HRESULT hr = device_->CreateCommandList1(0, type, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&cmdList));
+        if (FAILED(hr)) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
+        hr = cmdList->Reset(poolData->allocator.Get(), nullptr);
+        if (FAILED(hr)) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
 
         auto [bufHandle, bufData] = commandBuffers_.Allocate();
         if (!bufData) {
@@ -207,24 +228,23 @@ namespace miki::rhi {
         bufData->queueType = poolData->queueType;
         bufData->isSecondary = secondary;
 
-        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<D3D12CommandBuffer>());
-        cmdBuf->Init(this, cmdList.Get(), poolData->allocator.Get(), poolData->queueType);
+        auto wrapper = std::make_unique<D3D12CommandBuffer>();
+        wrapper->Init(this, cmdList.Get(), poolData->allocator.Get(), poolData->queueType);
+        CommandListHandle listHandle(wrapper.get(), BackendType::D3D12);
 
-        CommandListHandle listHandle(cmdBuf.get(), BackendType::D3D12);
+        poolData->cachedEntries.push_back({
+            .list = std::move(cmdList),
+            .bufHandle = bufHandle,
+            .wrapper = std::move(wrapper),
+        });
+        poolData->nextFreeIndex++;
+
         return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
     }
 
-    void D3D12Device::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& acq) {
-        void* raw = acq.listHandle.GetRawPtr();
-        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
-            return p.get() == raw;
-        });
-        if (it != commandListArena_.end()) {
-            commandListArena_.erase(it);
-        }
-        if (acq.bufferHandle.IsValid()) {
-            commandBuffers_.Free(acq.bufferHandle);
-        }
+    void D3D12Device::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& /*acq*/) {
+        // No-op: pool-reset model (spec §19) reclaims all buffers via ResetCommandPool.
+        // Cached entries persist until pool destruction.
     }
 
 }  // namespace miki::rhi

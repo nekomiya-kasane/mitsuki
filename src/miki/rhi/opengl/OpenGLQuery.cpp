@@ -7,7 +7,6 @@
 
 #include "miki/rhi/backend/OpenGLCommandBuffer.h"
 
-#include <algorithm>
 #include <cstring>
 
 namespace miki::rhi {
@@ -87,11 +86,32 @@ namespace miki::rhi {
     }
 
     void OpenGLDevice::DestroyCommandPoolImpl(CommandPoolHandle h) {
+        auto* data = commandPools_.Lookup(h);
+        if (data) {
+            for (auto& entry : data->cachedEntries) {
+                if (entry.bufHandle.IsValid()) {
+                    commandBuffers_.Free(entry.bufHandle);
+                }
+            }
+            data->cachedEntries.clear();
+        }
         commandPools_.Free(h);
     }
 
-    void OpenGLDevice::ResetCommandPoolImpl(CommandPoolHandle /*h*/, CommandPoolResetFlags /*flags*/) {
-        // OpenGL: no native pool concept — reset is a no-op
+    void OpenGLDevice::ResetCommandPoolImpl(CommandPoolHandle h, CommandPoolResetFlags flags) {
+        auto* data = commandPools_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        if (static_cast<uint8_t>(flags) & static_cast<uint8_t>(CommandPoolResetFlags::ReleaseResources)) {
+            for (auto& entry : data->cachedEntries) {
+                if (entry.bufHandle.IsValid()) {
+                    commandBuffers_.Free(entry.bufHandle);
+                }
+            }
+            data->cachedEntries.clear();
+        }
+        data->nextFreeIndex = 0;
     }
 
     auto OpenGLDevice::AllocateFromPoolImpl(CommandPoolHandle pool, bool /*secondary*/)
@@ -100,29 +120,43 @@ namespace miki::rhi {
         if (!poolData) {
             return std::unexpected(RhiError::InvalidHandle);
         }
+
+        if (poolData->nextFreeIndex < poolData->cachedEntries.size()) {
+            // Fast path: reuse cached wrapper (spec §19, zero-alloc steady state)
+            auto& entry = poolData->cachedEntries[poolData->nextFreeIndex];
+            poolData->nextFreeIndex++;
+            entry.wrapper->Init(this);
+            auto* bufData = commandBuffers_.Lookup(entry.bufHandle);
+            bufData->queueType = poolData->queueType;
+            bufData->isSecondary = false;
+            CommandListHandle listHandle(entry.wrapper.get(), BackendType::OpenGL43);
+            return CommandListAcquisition{.bufferHandle = entry.bufHandle, .listHandle = listHandle};
+        }
+
+        // Cold path: create new wrapper (only during warm-up)
         auto [bufHandle, bufData] = commandBuffers_.Allocate();
         if (!bufData) {
             return std::unexpected(RhiError::TooManyObjects);
         }
         bufData->queueType = poolData->queueType;
         bufData->isSecondary = false;
-        auto& cmdBuf = commandListArena_.emplace_back(std::make_unique<OpenGLCommandBuffer>());
-        cmdBuf->Init(this);
-        CommandListHandle listHandle(cmdBuf.get(), BackendType::OpenGL43);
+
+        auto wrapper = std::make_unique<OpenGLCommandBuffer>();
+        wrapper->Init(this);
+        CommandListHandle listHandle(wrapper.get(), BackendType::OpenGL43);
+
+        poolData->cachedEntries.push_back({
+            .bufHandle = bufHandle,
+            .wrapper = std::move(wrapper),
+        });
+        poolData->nextFreeIndex++;
+
         return CommandListAcquisition{.bufferHandle = bufHandle, .listHandle = listHandle};
     }
 
-    void OpenGLDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& acq) {
-        void* raw = acq.listHandle.GetRawPtr();
-        auto it = std::find_if(commandListArena_.begin(), commandListArena_.end(), [raw](const auto& p) {
-            return p.get() == raw;
-        });
-        if (it != commandListArena_.end()) {
-            commandListArena_.erase(it);
-        }
-        if (acq.bufferHandle.IsValid()) {
-            commandBuffers_.Free(acq.bufferHandle);
-        }
+    void OpenGLDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& /*acq*/) {
+        // No-op: pool-reset model (spec §19) reclaims all buffers via ResetCommandPool.
+        // Cached entries persist until pool destruction.
     }
 
 }  // namespace miki::rhi
