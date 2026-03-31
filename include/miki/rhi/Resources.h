@@ -53,9 +53,9 @@ namespace miki::rhi {
     struct TextureSubresourceRange {
         TextureAspect aspect = TextureAspect::Color;
         uint32_t baseMipLevel = 0;
-        uint32_t mipLevelCount = 1;
+        uint32_t mipLevelCount = 0;  ///< 0 = all remaining mip levels
         uint32_t baseArrayLayer = 0;
-        uint32_t arrayLayerCount = 1;
+        uint32_t arrayLayerCount = 0;  ///< 0 = all remaining array layers
     };
 
     // =========================================================================

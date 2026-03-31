@@ -586,9 +586,14 @@ namespace miki::rhi {
         texBarrier.LayoutAfter = ToD3D12BarrierLayout(desc.newLayout);
         texBarrier.pResource = data->resource.Get();
         texBarrier.Subresources.IndexOrFirstMipLevel = desc.subresource.baseMipLevel;
-        texBarrier.Subresources.NumMipLevels = desc.subresource.mipLevelCount;
+        // 0 = all remaining mips/layers — resolve to actual counts from texture data
+        texBarrier.Subresources.NumMipLevels = (desc.subresource.mipLevelCount == 0)
+                                                   ? (data->mipLevels - desc.subresource.baseMipLevel)
+                                                   : desc.subresource.mipLevelCount;
         texBarrier.Subresources.FirstArraySlice = desc.subresource.baseArrayLayer;
-        texBarrier.Subresources.NumArraySlices = desc.subresource.arrayLayerCount;
+        texBarrier.Subresources.NumArraySlices = (desc.subresource.arrayLayerCount == 0)
+                                                     ? (data->arrayLayers - desc.subresource.baseArrayLayer)
+                                                     : desc.subresource.arrayLayerCount;
         texBarrier.Subresources.FirstPlane = 0;
         texBarrier.Subresources.NumPlanes = 1;
         texBarrier.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;

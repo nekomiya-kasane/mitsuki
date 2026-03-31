@@ -556,9 +556,10 @@ namespace miki::rhi {
         VkImageSubresourceRange vkRange{};
         vkRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vkRange.baseMipLevel = range.baseMipLevel;
-        vkRange.levelCount = range.mipLevelCount;
+        // 0 = all remaining (VK_REMAINING_MIP_LEVELS / VK_REMAINING_ARRAY_LAYERS)
+        vkRange.levelCount = (range.mipLevelCount == 0) ? VK_REMAINING_MIP_LEVELS : range.mipLevelCount;
         vkRange.baseArrayLayer = range.baseArrayLayer;
-        vkRange.layerCount = range.arrayLayerCount;
+        vkRange.layerCount = (range.arrayLayerCount == 0) ? VK_REMAINING_ARRAY_LAYERS : range.arrayLayerCount;
 
         vkCmdClearColorImage(cmd_, data->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &vkColor, 1, &vkRange);
     }
@@ -576,9 +577,10 @@ namespace miki::rhi {
         VkImageSubresourceRange vkRange{};
         vkRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
         vkRange.baseMipLevel = range.baseMipLevel;
-        vkRange.levelCount = range.mipLevelCount;
+        // 0 = all remaining (VK_REMAINING_MIP_LEVELS / VK_REMAINING_ARRAY_LAYERS)
+        vkRange.levelCount = (range.mipLevelCount == 0) ? VK_REMAINING_MIP_LEVELS : range.mipLevelCount;
         vkRange.baseArrayLayer = range.baseArrayLayer;
-        vkRange.layerCount = range.arrayLayerCount;
+        vkRange.layerCount = (range.arrayLayerCount == 0) ? VK_REMAINING_ARRAY_LAYERS : range.arrayLayerCount;
 
         vkCmdClearDepthStencilImage(cmd_, data->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &vkValue, 1, &vkRange);
     }
@@ -646,9 +648,12 @@ namespace miki::rhi {
         barrier.image = data->image;
         barrier.subresourceRange.aspectMask = ToVkImageAspect(desc.subresource.aspect);
         barrier.subresourceRange.baseMipLevel = desc.subresource.baseMipLevel;
-        barrier.subresourceRange.levelCount = desc.subresource.mipLevelCount;
+        // 0 = all remaining (VK_REMAINING_MIP_LEVELS / VK_REMAINING_ARRAY_LAYERS)
+        barrier.subresourceRange.levelCount
+            = (desc.subresource.mipLevelCount == 0) ? VK_REMAINING_MIP_LEVELS : desc.subresource.mipLevelCount;
         barrier.subresourceRange.baseArrayLayer = desc.subresource.baseArrayLayer;
-        barrier.subresourceRange.layerCount = desc.subresource.arrayLayerCount;
+        barrier.subresourceRange.layerCount
+            = (desc.subresource.arrayLayerCount == 0) ? VK_REMAINING_ARRAY_LAYERS : desc.subresource.arrayLayerCount;
 
         VkDependencyInfo depInfo{};
         depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
