@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <cstdio>
+#include <print>
 
 #include "miki/debug/StructuredLogger.h"
 #include "miki/frame/CommandListArena.h"
@@ -327,8 +327,8 @@ namespace miki::frame {
 
     void CommandPoolAllocator::DumpStats(FILE* out) const {
         auto stats = GetStats();
-        std::fprintf(
-            out, "[CommandPoolAllocator] pools=%u acquired=%u hwm=%u hwmShrink=%s\n", stats.framePoolCount,
+        std::println(
+            out, "[CommandPoolAllocator] pools={} acquired={} hwm={} hwmShrink={}", stats.framePoolCount,
             stats.currentAcquired, stats.highWaterMark, stats.hwmShrinkEnabled ? "on" : "off"
         );
     }
