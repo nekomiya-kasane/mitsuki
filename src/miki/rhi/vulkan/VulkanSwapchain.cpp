@@ -168,16 +168,38 @@ namespace miki::rhi {
         std::vector<VkImage> images(actualImageCount);
         vkGetSwapchainImagesKHR(device_, swapchain, &actualImageCount, images.data());
 
-        // Create texture handles for each swapchain image
+        // Register swapchain images in textures_ pool so CreateTextureView works
         std::vector<TextureHandle> textureHandles;
         textureHandles.reserve(actualImageCount);
         for (uint32_t i = 0; i < actualImageCount; ++i) {
-            // Use raw value encoding for swapchain textures — these are not pool-managed
-            textureHandles.push_back(TextureHandle{static_cast<uint64_t>(i + 1)});
+            auto [texHandle, texData] = textures_.Allocate();
+            if (!texData) {
+                // Rollback previously allocated texture handles
+                for (auto& th : textureHandles) {
+                    auto slotIdx = textures_.MarkDead(th);
+                    textures_.Reclaim(slotIdx);
+                }
+                vkDestroySwapchainKHR(device_, swapchain, nullptr);
+                vkDestroySurfaceKHR(instance_, surface, nullptr);
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            texData->image = images[i];
+            texData->allocation = nullptr;  // Not VMA-managed
+            texData->format = createInfo.imageFormat;
+            texData->extent = {extent.width, extent.height, 1};
+            texData->mipLevels = 1;
+            texData->arrayLayers = 1;
+            texData->ownsImage = false;  // Swapchain owns the image
+            textureHandles.push_back(texHandle);
         }
 
         auto [handle, data] = swapchains_.Allocate();
         if (!data) {
+            // Rollback texture handles
+            for (auto& th : textureHandles) {
+                auto slotIdx = textures_.MarkDead(th);
+                textures_.Reclaim(slotIdx);
+            }
             vkDestroySwapchainKHR(device_, swapchain, nullptr);
             vkDestroySurfaceKHR(instance_, surface, nullptr);
             return std::unexpected(RhiError::TooManyObjects);
@@ -203,6 +225,15 @@ namespace miki::rhi {
         }
 
         vkDeviceWaitIdle(device_);
+
+        // Release texture handles from pool
+        for (auto& texHandle : data->textureHandles) {
+            if (texHandle.IsValid()) {
+                auto slotIdx = textures_.MarkDead(texHandle);
+                textures_.Reclaim(slotIdx);
+            }
+        }
+
         vkDestroySwapchainKHR(device_, data->swapchain, nullptr);
         vkDestroySurfaceKHR(instance_, data->surface, nullptr);
         swapchains_.Free(h);
@@ -218,6 +249,15 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
         vkDeviceWaitIdle(device_);
+
+        // Release old texture handles from pool (swapchain images are being destroyed)
+        for (auto& texHandle : data->textureHandles) {
+            if (texHandle.IsValid()) {
+                auto slotIdx = textures_.MarkDead(texHandle);
+                textures_.Reclaim(slotIdx);
+            }
+        }
+        data->textureHandles.clear();
 
         // Query updated capabilities
         VkSurfaceCapabilitiesKHR capabilities;
@@ -265,9 +305,28 @@ namespace miki::rhi {
         data->images.resize(imageCount);
         vkGetSwapchainImagesKHR(device_, newSwapchain, &imageCount, data->images.data());
 
-        data->textureHandles.resize(imageCount);
+        // Register new swapchain images in textures_ pool
+        data->textureHandles.clear();
+        data->textureHandles.reserve(imageCount);
         for (uint32_t i = 0; i < imageCount; ++i) {
-            data->textureHandles[i] = TextureHandle{static_cast<uint64_t>(i + 1)};
+            auto [texHandle, texData] = textures_.Allocate();
+            if (!texData) {
+                // Partial failure — release already allocated handles
+                for (auto& th : data->textureHandles) {
+                    auto slotIdx = textures_.MarkDead(th);
+                    textures_.Reclaim(slotIdx);
+                }
+                data->textureHandles.clear();
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            texData->image = data->images[i];
+            texData->allocation = nullptr;
+            texData->format = data->format;
+            texData->extent = {extent.width, extent.height, 1};
+            texData->mipLevels = 1;
+            texData->arrayLayers = 1;
+            texData->ownsImage = false;
+            data->textureHandles.push_back(texHandle);
         }
 
         return {};
