@@ -143,7 +143,8 @@ namespace miki::rhi {
         WGPUTextureFormat format = WGPUTextureFormat_BGRA8Unorm;
         WGPUPresentMode presentMode = WGPUPresentMode_Fifo;
         uint32_t width = 0, height = 0;
-        TextureHandle colorTexture;  // Wrapper handle for current back buffer
+        TextureHandle colorTexture;          // Wrapper handle for current back buffer
+        TextureViewHandle colorTextureView;  // Pre-created view for the color texture
         uint32_t currentImage = 0;
     };
 
@@ -201,6 +202,7 @@ namespace miki::rhi {
         auto ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void>;
         auto AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence) -> RhiResult<uint32_t>;
         auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
+        auto GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle;
         void PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores);
 
         // -- Sync (WebGPUDevice.cpp) --

@@ -30,14 +30,25 @@ namespace miki::rhi {
         texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
         texData->ownsTexture = false;
 
+        // Pre-create TextureView for the color texture (swapchain owns this view)
+        TextureViewDesc tvd{.texture = texHandle};
+        auto viewResult = CreateTextureViewImpl(tvd);
+        if (!viewResult) {
+            textures_.Free(texHandle);
+            return std::unexpected(RhiError::TooManyObjects);
+        }
+        TextureViewHandle texViewHandle = *viewResult;
+
         auto [handle, data] = swapchains_.Allocate();
         if (!data) {
+            DestroyTextureViewImpl(texViewHandle);
             textures_.Free(texHandle);
             return std::unexpected(RhiError::TooManyObjects);
         }
         data->width = desc.width;
         data->height = desc.height;
         data->colorTexture = texHandle;
+        data->colorTextureView = texViewHandle;
         data->windowBackend = windowBackend_;
         data->nativeToken = nativeToken_;
         data->currentImage = 0;
@@ -50,6 +61,11 @@ namespace miki::rhi {
         if (!data) {
             return;
         }
+        // Destroy texture view first (it references the texture)
+        if (data->colorTextureView.IsValid()) {
+            DestroyTextureViewImpl(data->colorTextureView);
+        }
+
         if (data->colorTexture.IsValid()) {
             auto* texData = textures_.Lookup(data->colorTexture);
             if (texData) {
@@ -107,6 +123,14 @@ namespace miki::rhi {
             return {};
         }
         return data->colorTexture;
+    }
+
+    auto OpenGLDevice::GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t) -> TextureViewHandle {
+        auto* data = swapchains_.Lookup(h);
+        if (!data) {
+            return {};
+        }
+        return data->colorTextureView;
     }
 
     void OpenGLDevice::PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle>) {

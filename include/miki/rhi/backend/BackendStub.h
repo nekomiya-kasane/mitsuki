@@ -169,6 +169,7 @@
     auto AcquireNextImageImpl(SwapchainHandle, SemaphoreHandle, FenceHandle) -> RhiResult<uint32_t> {                  \
         return std::unexpected(RhiError::NotImplemented); }                                                            \
     auto GetSwapchainTextureImpl(SwapchainHandle, uint32_t) -> TextureHandle { return {}; }                            \
+    auto GetSwapchainTextureViewImpl(SwapchainHandle, uint32_t) -> TextureViewHandle { return {}; }                    \
     void PresentImpl(SwapchainHandle, std::span<const SemaphoreHandle>) {}                                             \
                                                                                                                        \
     /* --- Capability --- */                                                                                           \

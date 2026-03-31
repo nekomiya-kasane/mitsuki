@@ -177,6 +177,17 @@ namespace miki::rhi {
             }
         }
 
+        // Pre-create TextureView wrapper (will be updated on AcquireNextImage)
+        // WebGPU creates the actual view dynamically, but we need a handle for API consistency
+        {
+            auto [viewHandle, viewData] = textureViews_.Allocate();
+            if (viewHandle.IsValid()) {
+                viewData->view = nullptr;  // Will be set on AcquireNextImage
+                viewData->parentTexture = data->colorTexture;
+                data->colorTextureView = viewHandle;
+            }
+        }
+
         return handle;
     }
 
@@ -191,6 +202,15 @@ namespace miki::rhi {
             data->currentView = nullptr;
         }
         // Don't destroy currentTexture — it's owned by the surface
+
+        // Free texture view handle (the actual WGPUTextureView was released above)
+        if (data->colorTextureView.IsValid()) {
+            auto* viewData = textureViews_.Lookup(data->colorTextureView);
+            if (viewData) {
+                viewData->view = nullptr;  // Already released
+            }
+            textureViews_.Free(data->colorTextureView);
+        }
 
         if (data->colorTexture.IsValid()) {
             textures_.Free(data->colorTexture);
@@ -281,6 +301,12 @@ namespace miki::rhi {
             texData->texture = surfaceTex.texture;
         }
 
+        // Update the wrapper texture view handle to point to this frame's view
+        auto* viewData = textureViews_.Lookup(data->colorTextureView);
+        if (viewData) {
+            viewData->view = data->currentView;
+        }
+
         // WebGPU has no semaphore/fence for acquire — single-queue, implicit sync
         if (signal.IsValid()) {
             auto* semData = semaphores_.Lookup(signal);
@@ -306,6 +332,15 @@ namespace miki::rhi {
             return {};
         }
         return data->colorTexture;
+    }
+
+    auto WebGPUDevice::GetSwapchainTextureViewImpl(SwapchainHandle h, [[maybe_unused]] uint32_t imageIndex)
+        -> TextureViewHandle {
+        auto* data = swapchains_.Lookup(h);
+        if (!data) {
+            return {};
+        }
+        return data->colorTextureView;
     }
 
     void WebGPUDevice::PresentImpl(

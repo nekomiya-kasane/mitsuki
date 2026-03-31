@@ -133,6 +133,7 @@ namespace miki::rhi {
         VkSurfaceKHR surface = VK_NULL_HANDLE;
         std::vector<VkImage> images;
         std::vector<TextureHandle> textureHandles;
+        std::vector<TextureViewHandle> textureViewHandles;  // Pre-created views for each back buffer
         VkFormat format = VK_FORMAT_B8G8R8A8_SRGB;
         VkExtent2D extent{};
         uint32_t lastAcquiredIndex = 0;  // Set by AcquireNextImage, used by Present
@@ -203,6 +204,7 @@ namespace miki::rhi {
         auto ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void>;
         auto AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence) -> RhiResult<uint32_t>;
         auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
+        auto GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle;
         void PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores);
 
         // -- Sync (VulkanSync.cpp) --

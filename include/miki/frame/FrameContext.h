@@ -17,11 +17,12 @@ namespace miki::frame {
 
     /// @brief Per-frame context returned by FrameManager::BeginFrame.
     struct FrameContext {
-        uint32_t frameIndex = 0;            ///< [0, framesInFlight) for resource ring rotation
-        uint64_t frameNumber = 0;           ///< Monotonic, never wraps within process lifetime
-        rhi::TextureHandle swapchainImage;  ///< Current swapchain image (invalid if offscreen)
-        uint32_t width = 0;                 ///< Current framebuffer width
-        uint32_t height = 0;                ///< Current framebuffer height
+        uint32_t frameIndex = 0;                    ///< [0, framesInFlight) for resource ring rotation
+        uint64_t frameNumber = 0;                   ///< Monotonic, never wraps within process lifetime
+        rhi::TextureHandle swapchainImage;          ///< Current swapchain image (invalid if offscreen)
+        rhi::TextureViewHandle swapchainImageView;  ///< Pre-created view for swapchain image
+        uint32_t width = 0;                         ///< Current framebuffer width
+        uint32_t height = 0;                        ///< Current framebuffer height
 
         // Sync state — opaque to caller, consumed by EndFrame internally.
         uint64_t graphicsTimelineTarget = 0;  ///< Timeline value to signal on graphics queue

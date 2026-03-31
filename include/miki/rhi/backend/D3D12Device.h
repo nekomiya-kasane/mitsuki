@@ -154,6 +154,7 @@ namespace miki::rhi {
         ComPtr<IDXGISwapChain4> swapchain;
         std::vector<ComPtr<ID3D12Resource>> backBuffers;
         std::vector<TextureHandle> textureHandles;
+        std::vector<TextureViewHandle> textureViewHandles;  // Pre-created views for each back buffer
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtvHandles;
         DXGI_FORMAT format = DXGI_FORMAT_B8G8R8A8_UNORM;
         uint32_t width = 0, height = 0;
@@ -251,6 +252,7 @@ namespace miki::rhi {
         auto ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void>;
         auto AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence) -> RhiResult<uint32_t>;
         auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
+        auto GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle;
         void PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores);
 
         // -- Sync (D3D12Device.cpp) --

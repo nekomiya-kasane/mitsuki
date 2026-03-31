@@ -221,6 +221,15 @@ namespace miki::rhi {
         });
     }
 
+    auto RenderSurface::GetCurrentTextureView() const noexcept -> TextureViewHandle {
+        if (!impl_ || !impl_->swapchain.IsValid()) {
+            return {};
+        }
+        return impl_->device.Dispatch([&](auto& dev) {
+            return dev.GetSwapchainTextureView(impl_->swapchain, impl_->currentImageIndex);
+        });
+    }
+
     auto RenderSurface::GetSwapchainHandle() const noexcept -> SwapchainHandle {
         return impl_ ? impl_->swapchain : SwapchainHandle{};
     }

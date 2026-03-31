@@ -138,13 +138,34 @@ namespace miki::rhi {
             rtvHandles.push_back(rtvHandle);
         }
 
+        // Pre-create TextureViews for each back buffer (swapchain owns these views)
+        std::vector<TextureViewHandle> textureViewHandles;
+        textureViewHandles.reserve(bufferCount);
+        for (uint32_t i = 0; i < bufferCount; ++i) {
+            TextureViewDesc tvd{.texture = textureHandles[i]};
+            auto viewResult = CreateTextureViewImpl(tvd);
+            if (!viewResult) {
+                // Rollback already created views
+                for (auto& vh : textureViewHandles) {
+                    DestroyTextureViewImpl(vh);
+                }
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            textureViewHandles.push_back(*viewResult);
+        }
+
         auto [handle, data] = swapchains_.Allocate();
         if (!data) {
+            // Rollback texture views
+            for (auto& vh : textureViewHandles) {
+                DestroyTextureViewImpl(vh);
+            }
             return std::unexpected(RhiError::TooManyObjects);
         }
         data->swapchain = std::move(swapchain4);
         data->backBuffers = std::move(backBuffers);
         data->textureHandles = std::move(textureHandles);
+        data->textureViewHandles = std::move(textureViewHandles);
         data->rtvHandles = std::move(rtvHandles);
         data->format = swapDesc.Format;
         data->width = desc.width;
@@ -166,6 +187,13 @@ namespace miki::rhi {
         }
 
         WaitIdleImpl();
+
+        // Free texture views first (they reference the textures)
+        for (auto& vh : data->textureViewHandles) {
+            if (vh.IsValid()) {
+                DestroyTextureViewImpl(vh);
+            }
+        }
 
         // Free texture handles (non-owning — resource released by swapchain)
         for (auto& th : data->textureHandles) {
@@ -190,6 +218,14 @@ namespace miki::rhi {
         }
 
         WaitIdleImpl();
+
+        // Release old texture views first (they reference the textures)
+        for (auto& vh : data->textureViewHandles) {
+            if (vh.IsValid()) {
+                DestroyTextureViewImpl(vh);
+            }
+        }
+        data->textureViewHandles.clear();
 
         // Release old back buffer references from texture pool
         for (auto& th : data->textureHandles) {
@@ -243,6 +279,23 @@ namespace miki::rhi {
             data->rtvHandles.push_back(rtvHandle);
         }
 
+        // Pre-create TextureViews for each new back buffer
+        data->textureViewHandles.clear();
+        data->textureViewHandles.reserve(bufferCount);
+        for (uint32_t i = 0; i < bufferCount; ++i) {
+            TextureViewDesc tvd{.texture = data->textureHandles[i]};
+            auto viewResult = CreateTextureViewImpl(tvd);
+            if (!viewResult) {
+                // Partial failure — release already allocated views
+                for (auto& vh : data->textureViewHandles) {
+                    DestroyTextureViewImpl(vh);
+                }
+                data->textureViewHandles.clear();
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            data->textureViewHandles.push_back(*viewResult);
+        }
+
         data->currentBackBufferIndex = data->swapchain->GetCurrentBackBufferIndex();
         return {};
     }
@@ -283,6 +336,14 @@ namespace miki::rhi {
             return {};
         }
         return data->textureHandles[imageIndex];
+    }
+
+    auto D3D12Device::GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle {
+        auto* data = swapchains_.Lookup(h);
+        if (!data || imageIndex >= data->textureViewHandles.size()) {
+            return {};
+        }
+        return data->textureViewHandles[imageIndex];
     }
 
     // =========================================================================

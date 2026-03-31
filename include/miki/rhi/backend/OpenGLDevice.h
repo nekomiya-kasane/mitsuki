@@ -202,7 +202,8 @@ namespace miki::rhi {
     struct GLSwapchainData {
         // OpenGL swapchain is the default framebuffer managed by window backend
         uint32_t width = 0, height = 0;
-        TextureHandle colorTexture;  // Wrapper handle for default FB color
+        TextureHandle colorTexture;          // Wrapper handle for default FB color
+        TextureViewHandle colorTextureView;  // Pre-created view for the color texture
         platform::IWindowBackend* windowBackend = nullptr;
         void* nativeToken = nullptr;
         uint32_t currentImage = 0;
@@ -257,6 +258,7 @@ namespace miki::rhi {
         auto ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void>;
         auto AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence) -> RhiResult<uint32_t>;
         auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
+        auto GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle;
         void PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores);
 
         // -- Sync (OpenGLDevice.cpp) --
