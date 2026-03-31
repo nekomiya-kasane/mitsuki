@@ -706,8 +706,8 @@ namespace miki::rhi {
             depthInfo = resolveAttachment(*desc.depthAttachment);
             depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depthInfo.clearValue.depthStencil
-                = {desc.depthAttachment->clearValue.depthStencil.depth,
-                   desc.depthAttachment->clearValue.depthStencil.stencil};
+                = {.depth = desc.depthAttachment->clearValue.depthStencil.depth,
+                   .stencil = desc.depthAttachment->clearValue.depthStencil.stencil};
         }
 
         // Stencil attachment
@@ -716,15 +716,15 @@ namespace miki::rhi {
             stencilInfo = resolveAttachment(*desc.stencilAttachment);
             stencilInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             stencilInfo.clearValue.depthStencil
-                = {desc.stencilAttachment->clearValue.depthStencil.depth,
-                   desc.stencilAttachment->clearValue.depthStencil.stencil};
+                = {.depth = desc.stencilAttachment->clearValue.depthStencil.depth,
+                   .stencil = desc.stencilAttachment->clearValue.depthStencil.stencil};
         }
 
         VkRenderingInfo renderingInfo{};
         renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         renderingInfo.renderArea
-            = {{desc.renderArea.offset.x, desc.renderArea.offset.y},
-               {desc.renderArea.extent.width, desc.renderArea.extent.height}};
+            = {.offset = {desc.renderArea.offset.x, desc.renderArea.offset.y},
+               .extent = {desc.renderArea.extent.width, desc.renderArea.extent.height}};
         renderingInfo.layerCount = 1;
         renderingInfo.viewMask = desc.viewMask;
         renderingInfo.colorAttachmentCount = static_cast<uint32_t>(colorInfos.size());

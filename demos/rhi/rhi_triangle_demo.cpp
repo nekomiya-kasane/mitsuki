@@ -290,7 +290,7 @@ struct TriangleRenderer {
             colorAtt.storeOp = AttachmentStoreOp::Store;
             colorAtt.clearValue = clearVal;
             RenderingDesc rd{
-                .renderArea = Rect2D{.offset = {0, 0}, .extent = {w, h}},
+                .renderArea = Rect2D{.offset = {.x = 0, .y = 0}, .extent = {.width = w, .height = h}},
                 .colorAttachments = {&colorAtt, 1},
             };
 
