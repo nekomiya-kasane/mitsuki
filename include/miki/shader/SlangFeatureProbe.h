@@ -21,7 +21,7 @@ namespace miki::shader {
     /** @brief Result of a single probe test. */
     struct ProbeTestResult {
         std::string name;
-        ShaderTarget target = ShaderTarget::SPIRV;
+        ShaderTarget target;  // Default: SPIRV 1.5
         bool passed = false;
         bool skipped = false;
         std::string diagnostic;

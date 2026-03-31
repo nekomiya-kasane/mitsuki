@@ -171,7 +171,7 @@ namespace miki::shader {
                 } else {
                     ShaderError err;
                     err.path = iFile;
-                    err.message = "Compilation failed for target " + std::to_string(static_cast<int>(target));
+                    err.message = "Compilation failed for target type " + std::to_string(static_cast<int>(target.type));
                     auto diags = compiler->GetLastDiagnostics();
                     if (!diags.empty()) {
                         err.message = diags[0].message;

@@ -33,7 +33,7 @@ namespace miki::shader {
     /** @brief A successfully recompiled shader change. */
     struct ShaderChange {
         std::filesystem::path path;
-        ShaderTarget target = ShaderTarget::SPIRV;
+        ShaderTarget target;  // Default: SPIRV 1.5
         ShaderBlob blob;
         uint64_t generation = 0;
     };
