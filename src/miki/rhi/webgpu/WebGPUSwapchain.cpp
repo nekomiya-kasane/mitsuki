@@ -359,6 +359,16 @@ namespace miki::rhi {
             data->currentView = nullptr;
         }
         data->currentTexture = nullptr;
+
+        // Clear wrapper handles so stale pointers are never dereferenced between frames
+        auto* texData = textures_.Lookup(data->colorTexture);
+        if (texData) {
+            texData->texture = nullptr;
+        }
+        auto* viewData = textureViews_.Lookup(data->colorTextureView);
+        if (viewData) {
+            viewData->view = nullptr;
+        }
     }
 
     // =========================================================================

@@ -219,6 +219,8 @@ namespace miki::rhi {
 
         WaitIdleImpl();
 
+        auto bufferCount = static_cast<uint32_t>(data->backBuffers.size());
+
         // Release old texture views first (they reference the textures)
         for (auto& vh : data->textureViewHandles) {
             if (vh.IsValid()) {
@@ -238,8 +240,6 @@ namespace miki::rhi {
         data->backBuffers.clear();
         data->textureHandles.clear();
         data->rtvHandles.clear();
-
-        uint32_t bufferCount = 2;  // Preserve buffer count
         HRESULT hr
             = data->swapchain->ResizeBuffers(bufferCount, w, ht, data->format, DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING);
         if (FAILED(hr)) {

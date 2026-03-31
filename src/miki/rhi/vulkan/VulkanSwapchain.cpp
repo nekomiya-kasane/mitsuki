@@ -186,7 +186,7 @@ namespace miki::rhi {
             texData->image = images[i];
             texData->allocation = nullptr;  // Not VMA-managed
             texData->format = createInfo.imageFormat;
-            texData->extent = {extent.width, extent.height, 1};
+            texData->extent = {.width = extent.width, .height = extent.height, .depth = 1};
             texData->mipLevels = 1;
             texData->arrayLayers = 1;
             texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
@@ -212,6 +212,29 @@ namespace miki::rhi {
         data->format = createInfo.imageFormat;
         data->extent = extent;
 
+        // Pre-create TextureViews for each back buffer (swapchain owns these views)
+        data->textureViewHandles.reserve(actualImageCount);
+        for (uint32_t i = 0; i < actualImageCount; ++i) {
+            TextureViewDesc tvd{.texture = data->textureHandles[i]};
+            auto viewResult = CreateTextureViewImpl(tvd);
+            if (!viewResult) {
+                for (auto& vh : data->textureViewHandles) {
+                    DestroyTextureViewImpl(vh);
+                }
+                data->textureViewHandles.clear();
+                for (auto& th : data->textureHandles) {
+                    auto slotIdx = textures_.MarkDead(th);
+                    textures_.Reclaim(slotIdx);
+                }
+                data->textureHandles.clear();
+                vkDestroySwapchainKHR(device_, data->swapchain, nullptr);
+                vkDestroySurfaceKHR(instance_, data->surface, nullptr);
+                swapchains_.Free(handle);
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            data->textureViewHandles.push_back(*viewResult);
+        }
+
         return handle;
     }
 
@@ -226,6 +249,13 @@ namespace miki::rhi {
         }
 
         vkDeviceWaitIdle(device_);
+
+        // Release texture views first (they reference the textures)
+        for (auto& vh : data->textureViewHandles) {
+            if (vh.IsValid()) {
+                DestroyTextureViewImpl(vh);
+            }
+        }
 
         // Release texture handles from pool
         for (auto& texHandle : data->textureHandles) {
@@ -250,6 +280,14 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
         vkDeviceWaitIdle(device_);
+
+        // Release old texture views first (they reference the textures)
+        for (auto& vh : data->textureViewHandles) {
+            if (vh.IsValid()) {
+                DestroyTextureViewImpl(vh);
+            }
+        }
+        data->textureViewHandles.clear();
 
         // Release old texture handles from pool (swapchain images are being destroyed)
         for (auto& texHandle : data->textureHandles) {
@@ -323,12 +361,27 @@ namespace miki::rhi {
             texData->image = data->images[i];
             texData->allocation = nullptr;
             texData->format = data->format;
-            texData->extent = {extent.width, extent.height, 1};
+            texData->extent = {.width = extent.width, .height = extent.height, .depth = 1};
             texData->mipLevels = 1;
             texData->arrayLayers = 1;
             texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
             texData->ownsImage = false;
             data->textureHandles.push_back(texHandle);
+        }
+
+        // Pre-create TextureViews for each new back buffer
+        data->textureViewHandles.reserve(imageCount);
+        for (uint32_t i = 0; i < imageCount; ++i) {
+            TextureViewDesc tvd{.texture = data->textureHandles[i]};
+            auto viewResult = CreateTextureViewImpl(tvd);
+            if (!viewResult) {
+                for (auto& vh : data->textureViewHandles) {
+                    DestroyTextureViewImpl(vh);
+                }
+                data->textureViewHandles.clear();
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            data->textureViewHandles.push_back(*viewResult);
         }
 
         return {};
