@@ -123,22 +123,23 @@ namespace miki::frame {
 
         void WaitForSlot(uint32_t slotIdx) {
             auto& slot = slots[slotIdx];
-            if (slot.timelineValue == 0) {
-                return;  // Never submitted
-            }
 
             if (IsTimeline()) {
                 // T1: CPU wait on timeline semaphore for this slot's value
-                device.Dispatch([&](auto& dev) {
-                    dev.WaitSemaphore(graphicsTimeline, slot.timelineValue, UINT64_MAX);
-                });
-            } else if (IsFenceBased()) {
-                // T2: CPU wait on per-slot fence
-                if (slot.fence.IsValid()) {
+                if (slot.timelineValue > 0) {
                     device.Dispatch([&](auto& dev) {
-                        dev.WaitFence(slot.fence, UINT64_MAX);
-                        dev.ResetFence(slot.fence);
+                        dev.WaitSemaphore(graphicsTimeline, slot.timelineValue, UINT64_MAX);
                     });
+                }
+            } else if (IsFenceBased()) {
+                // T2: CPU wait on per-slot fence, then reset for next use
+                // Note: Fence is created signaled, so first frame skips wait but still resets.
+                // vkAcquireNextImageKHR requires unsignaled fence.
+                if (slot.fence.IsValid()) {
+                    if (slot.timelineValue > 0) {
+                        device.Dispatch([&](auto& dev) { dev.WaitFence(slot.fence, UINT64_MAX); });
+                    }
+                    device.Dispatch([&](auto& dev) { dev.ResetFence(slot.fence); });
                 }
             }
             // T3/T4: implicit sync, no CPU wait needed
