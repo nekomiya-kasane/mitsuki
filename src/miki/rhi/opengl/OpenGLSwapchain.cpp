@@ -133,6 +133,17 @@ namespace miki::rhi {
         return data->colorTextureView;
     }
 
+    auto OpenGLDevice::GetSwapchainImageCountImpl([[maybe_unused]] SwapchainHandle h) -> uint32_t {
+        // TODO(Nekomiya) I'm not sure if this is true
+        auto* data = swapchains_.Lookup(h);
+        if (!data) {
+            return 1;
+        }
+        // OpenGL default FBO is typically double-buffered, but we report 1 for RHI abstraction
+        // since we treat it as a single logical image from the application's perspective
+        return 1;
+    }
+
     void OpenGLDevice::PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle>) {
         auto* data = swapchains_.Lookup(h);
         if (!data) {

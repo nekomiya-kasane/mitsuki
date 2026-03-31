@@ -343,6 +343,10 @@ namespace miki::rhi {
         return data->colorTextureView;
     }
 
+    auto WebGPUDevice::GetSwapchainImageCountImpl([[maybe_unused]] SwapchainHandle h) -> uint32_t {
+        return 1;  // WebGPU surface model: one texture at a time
+    }
+
     void WebGPUDevice::PresentImpl(
         SwapchainHandle h, [[maybe_unused]] std::span<const SemaphoreHandle> waitSemaphores
     ) {

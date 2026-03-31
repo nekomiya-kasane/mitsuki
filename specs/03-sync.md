@@ -119,8 +119,8 @@ graph LR
             G_shadow["VSM Shadow"]
             G_resolve["Deferred Resolve"]
             G_post["Post-Process Chain"]
-            G_submit["Submit<br/>Wait: acquireSem, computeReady<br/>Signal: renderDoneSem, graphics.timeline = G_N"]
-            G_present["Present<br/>Wait: renderDoneSem"]
+            G_submit["Submit<br/>Wait: acquireSem, computeReady<br/>Signal: renderDoneSem[imageIdx], graphics.timeline = G_N"]
+            G_present["Present<br/>Wait: renderDoneSem[imageIdx]"]
         end
 
         subgraph "Async Compute Queue"
@@ -211,7 +211,7 @@ public:
 
     /// @brief A batch of command buffers for split-submit (§5.3).
     /// Each batch becomes a separate vkQueueSubmit2 with its own timeline signal.
-    /// The last batch additionally signals renderDone binary sem for present.
+    /// The last batch additionally signals renderDone[imageIdx] binary sem for present.
     struct SubmitBatch {
         std::span<const rhi::CommandBufferHandle> commandBuffers;
         bool signalPartialTimeline = true;  ///< Allocate + signal a timeline value after this batch
@@ -339,7 +339,7 @@ sequenceDiagram
     CPU->>TQ: Submit cluster uploads<br/>Signal T.timeline = N
     CPU->>GQ: Submit DepthPrePass + HiZ + Culling + Geometry<br/>Wait: T.timeline >= N (QFOT acquire)<br/>Signal: G.timeline = N (partial)
     CPU->>CQ: Submit GTAO + Material Resolve<br/>Wait: G.timeline >= N (depth ready)<br/>Signal: C.timeline = N
-    CPU->>GQ: Submit Deferred Resolve + Post + Present<br/>Wait: C.timeline >= N (compute results)<br/>Wait: acquireSem (swapchain)<br/>Signal: renderDoneSem, G.timeline = N+1
+    CPU->>GQ: Submit Deferred Resolve + Post + Present<br/>Wait: C.timeline >= N (compute results)<br/>Wait: acquireSem (swapchain)<br/>Signal: renderDoneSem[imageIdx], G.timeline = N+1
 
     Note over CPU,TQ: ═══ Frame N+1 ═══
 
@@ -352,23 +352,23 @@ sequenceDiagram
 
 ### 5.2 Tier1: Detailed Per-Pass Signal/Wait Map
 
-| Pass                   | Queue             | Waits On                                      | Signals                                      |
-| ---------------------- | ----------------- | --------------------------------------------- | -------------------------------------------- |
-| **BeginFrame**         | CPU               | `G.timeline >= frameNum - framesInFlight + 1` | —                                            |
-| Cluster Upload         | Transfer          | —                                             | `T.timeline = frameNum`                      |
-| DepthPrePass + HiZ     | Graphics          | `T.timeline >= frameNum` (if uploads)         | —                                            |
-| GPU Culling            | Graphics          | (after DepthPrePass, in-queue order)          | —                                            |
-| Macro-Binning          | Graphics          | (after Culling)                               | —                                            |
-| Task→Mesh→VisBuffer    | Graphics          | (after Binning)                               | `G.timeline = frameNum` (partial signal)     |
-| **GTAO**               | **Async Compute** | `G.timeline >= frameNum` (depth ready)        | —                                            |
-| **Material Resolve**   | **Async Compute** | (after GTAO, in-queue order)                  | `C.timeline = frameNum`                      |
-| VSM Shadow             | Graphics          | (after geometry, in-queue order)              | —                                            |
-| Deferred Resolve       | Graphics          | `C.timeline >= frameNum` (AO + materials)     | —                                            |
-| SSR → Bloom → DoF → MB | Graphics          | (in-queue order)                              | —                                            |
-| Tone Map → TAA → FSR   | Graphics          | (in-queue order)                              | —                                            |
-| Compositor             | Graphics          | (in-queue order)                              | —                                            |
-| **EndFrame Submit**    | Graphics          | `acquireSem` (swapchain)                      | `renderDoneSem`, `G.timeline = frameNum + 1` |
-| **Present**            | Graphics          | `renderDoneSem`                               | —                                            |
+| Pass                   | Queue             | Waits On                                      | Signals                                                |
+| ---------------------- | ----------------- | --------------------------------------------- | ------------------------------------------------------ |
+| **BeginFrame**         | CPU               | `G.timeline >= frameNum - framesInFlight + 1` | —                                                      |
+| Cluster Upload         | Transfer          | —                                             | `T.timeline = frameNum`                                |
+| DepthPrePass + HiZ     | Graphics          | `T.timeline >= frameNum` (if uploads)         | —                                                      |
+| GPU Culling            | Graphics          | (after DepthPrePass, in-queue order)          | —                                                      |
+| Macro-Binning          | Graphics          | (after Culling)                               | —                                                      |
+| Task→Mesh→VisBuffer    | Graphics          | (after Binning)                               | `G.timeline = frameNum` (partial signal)               |
+| **GTAO**               | **Async Compute** | `G.timeline >= frameNum` (depth ready)        | —                                                      |
+| **Material Resolve**   | **Async Compute** | (after GTAO, in-queue order)                  | `C.timeline = frameNum`                                |
+| VSM Shadow             | Graphics          | (after geometry, in-queue order)              | —                                                      |
+| Deferred Resolve       | Graphics          | `C.timeline >= frameNum` (AO + materials)     | —                                                      |
+| SSR → Bloom → DoF → MB | Graphics          | (in-queue order)                              | —                                                      |
+| Tone Map → TAA → FSR   | Graphics          | (in-queue order)                              | —                                                      |
+| Compositor             | Graphics          | (in-queue order)                              | —                                                      |
+| **EndFrame Submit**    | Graphics          | `acquireSem` (swapchain)                      | `renderDoneSem[imageIdx]`, `G.timeline = frameNum + 1` |
+| **Present**            | Graphics          | `renderDoneSem[imageIdx]`                     | —                                                      |
 
 ### 5.3 Partial Timeline Signals (Split Submit)
 
@@ -384,8 +384,8 @@ Graphics Queue submits for Frame N (single-window example):
   Submit #2: Deferred Resolve + Post + Present
     Wait:   C.timeline >= Vc    (compute results ready)
     Wait:   acquireSem          (swapchain image ready)
-    Signal: renderDoneSem       (for present)
-    Signal: G.timeline = V+1    (V+1 = SyncScheduler::AllocateSignal(Graphics))
+    Signal: renderDoneSem[imageIdx]  (for present, image-indexed)
+    Signal: G.timeline = V+1         (V+1 = SyncScheduler::AllocateSignal(Graphics))
 
 Async Compute submit for Frame N:
   Wait: G.timeline >= V         (geometry done, depth available)
@@ -413,8 +413,8 @@ sequenceDiagram
     CPU->>CPU: BeginFrame(N)<br/>CPU wait: fence[N % 2]
     CPU->>CPU: Reset fence[N % 2]
     CPU->>GQ: AcquireNextImage<br/>Signal: acquireSem[N % 2]
-    CPU->>GQ: Submit ALL passes (single cmd buffer)<br/>Wait: acquireSem[N % 2]<br/>Signal: renderDoneSem[N % 2], fence[N % 2]
-    CPU->>GQ: Present<br/>Wait: renderDoneSem[N % 2]
+    CPU->>GQ: Submit ALL passes (single cmd buffer)<br/>Wait: acquireSem[N % 2]<br/>Signal: renderDoneSem[imageIdx], fence[N % 2]
+    CPU->>GQ: Present<br/>Wait: renderDoneSem[imageIdx]
 
     Note over CPU,GQ: ═══ Frame N+1 ═══
 
@@ -424,8 +424,13 @@ sequenceDiagram
 **Sync objects (T2)**:
 
 - 2× `VkFence` (per frame-in-flight slot)
-- 2× `VkSemaphore` binary (acquire)
-- 2× `VkSemaphore` binary (render done)
+- 2× `VkSemaphore` binary (acquire, per slot)
+- N× `VkSemaphore` binary (render done, **per swapchain image**, typically N=2 or 3)
+
+> **Design decision**: `renderDoneSem` is indexed by swapchain image (not frame slot) because
+> `vkQueuePresentKHR` holds the semaphore asynchronously until the image is re-acquired.
+> Slot-indexed renderDone causes validation errors when consecutive frames target different
+> images (e.g., after window unfocus/refocus). See DR-SYNC-001 in §15.
 
 ### 5.5 Tier3/Tier4: Implicit Sync
 
@@ -1094,13 +1099,13 @@ DeviceHandle (shared):
 
 Window A:
   └── FrameManager A
-  └── RenderSurface A (VkSwapchainKHR A)
-  └── Binary semaphores: acquireA[2], renderDoneA[2]
+  └── RenderSurface A (VkSwapchainKHR A, imageCount=Na)
+  └── Binary semaphores: acquireA[2] (per slot), renderDoneA[Na] (per swapchain image)
 
 Window B:
   └── FrameManager B
-  └── RenderSurface B (VkSwapchainKHR B)
-  └── Binary semaphores: acquireB[2], renderDoneB[2]
+  └── RenderSurface B (VkSwapchainKHR B, imageCount=Nb)
+  └── Binary semaphores: acquireB[2] (per slot), renderDoneB[Nb] (per swapchain image)
 ```
 
 **Critical**: The graphics timeline semaphore is shared. Submits from Window A and Window B both increment the same timeline. This ensures total ordering on the graphics queue, which is required by Vulkan (single queue per type). Each window's `EndFrame` signals the next value.
@@ -1162,8 +1167,8 @@ DestroyWindowCascade(parent):
 
      c. Destroy FrameManager(W)
         Release per-surface sync objects:
-        T1: destroy binary semaphores (acquire/renderDone)
-        T2: destroy per-slot VkFences + binary semaphores
+        T1: destroy per-slot acquire semaphores + per-image renderDone semaphores
+        T2: destroy per-slot VkFences + per-slot acquire sems + per-image renderDone sems
         (timeline semaphore is device-global, NOT destroyed here)
 
      d. Destroy RenderSurface(W)
@@ -1211,12 +1216,18 @@ struct Tier1DeviceSyncState {
 
 // Per-window (owned by FrameManager, injected into RenderSurface via SetSubmitSyncInfo):
 struct PerSlotSyncState {
-    VkSemaphore acquireSem;       // Binary: swapchain acquire → submit wait
-    VkSemaphore renderDoneSem;    // Binary: submit signal → present wait
+    VkSemaphore acquireSem;       // Binary: swapchain acquire → submit wait (per slot)
     // T2 only:
     VkFence     inFlightFence;    // CPU↔GPU: wait before slot reuse
 };
 // One PerSlotSyncState per frame-in-flight slot (typically 2-3).
+//
+// renderDoneSem is NOT per-slot — it is per-swapchain-image:
+struct PerImagePresentSync {
+    VkSemaphore renderDoneSem;    // Binary: submit signal → present wait
+};
+// One PerImagePresentSync per swapchain image (typically 2-3).
+// Indexed by AcquireNextImage result, not frame slot index.
 ```
 
 **Submit pattern (Tier1 Vulkan)**:
@@ -1248,14 +1259,14 @@ VkSemaphoreSubmitInfo resolveWait[] = {
     {acquireSem[frameIdx], 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT},
 };
 VkSemaphoreSubmitInfo resolveSignal[] = {
-    {renderDoneSem[frameIdx], 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
+    {renderDoneSem[imageIdx], 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},  // image-indexed!
     {graphicsTimeline, ++graphicsCounter, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
 };
 VkSubmitInfo2 submitResolve = { ... };
 vkQueueSubmit2(graphicsQueue, 1, &submitResolve, VK_NULL_HANDLE);
 
 // Present
-VkPresentInfoKHR present = { .waitSemaphoreCount = 1, .pWaitSemaphores = &renderDoneSem[frameIdx], ... };
+VkPresentInfoKHR present = { .waitSemaphoreCount = 1, .pWaitSemaphores = &renderDoneSem[imageIdx], ... };
 vkQueuePresentKHR(graphicsQueue, &present);
 ```
 
@@ -1399,14 +1410,18 @@ struct Tier2SyncState {
     // Per frame-in-flight slot
     struct FrameSync {
         VkFence     inFlightFence;     // CPU↔GPU: wait before reuse
-        VkSemaphore acquireSem;        // Binary: swapchain acquire
-        VkSemaphore renderDoneSem;     // Binary: render → present
+        VkSemaphore acquireSem;        // Binary: swapchain acquire (per slot)
     };
     std::array<FrameSync, 2> frames;   // 2 frames in flight
+
+    // Per swapchain image (NOT per slot) — present holds semaphore async
+    std::array<VkSemaphore, 3> renderDoneSem;  // Binary: render → present
+    uint32_t swapchainImageCount;               // Actual count from swapchain
 };
 ```
 
-No async compute, no transfer queue. Single graphics queue handles everything. This is the miki compat path, unchanged.
+No async compute, no transfer queue. Single graphics queue handles everything. This is the miki compat path.
+`renderDoneSem` is indexed by swapchain image (from `AcquireNextImage`), not frame slot. See DR-SYNC-001 in §15.
 
 ### 10.4 Tier3 WebGPU
 
@@ -1956,10 +1971,10 @@ Based on `rendering-pipeline-architecture.md` §3 (88-pass reference) and §4.2 
  │  #47  Color Bar / Legend                                     █ 0.05ms
  │  #65  LayerStack Compositor (6-layer alpha-blend)            █ 0.2ms
  │                                                               ─────────
- │  Signal renderDone[slot] (binary, for present)                     ●
+ │  Signal renderDone[imageIdx] (binary, per swapchain image)          ●
  │  Signal G.timeline = V+1 (frame done)                              ●
  │
- │  Present: Wait renderDone[slot]                                    ○
+ │  Present: Wait renderDone[imageIdx]                                ○
 
 ─────────────────────────────────────────────────────────────────────────────────
 ```
@@ -1995,15 +2010,15 @@ Overlap savings:
 
 #### Sync Point Reference Table
 
-| Sync Point           | Type     | Producer                           | Consumer                   | Stage                                  |
-| :------------------- | :------- | :--------------------------------- | :------------------------- | :------------------------------------- |
-| `T.timeline = T_N`   | Timeline | Transfer queue (ring copies)       | Graphics Submit #1         | `PipelineStage::Transfer`              |
-| `T.timeline = T_N+1` | Timeline | Transfer queue (cluster stream)    | Graphics (next use)        | `PipelineStage::VertexInput`           |
-| `imageAvail[slot]`   | Binary   | `AcquireNextImage`                 | Graphics Submit #1         | `PipelineStage::ColorAttachmentOutput` |
-| `G.timeline = V`     | Timeline | Graphics Submit #1 (geometry done) | Async Compute              | `PipelineStage::ComputeShader`         |
-| `C.timeline = C_N`   | Timeline | Async Compute (GTAO+MatResolve)    | Graphics Submit #2         | `PipelineStage::FragmentShader`        |
-| `renderDone[slot]`   | Binary   | Graphics Submit #2                 | `QueuePresent`             | —                                      |
-| `G.timeline = V+1`   | Timeline | Graphics Submit #2 (frame done)    | `BeginFrame(N+2)` CPU wait | —                                      |
+| Sync Point             | Type     | Producer                           | Consumer                   | Stage                                  |
+| :--------------------- | :------- | :--------------------------------- | :------------------------- | :------------------------------------- |
+| `T.timeline = T_N`     | Timeline | Transfer queue (ring copies)       | Graphics Submit #1         | `PipelineStage::Transfer`              |
+| `T.timeline = T_N+1`   | Timeline | Transfer queue (cluster stream)    | Graphics (next use)        | `PipelineStage::VertexInput`           |
+| `imageAvail[slot]`     | Binary   | `AcquireNextImage`                 | Graphics Submit #1         | `PipelineStage::ColorAttachmentOutput` |
+| `G.timeline = V`       | Timeline | Graphics Submit #1 (geometry done) | Async Compute              | `PipelineStage::ComputeShader`         |
+| `C.timeline = C_N`     | Timeline | Async Compute (GTAO+MatResolve)    | Graphics Submit #2         | `PipelineStage::FragmentShader`        |
+| `renderDone[imageIdx]` | Binary   | Graphics Submit #2                 | `QueuePresent`             | —                                      |
+| `G.timeline = V+1`     | Timeline | Graphics Submit #2 (frame done)    | `BeginFrame(N+2)` CPU wait | —                                      |
 
 #### QFOT Barriers (Vulkan only, D3D12 implicit)
 
@@ -2067,18 +2082,19 @@ gantt
 
 ## 15. Design Decisions Log
 
-| Decision                                         | Rationale                                                                                                                     | Alternatives Considered                                                                                                          |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Timeline semaphore as primary sync primitive     | Replaces VkFence + binary sem for CPU↔GPU; fewer objects, cheaper CPU wait, supports multi-consumer                           | VkFence per frame (object bloat, no fan-out), binary sem (1:1 limitation)                                                        |
-| Split submit (2+ submits per frame on graphics)  | Enables async compute to start after geometry without waiting for full frame; enables wavelet decode overlap                  | Single monolithic submit (simple but no overlap), per-pass submit (too many submits, driver overhead)                            |
-| Shared timeline semaphore across windows         | Required by single-queue-per-type Vulkan constraint; simplifies ordering                                                      | Per-window timeline (would need multi-queue, most GPUs have 1 graphics queue)                                                    |
-| Per-surface frame pacing (no global WaitIdle)    | Cascade destruction doesn't stall other windows; independent frame rates                                                      | Global WaitIdle (simpler but kills all window throughput during cascade)                                                         |
-| 2 frames in flight default                       | Best latency/throughput tradeoff; 3 adds latency with marginal throughput gain for typical workloads                          | 1 (no overlap, CPU idle), 3 (higher latency, marginal gain)                                                                      |
-| Deferred destruction with 2-frame latency        | Matches frames-in-flight; no ref-counting in hot path; deterministic                                                          | COM ref-counting (atomic overhead), immediate destroy + WaitIdle (stall)                                                         |
-| SyncScheduler as separate class                  | Decouples timeline management from FrameManager; RenderGraph can use directly                                                 | Embed in FrameManager (coupling), embed in RenderGraph (wrong layer)                                                             |
-| AsyncTaskManager for cross-frame compute         | BLAS rebuild/GDeflate decode span 1-3 frames; cannot fit in BeginFrame/EndFrame lifecycle; poll-based completion avoids stall | Inline on graphics (frame spike), dedicated thread + CPU wait (wastes thread), RenderGraph multi-frame pass (overcomplicates RG) |
-| SyncScheduler supports arbitrary queue-pair deps | GDeflate needs Transfer→Compute→Graphics 3-queue chain; not just Graphics↔{Compute,Transfer}                                  | Hardcode 2-queue paths (misses T→C link), merge Transfer+Compute (loses DMA parallelism)                                         |
-| Batch splitting for compute queue fairness       | Long BLAS rebuild blocks frame-sync GTAO; ≤2ms batches bound worst-case frame-sync delay                                      | Queue priority (driver-dependent, not portable), 2nd compute queue (not always available)                                        |
+| Decision                                         | Rationale                                                                                                                                                                                                                                                                                                                 | Alternatives Considered                                                                                                           |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Timeline semaphore as primary sync primitive     | Replaces VkFence + binary sem for CPU↔GPU; fewer objects, cheaper CPU wait, supports multi-consumer                                                                                                                                                                                                                       | VkFence per frame (object bloat, no fan-out), binary sem (1:1 limitation)                                                         |
+| Split submit (2+ submits per frame on graphics)  | Enables async compute to start after geometry without waiting for full frame; enables wavelet decode overlap                                                                                                                                                                                                              | Single monolithic submit (simple but no overlap), per-pass submit (too many submits, driver overhead)                             |
+| Shared timeline semaphore across windows         | Required by single-queue-per-type Vulkan constraint; simplifies ordering                                                                                                                                                                                                                                                  | Per-window timeline (would need multi-queue, most GPUs have 1 graphics queue)                                                     |
+| Per-surface frame pacing (no global WaitIdle)    | Cascade destruction doesn't stall other windows; independent frame rates                                                                                                                                                                                                                                                  | Global WaitIdle (simpler but kills all window throughput during cascade)                                                          |
+| 2 frames in flight default                       | Best latency/throughput tradeoff; 3 adds latency with marginal throughput gain for typical workloads                                                                                                                                                                                                                      | 1 (no overlap, CPU idle), 3 (higher latency, marginal gain)                                                                       |
+| Deferred destruction with 2-frame latency        | Matches frames-in-flight; no ref-counting in hot path; deterministic                                                                                                                                                                                                                                                      | COM ref-counting (atomic overhead), immediate destroy + WaitIdle (stall)                                                          |
+| SyncScheduler as separate class                  | Decouples timeline management from FrameManager; RenderGraph can use directly                                                                                                                                                                                                                                             | Embed in FrameManager (coupling), embed in RenderGraph (wrong layer)                                                              |
+| AsyncTaskManager for cross-frame compute         | BLAS rebuild/GDeflate decode span 1-3 frames; cannot fit in BeginFrame/EndFrame lifecycle; poll-based completion avoids stall                                                                                                                                                                                             | Inline on graphics (frame spike), dedicated thread + CPU wait (wastes thread), RenderGraph multi-frame pass (overcomplicates RG)  |
+| SyncScheduler supports arbitrary queue-pair deps | GDeflate needs Transfer→Compute→Graphics 3-queue chain; not just Graphics↔{Compute,Transfer}                                                                                                                                                                                                                              | Hardcode 2-queue paths (misses T→C link), merge Transfer+Compute (loses DMA parallelism)                                          |
+| Batch splitting for compute queue fairness       | Long BLAS rebuild blocks frame-sync GTAO; ≤2ms batches bound worst-case frame-sync delay                                                                                                                                                                                                                                  | Queue priority (driver-dependent, not portable), 2nd compute queue (not always available)                                         |
+| **DR-SYNC-001**: renderDone per swapchain image  | `vkQueuePresentKHR` holds renderDone asynchronously until image re-acquired. Slot-indexed renderDone causes `VUID-vkQueuePresentKHR-pWaitSemaphores-03268` when consecutive frames target different images (e.g., window unfocus/refocus). Image-indexed renderDone guarantees 1:1 semaphore↔presentation-engine mapping. | Per-slot renderDone (original, reuse conflict), semaphore pool (overengineered), WaitIdle before present (kills pipeline overlap) |
 
 ---
 
@@ -2235,14 +2251,15 @@ FM-FL-03  GIVEN FM with 2 frames in flight, after 2 complete frames
 
 FM-FL-04  GIVEN windowed FrameManager, T1
           WHEN  BeginFrame() is called
-          THEN  surface.SetSubmitSyncInfo() is called with this slot's imageAvail + renderDone
+          THEN  surface.SetSubmitSyncInfo() is called with this slot's imageAvail
+          AND   after AcquireNextImage, renderFinished is set to imageRenderDone[imageIdx]
           AND   surface.AcquireNextImage() is called
           AND   FrameContext.swapchainImage is valid
 
 FM-FL-05  GIVEN windowed FM, T1, after EndFrame()
           WHEN  submit log is inspected
           THEN  waits include imageAvail[slot] at ColorAttachmentOutput
-          AND   signals include renderDone[slot] (binary) + G.timeline (timeline)
+          AND   signals include renderDone[imageIdx] (binary, per-image) + G.timeline (timeline)
           AND   surface.Present() was called
 
 FM-FL-06  GIVEN windowed FM, surface extent == (0, 0) (minimized)
@@ -2283,7 +2300,8 @@ FM-TL-04  GIVEN T1 FM, after EndFrame(frame N)
 FM-T2-01  GIVEN T2 FrameManager (Vulkan Compat)
           WHEN  Create() succeeds
           THEN  per-slot fences are created (signaled initially)
-          AND   per-slot binary semaphores are created (imageAvail + renderDone)
+          AND   per-slot binary semaphores are created (imageAvail)
+          AND   per-swapchain-image binary semaphores are created (renderDone)
           AND   no timeline semaphore is used
 
 FM-T2-02  GIVEN T2 FM, after EndFrame()

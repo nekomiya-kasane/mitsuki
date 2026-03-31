@@ -213,6 +213,7 @@ namespace miki::rhi {
         auto AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence) -> RhiResult<uint32_t>;
         auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
         auto GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle;
+        auto GetSwapchainImageCountImpl(SwapchainHandle h) -> uint32_t;
         void PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores);
 
         // -- Sync (VulkanSync.cpp) --

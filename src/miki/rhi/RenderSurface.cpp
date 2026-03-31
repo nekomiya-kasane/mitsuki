@@ -237,6 +237,13 @@ namespace miki::rhi {
         return impl_ ? impl_->swapchain : SwapchainHandle{};
     }
 
+    auto RenderSurface::GetSwapchainImageCount() const -> uint32_t {
+        if (!impl_ || !impl_->swapchain.IsValid()) {
+            return 0;
+        }
+        return impl_->device.Dispatch([&](auto& dev) { return dev.GetSwapchainImageCount(impl_->swapchain); });
+    }
+
     auto RenderSurface::GetSubmitSyncInfo() const noexcept -> const SubmitSyncInfo& {
         return impl_->syncInfo;
     }

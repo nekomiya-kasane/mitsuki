@@ -250,6 +250,9 @@ namespace miki::rhi {
         [[nodiscard]] auto GetSwapchainTextureView(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle {
             return Self().GetSwapchainTextureViewImpl(h, imageIndex);
         }
+        [[nodiscard]] auto GetSwapchainImageCount(SwapchainHandle h) -> uint32_t {
+            return Self().GetSwapchainImageCountImpl(h);
+        }
         void Present(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores) {
             Self().PresentImpl(h, waitSemaphores);
         }

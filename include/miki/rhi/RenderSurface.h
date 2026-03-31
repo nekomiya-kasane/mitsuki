@@ -101,6 +101,7 @@ namespace miki::rhi {
         [[nodiscard]] auto GetCurrentTexture() const noexcept -> TextureHandle;
         [[nodiscard]] auto GetCurrentTextureView() const noexcept -> TextureViewHandle;
         [[nodiscard]] auto GetSwapchainHandle() const noexcept -> SwapchainHandle;
+        [[nodiscard]] auto GetSwapchainImageCount() const -> uint32_t;
         [[nodiscard]] auto GetSubmitSyncInfo() const noexcept -> const SubmitSyncInfo&;
         [[nodiscard]] auto GetCapabilities() const -> RenderSurfaceCapabilities;
 

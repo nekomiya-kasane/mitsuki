@@ -61,11 +61,14 @@ namespace miki::frame {
     // Per-frame slot — tracks one in-flight frame's sync state
     // =========================================================================
 
+    static constexpr uint32_t kMaxSwapchainImages = 8;
+
     struct FrameSlot {
         uint64_t timelineValue = 0;       // Timeline value this slot was submitted at
         rhi::FenceHandle fence;           // T2 only: per-slot binary fence
         rhi::SemaphoreHandle imageAvail;  // T1/T2: binary sem for swapchain acquire
-        rhi::SemaphoreHandle renderDone;  // T1/T2: binary sem for present wait
+        // NOTE: renderDone is NOT per-slot — it is per-swapchain-image.
+        // See Impl::imageRenderDone[] and specs/03-sync.md present semaphore lifetime.
     };
 
     // =========================================================================
@@ -101,6 +104,13 @@ namespace miki::frame {
         resource::StagingRing* stagingRing = nullptr;
         resource::ReadbackRing* readbackRing = nullptr;
         DeferredDestructor* deferredDestructor = nullptr;
+
+        // Per-swapchain-image renderDone semaphores (specs/03-sync.md present semaphore lifetime).
+        // Indexed by swapchain image index (NOT frame slot index) because vkQueuePresentKHR
+        // holds the semaphore asynchronously until the image is re-acquired. Slot-indexed
+        // renderDone causes reuse conflicts when consecutive frames target different images.
+        std::array<rhi::SemaphoreHandle, kMaxSwapchainImages> imageRenderDone{};
+        uint32_t swapchainImageCount = 0;
 
         // Offscreen dimensions (only used in offscreen mode)
         uint32_t offscreenWidth = 0;
@@ -253,17 +263,50 @@ namespace miki::frame {
                 }
 
                 if (!IsImplicitSync()) {
-                    // T1/T2: Binary semaphores for swapchain acquire/present
+                    // T1/T2: Binary semaphore for swapchain acquire (per-slot is correct)
                     rhi::SemaphoreDesc binDesc{.type = rhi::SemaphoreType::Binary, .initialValue = 0};
                     auto availResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
                     if (availResult) {
                         slots[i].imageAvail = *availResult;
                     }
+                }
+            }
 
+            // Per-swapchain-image renderDone semaphores.
+            // Present holds renderDone asynchronously until the image is re-acquired,
+            // so we index by image (not slot) to avoid reuse conflicts.
+            if (!IsImplicitSync() && surface) {
+                swapchainImageCount = surface->GetSwapchainImageCount();
+                rhi::SemaphoreDesc binDesc{.type = rhi::SemaphoreType::Binary, .initialValue = 0};
+                for (uint32_t i = 0; i < swapchainImageCount; ++i) {
                     auto doneResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
                     if (doneResult) {
-                        slots[i].renderDone = *doneResult;
+                        imageRenderDone[i] = *doneResult;
                     }
+                }
+            }
+        }
+
+        // Rebuild per-image renderDone semaphores after swapchain recreation.
+        // Caller must ensure all GPU work is complete (WaitAll) before calling.
+        void RecreatePresentSemaphores() {
+            if (IsImplicitSync() || !surface) {
+                return;
+            }
+            // Destroy old
+            for (uint32_t i = 0; i < kMaxSwapchainImages; ++i) {
+                if (imageRenderDone[i].IsValid()) {
+                    device.Dispatch([&](auto& dev) { dev.DestroySemaphore(imageRenderDone[i]); });
+                    imageRenderDone[i] = {};
+                }
+            }
+            // Create new for potentially different image count
+            swapchainImageCount = surface->GetSwapchainImageCount();
+            rhi::SemaphoreDesc binDesc{.type = rhi::SemaphoreType::Binary, .initialValue = 0};
+            for (uint32_t i = 0; i < swapchainImageCount; ++i) {
+                auto doneResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
+                if (doneResult) {
+                    imageRenderDone[i] = *doneResult;
                 }
             }
         }
@@ -279,11 +322,15 @@ namespace miki::frame {
                     device.Dispatch([&](auto& dev) { dev.DestroySemaphore(slot.imageAvail); });
                     slot.imageAvail = {};
                 }
-                if (slot.renderDone.IsValid()) {
-                    device.Dispatch([&](auto& dev) { dev.DestroySemaphore(slot.renderDone); });
-                    slot.renderDone = {};
+            }
+            // Destroy per-image renderDone semaphores
+            for (uint32_t i = 0; i < kMaxSwapchainImages; ++i) {
+                if (imageRenderDone[i].IsValid()) {
+                    device.Dispatch([&](auto& dev) { dev.DestroySemaphore(imageRenderDone[i]); });
+                    imageRenderDone[i] = {};
                 }
             }
+            swapchainImageCount = 0;
             // graphicsTimeline is device-global — do NOT destroy it here.
             // It is owned by VulkanDevice and destroyed in ~VulkanDevice.
             graphicsTimeline = {};
@@ -436,11 +483,12 @@ namespace miki::frame {
                 return std::unexpected(core::ErrorCode::InvalidState);
             }
 
-            // Inject this slot's sync primitives into RenderSurface before acquire
+            // Inject slot-based sync primitives before acquire.
+            // renderFinished is set AFTER acquire because it is image-indexed (not slot-indexed).
             auto& slot = impl_->slots[impl_->frameIndex];
             impl_->surface->SetSubmitSyncInfo({
                 .imageAvailable = slot.imageAvail,
-                .renderFinished = slot.renderDone,
+                .renderFinished = {},  // Deferred — set below after image index is known
                 .inFlightFence = slot.fence,
             });
 
@@ -448,6 +496,18 @@ namespace miki::frame {
             auto acquireResult = impl_->surface->AcquireNextImage();
             if (!acquireResult) {
                 return std::unexpected(core::ErrorCode::SwapchainOutOfDate);
+            }
+
+            // Now that we know the image index, inject the image-indexed renderDone semaphore.
+            // vkQueuePresentKHR holds renderDone asynchronously until the image is re-acquired, so indexing by image
+            // (not slot) prevents semaphore reuse conflicts.
+            uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
+            if (imgIdx < impl_->swapchainImageCount) {
+                impl_->surface->SetSubmitSyncInfo({
+                    .imageAvailable = slot.imageAvail,
+                    .renderFinished = impl_->imageRenderDone[imgIdx],
+                    .inFlightFence = slot.fence,
+                });
             }
 
             swapchainImage = impl_->surface->GetCurrentTexture();
@@ -572,12 +632,15 @@ namespace miki::frame {
                 .value = nextValue,
                 .stageMask = rhi::PipelineStage::AllCommands,
             });
-            if (impl_->surface && slot.renderDone.IsValid()) {
-                signals.push_back({
-                    .semaphore = slot.renderDone,
-                    .value = 0,
-                    .stageMask = rhi::PipelineStage::AllCommands,
-                });
+            if (impl_->surface) {
+                uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
+                if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
+                    signals.push_back({
+                        .semaphore = impl_->imageRenderDone[imgIdx],
+                        .value = 0,
+                        .stageMask = rhi::PipelineStage::AllCommands,
+                    });
+                }
             }
 
             slot.timelineValue = nextValue;
@@ -591,12 +654,15 @@ namespace miki::frame {
                     .stageMask = rhi::PipelineStage::ColorAttachmentOutput,
                 });
             }
-            if (impl_->surface && slot.renderDone.IsValid()) {
-                signals.push_back({
-                    .semaphore = slot.renderDone,
-                    .value = 0,
-                    .stageMask = rhi::PipelineStage::AllCommands,
-                });
+            if (impl_->surface) {
+                uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
+                if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
+                    signals.push_back({
+                        .semaphore = impl_->imageRenderDone[imgIdx],
+                        .value = 0,
+                        .stageMask = rhi::PipelineStage::AllCommands,
+                    });
+                }
             }
             slot.timelineValue = impl_->frameNumber;
         }
@@ -736,10 +802,15 @@ namespace miki::frame {
                     );
                 }
 
-                if (isLast && impl_->surface && slot.renderDone.IsValid()) {
-                    signals.push_back(
-                        {.semaphore = slot.renderDone, .value = 0, .stageMask = rhi::PipelineStage::AllCommands}
-                    );
+                if (isLast && impl_->surface) {
+                    uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
+                    if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
+                        signals.push_back(
+                            {.semaphore = impl_->imageRenderDone[imgIdx],
+                             .value = 0,
+                             .stageMask = rhi::PipelineStage::AllCommands}
+                        );
+                    }
                 }
             } else if (impl_->IsFenceBased()) {
                 if (isFirst && impl_->surface && slot.imageAvail.IsValid()) {
@@ -749,10 +820,15 @@ namespace miki::frame {
                          .stageMask = rhi::PipelineStage::ColorAttachmentOutput}
                     );
                 }
-                if (isLast && impl_->surface && slot.renderDone.IsValid()) {
-                    signals.push_back(
-                        {.semaphore = slot.renderDone, .value = 0, .stageMask = rhi::PipelineStage::AllCommands}
-                    );
+                if (isLast && impl_->surface) {
+                    uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
+                    if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
+                        signals.push_back(
+                            {.semaphore = impl_->imageRenderDone[imgIdx],
+                             .value = 0,
+                             .stageMask = rhi::PipelineStage::AllCommands}
+                        );
+                    }
                 }
             }
 
@@ -865,7 +941,12 @@ namespace miki::frame {
         // Wait for all in-flight frames before recreating swapchain
         WaitAll();
 
-        return impl_->surface->Resize(iWidth, iHeight);
+        auto result = impl_->surface->Resize(iWidth, iHeight);
+        if (result) {
+            // Swapchain image count may have changed — rebuild present semaphores
+            impl_->RecreatePresentSemaphores();
+        }
+        return result;
     }
 
     auto FrameManager::Reconfigure(const rhi::RenderSurfaceConfig& iConfig) -> core::Result<void> {
@@ -878,7 +959,12 @@ namespace miki::frame {
         // Wait for all in-flight frames before recreating swapchain
         WaitAll();
 
-        return impl_->surface->Reconfigure(iConfig);
+        auto result = impl_->surface->Reconfigure(iConfig);
+        if (result) {
+            // Swapchain image count may have changed — rebuild present semaphores
+            impl_->RecreatePresentSemaphores();
+        }
+        return result;
     }
 
     // =========================================================================

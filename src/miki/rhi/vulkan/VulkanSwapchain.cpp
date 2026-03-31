@@ -459,6 +459,14 @@ namespace miki::rhi {
         return data->textureViewHandles[imageIndex];
     }
 
+    auto VulkanDevice::GetSwapchainImageCountImpl(SwapchainHandle h) -> uint32_t {
+        auto* data = swapchains_.Lookup(h);
+        if (!data) {
+            return 0;
+        }
+        return static_cast<uint32_t>(data->images.size());
+    }
+
     // =========================================================================
     // PresentImpl
     // =========================================================================

@@ -346,6 +346,14 @@ namespace miki::rhi {
         return data->textureViewHandles[imageIndex];
     }
 
+    auto D3D12Device::GetSwapchainImageCountImpl(SwapchainHandle h) -> uint32_t {
+        auto* data = swapchains_.Lookup(h);
+        if (!data) {
+            return 0;
+        }
+        return static_cast<uint32_t>(data->backBuffers.size());
+    }
+
     // =========================================================================
     // PresentImpl
     // =========================================================================
