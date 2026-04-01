@@ -203,7 +203,7 @@ class SurfaceIntegrationTest : public ::testing::TestWithParam<BackendInfo> {
         ASSERT_TRUE(device_->handle.IsValid());
 
         // Create SurfaceManager
-        auto smResult = SurfaceManager::Create(device_->handle);
+        auto smResult = SurfaceManager::Create(device_->handle, *wm_);
         ASSERT_TRUE(smResult.has_value()) << "SurfaceManager creation failed for " << info.name;
         sm_ = std::make_unique<SurfaceManager>(std::move(*smResult));
 
@@ -233,8 +233,7 @@ class SurfaceIntegrationTest : public ::testing::TestWithParam<BackendInfo> {
     }
 
     auto AttachSurface(WindowHandle h, RenderSurfaceConfig cfg = {}) -> bool {
-        auto nh = wm_->GetNativeHandle(h);
-        auto r = sm_->AttachSurface(h, nh, cfg);
+        auto r = sm_->AttachSurface(h, cfg);
         return r.has_value();
     }
 
@@ -274,16 +273,14 @@ TEST_P(SurfaceIntegrationTest, AttachSurfaceSucceeds) {
 TEST_P(SurfaceIntegrationTest, AttachSurfaceDoubleAttachFails) {
     auto h = MakeWindow("DoubleAttach");
     ASSERT_TRUE(AttachSurface(h));
-    auto nh = wm_->GetNativeHandle(h);
-    auto r = sm_->AttachSurface(h, nh);
+    auto r = sm_->AttachSurface(h);
     EXPECT_FALSE(r.has_value());
     SafeDestroy(h);
 }
 
 TEST_P(SurfaceIntegrationTest, AttachSurfaceInvalidHandleFails) {
     WindowHandle stale{999, 42};
-    NativeWindowHandle nh = Win32Window{};
-    auto r = sm_->AttachSurface(stale, nh);
+    auto r = sm_->AttachSurface(stale);
     EXPECT_FALSE(r.has_value());
 }
 
@@ -800,8 +797,7 @@ TEST_P(SurfaceIntegrationTest, ErrorRecoveryChain) {
     // (1) Attach surface, try double-attach — first surface unaffected
     auto h1 = MakeWindow("Good");
     ASSERT_TRUE(AttachSurface(h1));
-    auto nh1 = wm_->GetNativeHandle(h1);
-    auto r1 = sm_->AttachSurface(h1, nh1);
+    auto r1 = sm_->AttachSurface(h1);
     EXPECT_FALSE(r1.has_value());
     EXPECT_TRUE(sm_->HasSurface(h1));
 

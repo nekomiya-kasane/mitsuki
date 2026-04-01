@@ -379,8 +379,8 @@ namespace miki::rhi {
     // Surface capability query
     // =========================================================================
 
-    auto WebGPUDevice::GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
-        (void)window;
+    auto WebGPUDevice::GetSurfaceCapabilitiesImpl([[maybe_unused]] const NativeWindowHandle& window) const
+        -> RenderSurfaceCapabilities {
         RenderSurfaceCapabilities caps;
         // Dawn/WebGPU preferred surface format is BGRA8Unorm
         caps.supportedFormats = {Format::BGRA8_UNORM, Format::RGBA8_UNORM};

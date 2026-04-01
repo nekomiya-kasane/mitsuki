@@ -390,8 +390,8 @@ namespace miki::rhi {
     // Surface capability query
     // =========================================================================
 
-    auto D3D12Device::GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
-        (void)window;
+    auto D3D12Device::GetSurfaceCapabilitiesImpl([[maybe_unused]] const NativeWindowHandle& window) const
+        -> RenderSurfaceCapabilities {
         RenderSurfaceCapabilities caps;
 
         // DXGI flip model supports a limited set of formats

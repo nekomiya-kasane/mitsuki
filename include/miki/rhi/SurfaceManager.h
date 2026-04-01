@@ -30,6 +30,10 @@
 #include "miki/rhi/RenderSurface.h"
 #include "miki/rhi/Swapchain.h"
 
+namespace miki::platform {
+    class WindowManager;
+}
+
 namespace miki::rhi {
 
     // =========================================================================
@@ -57,21 +61,22 @@ namespace miki::rhi {
         SurfaceManager(SurfaceManager&&) noexcept;
         auto operator=(SurfaceManager&&) noexcept -> SurfaceManager&;
 
-        /// @brief Create a SurfaceManager bound to a shared device.
+        /// @brief Create a SurfaceManager bound to a shared device and window manager.
         /// @param iDevice Device handle (must outlive this SurfaceManager).
+        /// @param iWindowManager Window manager for querying window state (must outlive this SurfaceManager).
         /// @return SurfaceManager or error if device is invalid.
-        [[nodiscard]] static auto Create(DeviceHandle iDevice) -> core::Result<SurfaceManager>;
+        [[nodiscard]] static auto Create(DeviceHandle iDevice, platform::WindowManager& iWindowManager)
+            -> core::Result<SurfaceManager>;
 
         // ── Surface lifecycle ───────────────────────────────────────
 
         /// @brief Attach a RenderSurface + FrameManager to a window. Creates swapchain + sync objects using the shared
         /// DeviceHandle. The window must not already have an attached surface (no double-attach).
-        /// @param iWindow       Platform window handle (POD, no WindowManager dependency).
-        /// @param iNativeWindow Native window handle for surface creation.
-        /// @param iConfig       Surface configuration (present mode, color space, format, VRR, image count).
-        [[nodiscard]] auto AttachSurface(
-            platform::WindowHandle iWindow, NativeWindowHandle iNativeWindow, const RenderSurfaceConfig& iConfig = {}
-        ) -> core::Result<void>;
+        /// Native window handle and initial framebuffer size are queried from the WindowManager.
+        /// @param iWindow Platform window handle.
+        /// @param iConfig Surface configuration (present mode, color space, format, VRR, image count).
+        [[nodiscard]] auto AttachSurface(platform::WindowHandle iWindow, const RenderSurfaceConfig& iConfig = {})
+            -> core::Result<void>;
 
         /// @brief Detach and destroy the surface for a window. Waits for THIS surface's in-flight frames only
         /// (per-surface timeline wait). Other windows continue rendering uninterrupted.

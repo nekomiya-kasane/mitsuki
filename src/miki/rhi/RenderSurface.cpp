@@ -99,8 +99,10 @@ namespace miki::rhi {
             return std::unexpected(core::ErrorCode::InvalidState);
         }
 
-        // Validate against real backend surface capabilities
+        // Validate and clamp against real backend surface capabilities
         auto caps = GetCapabilities();
+        iWidth = std::clamp(iWidth, caps.minExtent.width, caps.maxExtent.width);
+        iHeight = std::clamp(iHeight, caps.minExtent.height, caps.maxExtent.height);
         auto desc = ResolveSwapchainDesc(iConfig, impl_->nativeWindow, iWidth, iHeight);
 
         if (!caps.supportedFormats.empty()) {

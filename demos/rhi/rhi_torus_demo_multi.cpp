@@ -413,7 +413,7 @@ int main(int argc, char** argv) {
     g_device = device.GetHandle();
 
     // 4. SurfaceManager — attach all windows
-    auto smResult = SurfaceManager::Create(g_device);
+    auto smResult = SurfaceManager::Create(g_device, wm);
     if (!smResult) {
         std::println("[multi] SurfaceManager failed");
         return 1;
@@ -422,8 +422,7 @@ int main(int argc, char** argv) {
     g_sm = &surfMgr;
 
     for (uint32_t i = 0; i < kNumWindows; ++i) {
-        auto nativeHandle = wm.GetNativeHandle(g_windows[i]);
-        auto attachResult = surfMgr.AttachSurface(g_windows[i], nativeHandle, {.presentMode = PresentMode::Fifo});
+        auto attachResult = surfMgr.AttachSurface(g_windows[i], {.presentMode = PresentMode::Fifo});
         if (!attachResult) {
             std::println("[multi] AttachSurface {} failed", i);
             return 1;

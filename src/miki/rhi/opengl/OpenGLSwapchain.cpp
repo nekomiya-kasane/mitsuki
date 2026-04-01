@@ -163,15 +163,15 @@ namespace miki::rhi {
     // Surface capability query
     // =========================================================================
 
-    auto OpenGLDevice::GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
-        (void)window;
+    auto OpenGLDevice::GetSurfaceCapabilitiesImpl([[maybe_unused]] const NativeWindowHandle& window) const
+        -> RenderSurfaceCapabilities {
         RenderSurfaceCapabilities caps;
         // OpenGL default framebuffer is always SRGB 8-bit
         caps.supportedFormats = {Format::BGRA8_SRGB, Format::RGBA8_SRGB};
         caps.supportedPresentModes = {PresentMode::Fifo};  // glfwSwapInterval(1) only
         caps.supportedColorSpaces = {SurfaceColorSpace::SRGB};
-        caps.minExtent = {1, 1};
-        caps.maxExtent = {16384, 16384};
+        caps.minExtent = {.width = 1, .height = 1};
+        caps.maxExtent = {.width = 16384, .height = 16384};
         caps.minImageCount = 2;
         caps.maxImageCount = 2;  // Double-buffered default FBO
         return caps;

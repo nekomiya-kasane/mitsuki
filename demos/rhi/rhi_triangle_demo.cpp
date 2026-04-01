@@ -401,8 +401,6 @@ int main(int argc, char** argv) {
     }
     g_mainWindow = *winResult;
 
-    auto nativeHandle = wm.GetNativeHandle(g_mainWindow);
-
     // 2. Device (one call replaces 80 lines of per-backend switch-case)
     DeviceDesc desc{
         .backend = backend,
@@ -421,7 +419,7 @@ int main(int argc, char** argv) {
     std::println("[demo] Device created successfully");
 
     // 3. SurfaceManager (replaces manual swapchain + semaphore management)
-    auto smResult = SurfaceManager::Create(device.GetHandle());
+    auto smResult = SurfaceManager::Create(device.GetHandle(), wm);
     if (!smResult) {
         std::println("[demo] SurfaceManager::Create failed");
         return 1;
@@ -429,7 +427,7 @@ int main(int argc, char** argv) {
     auto sm = std::move(*smResult);
     g_sm = &sm;
 
-    auto attachResult = sm.AttachSurface(g_mainWindow, nativeHandle, {.presentMode = PresentMode::Fifo});
+    auto attachResult = sm.AttachSurface(g_mainWindow, {.presentMode = PresentMode::Fifo});
     if (!attachResult) {
         std::println("[demo] AttachSurface failed");
         return 1;

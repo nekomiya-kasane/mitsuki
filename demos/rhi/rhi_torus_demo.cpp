@@ -378,7 +378,6 @@ int main(int argc, char** argv) {
         return 1;
     }
     g_mainWindow = *winResult;
-    auto nativeHandle = wm.GetNativeHandle(g_mainWindow);
 
     DeviceDesc desc{
         .backend = backend,
@@ -393,7 +392,7 @@ int main(int argc, char** argv) {
     }
     auto device = std::move(*deviceResult);
 
-    auto smResult = SurfaceManager::Create(device.GetHandle());
+    auto smResult = SurfaceManager::Create(device.GetHandle(), wm);
     if (!smResult) {
         std::println("[torus] SurfaceManager::Create failed");
         return 1;
@@ -401,7 +400,7 @@ int main(int argc, char** argv) {
     auto surfMgr = std::move(*smResult);
     g_sm = &surfMgr;
 
-    auto attachResult = surfMgr.AttachSurface(g_mainWindow, nativeHandle, {.presentMode = PresentMode::Fifo});
+    auto attachResult = surfMgr.AttachSurface(g_mainWindow, {.presentMode = PresentMode::Fifo});
     if (!attachResult) {
         std::println("[torus] AttachSurface failed");
         return 1;

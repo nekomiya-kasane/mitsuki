@@ -579,7 +579,7 @@ int main(int argc, char** argv) {
     g_device = device.GetHandle();
 
     // 3. SurfaceManager
-    auto smResult = SurfaceManager::Create(g_device);
+    auto smResult = SurfaceManager::Create(g_device, wm);
     if (!smResult) {
         std::println("[stream] SurfaceManager failed");
         return 1;
@@ -587,8 +587,7 @@ int main(int argc, char** argv) {
     auto surfMgr = std::move(*smResult);
     g_sm = &surfMgr;
 
-    auto nativeHandle = wm.GetNativeHandle(g_mainWindow);
-    auto attachResult = surfMgr.AttachSurface(g_mainWindow, nativeHandle, {.presentMode = PresentMode::Fifo});
+    auto attachResult = surfMgr.AttachSurface(g_mainWindow, {.presentMode = PresentMode::Fifo});
     if (!attachResult) {
         std::println("[stream] AttachSurface failed");
         return 1;

@@ -12,6 +12,8 @@
 #include <cassert>
 #include <unordered_map>
 
+#include "miki/platform/WindowManager.h"
+
 namespace miki::rhi {
 
     // =========================================================================
@@ -68,9 +70,10 @@ namespace miki::rhi {
 
     struct SurfaceManager::Impl {
         DeviceHandle device;
+        platform::WindowManager* windowManager = nullptr;  // TODO (Nekomiya) bad smell
         std::unordered_map<platform::WindowHandle, SurfaceEntry, WindowHandleHash> surfaces;
 
-        explicit Impl(DeviceHandle iDevice) : device(iDevice) {}
+        Impl(DeviceHandle iDevice, platform::WindowManager& iWM) : device(iDevice), windowManager(&iWM) {}
 
         auto Find(platform::WindowHandle iWindow) -> SurfaceEntry* {
             auto it = surfaces.find(iWindow);
@@ -98,20 +101,20 @@ namespace miki::rhi {
     auto SurfaceManager::operator=(SurfaceManager&&) noexcept -> SurfaceManager& = default;
     SurfaceManager::SurfaceManager(std::unique_ptr<Impl> iImpl) : impl_(std::move(iImpl)) {}
 
-    auto SurfaceManager::Create(DeviceHandle iDevice) -> core::Result<SurfaceManager> {
+    auto SurfaceManager::Create(DeviceHandle iDevice, platform::WindowManager& iWindowManager)
+        -> core::Result<SurfaceManager> {
         if (!iDevice.IsValid()) {
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }
-        return SurfaceManager(std::make_unique<Impl>(iDevice));
+        return SurfaceManager(std::make_unique<Impl>(iDevice, iWindowManager));
     }
 
     // =========================================================================
     // Surface lifecycle
     // =========================================================================
 
-    auto SurfaceManager::AttachSurface(
-        platform::WindowHandle iWindow, NativeWindowHandle iNativeWindow, const RenderSurfaceConfig& iConfig
-    ) -> core::Result<void> {
+    auto SurfaceManager::AttachSurface(platform::WindowHandle iWindow, const RenderSurfaceConfig& iConfig)
+        -> core::Result<void> {
         assert(impl_ && "SurfaceManager used after move");
 
         if (!iWindow.IsValid()) {
@@ -121,18 +124,24 @@ namespace miki::rhi {
             return std::unexpected(core::ErrorCode::InvalidState);  // Double-attach
         }
 
-        // 1. Create RenderSurface (platform surface handle)
-        auto surfaceResult = RenderSurface::Create(impl_->device, iNativeWindow);
+        // 1. Query window state from WindowManager (authoritative source for native handle + size)
+        auto info = impl_->windowManager->GetWindowInfo(iWindow);
+        if (!info.alive) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
+        }
+        uint32_t w = info.extent.width;
+        uint32_t h = info.extent.height;
+        if (w == 0 || h == 0) {
+            return std::unexpected(core::ErrorCode::InvalidState);  // Minimized — cannot attach
+        }
+
+        // 2. Create RenderSurface (platform surface handle)
+        auto surfaceResult = RenderSurface::Create(impl_->device, info.nativeWindow);
         if (!surfaceResult) {
             return std::unexpected(surfaceResult.error());
         }
 
         auto& surface = *surfaceResult;
-
-        // 2. Query initial framebuffer size from capabilities
-        auto caps = surface->GetCapabilities();
-        uint32_t w = caps.minExtent.width > 0 ? caps.minExtent.width : 1;
-        uint32_t h = caps.minExtent.height > 0 ? caps.minExtent.height : 1;
 
         // 3. Configure swapchain (RenderSurfaceConfig -> SwapchainDesc internally)
         auto configResult = surface->Configure(iConfig, w, h);
