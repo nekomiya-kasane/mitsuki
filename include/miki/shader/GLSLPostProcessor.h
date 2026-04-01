@@ -48,8 +48,8 @@ namespace miki::shader {
          *  These are the only builtins that differ between Vulkan GLSL and OpenGL GLSL.
          */
         inline constexpr std::array<ReplacementRule, 2> kVulkanToOpenGLBuiltins = {{
-            {"gl_VertexIndex", "gl_VertexID"},
-            {"gl_InstanceIndex", "gl_InstanceID"},
+            {.pattern = "gl_VertexIndex", .replacement = "gl_VertexID"},
+            {.pattern = "gl_InstanceIndex", .replacement = "gl_InstanceID"},
         }};
 
     }  // namespace glsl_rules
