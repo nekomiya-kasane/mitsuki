@@ -19,7 +19,7 @@ namespace miki::rhi {
         if (!texData) {
             return std::unexpected(RhiError::TooManyObjects);
         }
-        texData->texture = 0;  // Default framebuffer
+        texData->texture = 0;
         texData->target = GL_TEXTURE_2D;
         texData->internalFormat = GL_RGBA8;
         texData->width = desc.width;
@@ -27,15 +27,15 @@ namespace miki::rhi {
         texData->depth = 1;
         texData->mipLevels = 1;
         texData->arrayLayers = 1;
-        texData->dimension = TextureDimension::Tex2D;  // Swapchain images are always 2D
+        texData->dimension = TextureDimension::Tex2D;
         texData->ownsTexture = false;
+        texData->isDefaultFramebuffer = true;  // Explicit: default FBO, not a real texture
 
-        // Pre-create TextureView for the color texture (swapchain owns this view)
-        TextureViewDesc tvd{.texture = texHandle};
-        auto viewResult = CreateTextureViewImpl(tvd);
+        // Create texture view — CreateTextureViewImpl handles isDefaultFramebuffer correctly
+        auto viewResult = CreateTextureViewImpl({.texture = texHandle});
         if (!viewResult) {
             textures_.Free(texHandle);
-            return std::unexpected(RhiError::TooManyObjects);
+            return std::unexpected(viewResult.error());
         }
         TextureViewHandle texViewHandle = *viewResult;
 

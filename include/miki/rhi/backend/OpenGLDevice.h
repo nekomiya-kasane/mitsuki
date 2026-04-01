@@ -93,6 +93,7 @@ namespace miki::rhi {
         uint32_t arrayLayers = 1;
         TextureDimension dimension = TextureDimension::Tex2D;  // For view type inference
         bool ownsTexture = true;                               // false for swapchain (external FBO)
+        bool isDefaultFramebuffer = false;  // true for swapchain default FBO (texture ID 0, no glTextureView)
     };
 
     struct GLTextureViewData {
@@ -100,7 +101,8 @@ namespace miki::rhi {
         GLuint viewTexture = 0;
         TextureHandle parentTexture;
         GLenum target = GL_TEXTURE_2D;
-        bool ownsView = false;  // true if created via glTextureView, false if alias
+        bool ownsView = false;              // true if created via glTextureView, false if alias
+        bool isDefaultFramebuffer = false;  // true for swapchain default FBO (render via glBindFramebuffer(0))
     };
 
     struct GLSamplerData {

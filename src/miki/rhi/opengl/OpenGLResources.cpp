@@ -379,6 +379,20 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
+        // Default framebuffer cannot use glTextureView — create placeholder view
+        if (texData->isDefaultFramebuffer) {
+            auto [handle, data] = textureViews_.Allocate();
+            if (!data) {
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            data->viewTexture = 0;
+            data->parentTexture = desc.texture;
+            data->target = GL_TEXTURE_2D;
+            data->ownsView = false;
+            data->isDefaultFramebuffer = true;
+            return handle;
+        }
+
         // Inherit format from parent texture if not explicitly specified.
         GLenum internalFormat
             = (desc.format == Format::Undefined) ? texData->internalFormat : ToGLFormat(desc.format).internalFormat;
@@ -407,6 +421,7 @@ namespace miki::rhi {
         data->parentTexture = desc.texture;
         data->target = viewTarget;
         data->ownsView = true;
+        data->isDefaultFramebuffer = false;
         return handle;
     }
 
