@@ -26,6 +26,7 @@
 #include "miki/debug/StructuredLogger.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -153,6 +154,8 @@ namespace miki::rhi {
             } else {
                 MIKI_LOG_TRACE(Rhi, "[Vulkan] {}", callbackData->pMessage);
             }
+            MIKI_LOG_FLUSH();
+
             return VK_FALSE;
         }
     }  // namespace
@@ -335,12 +338,25 @@ namespace miki::rhi {
             queueCreateInfos.push_back(queueInfo);
         }
 
-        std::vector<const char*> deviceExtensions = {
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        // =====================================================================
+        // Step 1: Enumerate available extensions (needed for tier decision + feature enabling)
+        // =====================================================================
+        uint32_t extCount = 0;
+        vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
+        std::vector<VkExtensionProperties> availableExts(extCount);
+        vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, availableExts.data());
+
+        auto hasExt = [&](const char* name) {
+            return std::ranges::any_of(availableExts, [name](const VkExtensionProperties& e) {
+                return std::strcmp(e.extensionName, name) == 0;
+            });
         };
 
+        // Extension list — swapchain is always required
+        std::vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
         // =====================================================================
-        // Probe physical device features to decide tier
+        // Step 2: Probe physical device features + API version for tier decision
         // =====================================================================
         VkPhysicalDeviceVulkan12Features supported12{};
         supported12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -352,27 +368,26 @@ namespace miki::rhi {
         supported2.pNext = &supported13;
         vkGetPhysicalDeviceFeatures2(physicalDevice_, &supported2);
 
-        // Check API version
         VkPhysicalDeviceProperties devProps{};
         vkGetPhysicalDeviceProperties(physicalDevice_, &devProps);
         bool has14Api
             = VK_API_VERSION_MAJOR(devProps.apiVersion) >= 1 && VK_API_VERSION_MINOR(devProps.apiVersion) >= 4;
 
-        // If user requested Vulkan14, check for critical features and auto-downgrade
+        // =====================================================================
+        // Step 3: Tier downgrade check (Vulkan14 → VulkanCompat if missing critical features)
+        // =====================================================================
         if (tier_ == BackendType::Vulkan14) {
             using enum ::miki::debug::LogCategory;
             bool missingCritical = false;
             auto check = [&](VkBool32 supported, const char* name) {
                 if (!supported) {
-                    MIKI_LOG_WARN(
-                        Rhi, "[Vulkan] Tier1 feature '{}' not supported by GPU, will downgrade to Compat", name
-                    );
+                    MIKI_LOG_WARN(Rhi, "[Vulkan] Tier1 feature '{}' not supported, will downgrade to Compat", name);
                     missingCritical = true;
                 }
             };
             if (!has14Api) {
                 MIKI_LOG_WARN(
-                    Rhi, "[Vulkan] GPU does not support Vulkan 1.4 (reported {}.{}), will downgrade to Compat",
+                    Rhi, "[Vulkan] GPU reports Vulkan {}.{}, need 1.4 — will downgrade to Compat",
                     VK_API_VERSION_MAJOR(devProps.apiVersion), VK_API_VERSION_MINOR(devProps.apiVersion)
                 );
                 missingCritical = true;
@@ -385,13 +400,13 @@ namespace miki::rhi {
             check(supported13.maintenance4, "maintenance4");
 
             if (missingCritical) {
-                MIKI_LOG_WARN(Rhi, "[Vulkan] Downgrading from Vulkan14 to VulkanCompat due to missing features");
+                MIKI_LOG_WARN(Rhi, "[Vulkan] Downgrading from Vulkan14 to VulkanCompat");
                 tier_ = BackendType::VulkanCompat;
             }
         }
 
         // =====================================================================
-        // Build feature request chain based on final tier_
+        // Step 4: Build feature request chain based on final tier
         // =====================================================================
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -405,6 +420,7 @@ namespace miki::rhi {
         features2.features.multiDrawIndirect = supported2.features.multiDrawIndirect;
         features2.features.drawIndirectFirstInstance = supported2.features.drawIndirectFirstInstance;
 
+        // Feature structs — declared here, conditionally initialized below
         VkPhysicalDeviceVulkan11Features features11{};
         VkPhysicalDeviceVulkan12Features features12{};
         VkPhysicalDeviceVulkan13Features features13{};
@@ -412,89 +428,89 @@ namespace miki::rhi {
         VkPhysicalDeviceSynchronization2FeaturesKHR sync2Feature{};
         VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeature{};
         VkPhysicalDeviceShaderDrawParametersFeatures drawParamsFeature{};
+        VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeature{};
 
         if (tier_ == BackendType::Vulkan14) {
-            // Full Vulkan 1.4 — request all critical + nice-to-have features
+            // -----------------------------------------------------------------
+            // Tier1: Vulkan 1.4 core — features are promoted, no KHR extensions needed
+            // -----------------------------------------------------------------
             features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-            features11.shaderDrawParameters = VK_TRUE;  // Required for SPIR-V DrawParameters (gl_DrawID)
+            features11.shaderDrawParameters = VK_TRUE;
 
             features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
             features12.pNext = &features11;
-            features12.timelineSemaphore = VK_TRUE;
-            features12.bufferDeviceAddress = VK_TRUE;
             features12.descriptorIndexing = VK_TRUE;
-            features12.runtimeDescriptorArray = VK_TRUE;
-            features12.descriptorBindingPartiallyBound = VK_TRUE;
-            features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
             features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
             features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+            features12.descriptorBindingPartiallyBound = VK_TRUE;
+            features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+            features12.runtimeDescriptorArray = VK_TRUE;
+            features12.timelineSemaphore = VK_TRUE;
+            features12.bufferDeviceAddress = VK_TRUE;
 
             features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
             features13.pNext = &features12;
-            features13.dynamicRendering = VK_TRUE;
             features13.synchronization2 = VK_TRUE;
+            features13.dynamicRendering = VK_TRUE;
             features13.maintenance4 = VK_TRUE;
 
+            void** pNextTail = &features13.pNext;
+
+            // Optional Tier1 extensions (mesh shader, ray tracing, etc.)
+            if (hasExt(VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+                meshShaderFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+                meshShaderFeature.taskShader = VK_TRUE;
+                meshShaderFeature.meshShader = VK_TRUE;
+                *pNextTail = &meshShaderFeature;
+                pNextTail = &meshShaderFeature.pNext;
+            }
+
             features2.pNext = &features13;
-            // Optional 1.0 features (only if GPU supports)
             features2.features.shaderFloat64 = supported2.features.shaderFloat64;
             features2.features.shaderInt64 = supported2.features.shaderInt64;
-        } else {
-            // VulkanCompat — Vulkan 1.1 core + KHR extensions for critical features
-            uint32_t extCount = 0;
-            vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
-            std::vector<VkExtensionProperties> availableExts(extCount);
-            vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, availableExts.data());
-            auto hasExt = [&](const char* name) {
-                return std::ranges::any_of(availableExts, [name](const VkExtensionProperties& e) {
-                    return std::strcmp(e.extensionName, name) == 0;
-                });
-            };
 
-            // VK_KHR_dynamic_rendering is mandatory — no VkRenderPass fallback path exists
+        } else {
+            // -----------------------------------------------------------------
+            // Tier2: VulkanCompat — Vulkan 1.1 core + KHR extensions
+            // -----------------------------------------------------------------
             if (!hasExt(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
-                MIKI_LOG_ERROR(
-                    Rhi, "[Vulkan] VulkanCompat requires VK_KHR_dynamic_rendering; use OpenGL (Tier4) for this GPU"
-                );
+                MIKI_LOG_ERROR(Rhi, "[Vulkan] VulkanCompat requires VK_KHR_dynamic_rendering; use OpenGL (Tier4)");
                 return std::unexpected(RhiError::FeatureNotSupported);
             }
+
+            // Mandatory extension
             deviceExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
-            // dependency chain: dynamic_rendering -> depth_stencil_resolve -> create_renderpass2
+            dynRenderFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
+            dynRenderFeature.dynamicRendering = VK_TRUE;
+            features2.pNext = &dynRenderFeature;
+            void** pNextTail = &dynRenderFeature.pNext;
+
+            // Dependency chain for dynamic_rendering
             if (hasExt(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
             }
             if (hasExt(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
             }
-            if (hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
-                deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
-            }
+
+            // Optional extensions with feature structs
             if (hasExt(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
-            }
-            if (hasExt(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME)) {
-                deviceExtensions.push_back(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
-            }
-
-            // Build pNext feature chain — without these, extensions load but features stay disabled
-            dynRenderFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
-            dynRenderFeature.dynamicRendering = VK_TRUE;
-            features2.pNext = &dynRenderFeature;
-            void** pNextTail = &dynRenderFeature.pNext;
-
-            if (hasExt(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
                 sync2Feature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
                 sync2Feature.synchronization2 = VK_TRUE;
                 *pNextTail = &sync2Feature;
                 pNextTail = &sync2Feature.pNext;
             }
             if (hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
                 timelineFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
                 timelineFeature.timelineSemaphore = VK_TRUE;
                 *pNextTail = &timelineFeature;
                 pNextTail = &timelineFeature.pNext;
             }
             if (hasExt(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
                 drawParamsFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
                 drawParamsFeature.shaderDrawParameters = VK_TRUE;
                 *pNextTail = &drawParamsFeature;

@@ -35,7 +35,10 @@ miki_add_demo(window_manager_demo  demos/platform/window_manager_demo.cpp)
 miki_add_demo(logger_demo          demos/debug/logger_demo.cpp)
 
 # -- RHI demos ----------------------------------------------------------------
-miki_add_demo(rhi_triangle_demo    demos/rhi/rhi_triangle_demo.cpp)
+miki_add_demo(rhi_triangle_demo       demos/rhi/rhi_triangle_demo.cpp)
+miki_add_demo(rhi_torus_demo          demos/rhi/rhi_torus_demo.cpp)
+miki_add_demo(rhi_torus_demo_multi    demos/rhi/rhi_torus_demo_multi.cpp)
+miki_add_demo(rhi_streaming_upload_demo demos/rhi/rhi_streaming_upload_demo.cpp)
 
 # -- Third-party demos (always built if present) ------------------------------
 if(EXISTS "${CMAKE_SOURCE_DIR}/demos/thirdparty/CMakeLists.txt")

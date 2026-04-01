@@ -309,3 +309,5 @@ namespace miki::debug {
 #define MIKI_LOG_WARN(cat, ...) MIKI_LOG(::miki::debug::LogLevel::Warn, cat, __VA_ARGS__)
 #define MIKI_LOG_ERROR(cat, ...) MIKI_LOG(::miki::debug::LogLevel::Error, cat, __VA_ARGS__)
 #define MIKI_LOG_FATAL(cat, ...) MIKI_LOG(::miki::debug::LogLevel::Fatal, cat, __VA_ARGS__)
+
+#define MIKI_LOG_FLUSH() ::miki::debug::StructuredLogger::Instance().Flush()

@@ -88,6 +88,52 @@ namespace miki::core {
         return m;
     }
 
+    [[nodiscard]] inline auto MakeRotateX(float rad) -> float4x4 {
+        float c = std::cos(rad), s = std::sin(rad);
+        auto m = MakeIdentity();
+        m[1, 1] = c;
+        m[1, 2] = -s;
+        m[2, 1] = s;
+        m[2, 2] = c;
+        return m;
+    }
+
+    [[nodiscard]] inline auto MakeRotateY(float rad) -> float4x4 {
+        float c = std::cos(rad), s = std::sin(rad);
+        auto m = MakeIdentity();
+        m[0, 0] = c;
+        m[0, 2] = s;
+        m[2, 0] = -s;
+        m[2, 2] = c;
+        return m;
+    }
+
+    [[nodiscard]] inline auto MakeRotateZ(float rad) -> float4x4 {
+        float c = std::cos(rad), s = std::sin(rad);
+        auto m = MakeIdentity();
+        m[0, 0] = c;
+        m[0, 1] = -s;
+        m[1, 0] = s;
+        m[1, 1] = c;
+        return m;
+    }
+
+    [[nodiscard]] inline auto MakeRotateAxis(float3 axis, float rad) -> float4x4 {
+        auto a = Vec3Normalize(axis);
+        float c = std::cos(rad), s = std::sin(rad), t = 1.0f - c;
+        auto m = MakeIdentity();
+        m[0, 0] = t * a.x * a.x + c;
+        m[0, 1] = t * a.x * a.y - s * a.z;
+        m[0, 2] = t * a.x * a.z + s * a.y;
+        m[1, 0] = t * a.x * a.y + s * a.z;
+        m[1, 1] = t * a.y * a.y + c;
+        m[1, 2] = t * a.y * a.z - s * a.x;
+        m[2, 0] = t * a.x * a.z - s * a.y;
+        m[2, 1] = t * a.y * a.z + s * a.x;
+        m[2, 2] = t * a.z * a.z + c;
+        return m;
+    }
+
     // ===========================================================================
     // float4x4 multiply
     // ===========================================================================

@@ -1,112 +1,50 @@
 /** @file rhi_triangle_demo.cpp
  *  @brief RHI triangle demo — renders a color triangle on ALL backends.
  *
- *  Usage: rhi_triangle_demo [--backend vulkan|d3d12|opengl|webgpu]
- *  Default: Vulkan14 (desktop), WebGPU (Emscripten).
+ *  Usage: rhi_triangle_demo [--backend vulkan|vulkan11|d3d12|opengl|webgpu]
+ *  Default: VulkanCompat (desktop), WebGPU (Emscripten).
  *
  *  Demonstrates the recommended application architecture:
  *    - DeviceFactory (OwnedDevice) for device creation
  *    - SurfaceManager for swapchain lifecycle and frame pacing
  *    - AcquireCommandList for type-erased command recording
+ *    - Mesh shader pipeline (Vulkan 1.4 / D3D12) with vertex shader fallback
  */
 
-#include "miki/platform/WindowManager.h"
-#include "miki/platform/glfw/GlfwWindowBackend.h"
-#include "miki/rhi/backend/AllBackends.h"
-#include "miki/debug/StructuredLogger.h"
-#if MIKI_BUILD_VULKAN
-#    include "miki/rhi/backend/VulkanCommandBuffer.h"
-#endif
-#if MIKI_BUILD_D3D12
-#    include "miki/rhi/backend/D3D12CommandBuffer.h"
-#endif
-#if MIKI_BUILD_OPENGL
-#    include "miki/rhi/backend/OpenGLCommandBuffer.h"
-#endif
-#if MIKI_BUILD_WEBGPU
-#    include "miki/rhi/backend/WebGPUCommandBuffer.h"
-#endif
-#include "miki/rhi/backend/MockCommandBuffer.h"
-#include "miki/rhi/CommandBuffer.h"
-#include "miki/rhi/Device.h"
-#include "miki/rhi/DeviceFactory.h"
-#include "miki/rhi/Pipeline.h"
-#include "miki/rhi/RhiEnums.h"
-#include "miki/rhi/RhiTypes.h"
-#include "miki/rhi/Shader.h"
-#include "miki/rhi/SurfaceManager.h"
-#include "miki/shader/ShaderTypes.h"
-#include "miki/shader/SlangCompiler.h"
-
-// Win32 macro conflicts
-#ifdef CreateWindow
-#    undef CreateWindow
-#endif
-#ifdef CreateSemaphore
-#    undef CreateSemaphore
-#endif
-
-#if defined(__EMSCRIPTEN__)
-#    include <emscripten/emscripten.h>
-#endif
+#include "common/DemoCommon.h"
 
 #include <cstdint>
-#include <print>
-#include <string_view>
 
-// Embed triangle shader source at compile time (C++23 #embed)
+// Embed shader sources at compile time (C++23 #embed)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wc23-extensions"
 static constexpr char kTriangleSlangSource[] = {
 #embed "shaders/triangle.slang"
     , '\0'
 };
+static constexpr char kTriangleMeshSlangSource[] = {
+#embed "shaders/triangle_mesh.slang"
+    , '\0'
+};
 #pragma clang diagnostic pop
 
+using namespace miki::demo;
 using namespace miki::platform;
 using namespace miki::rhi;
 namespace shader = miki::shader;
-
-// ============================================================================
-// CLI parsing
-// ============================================================================
-
-static auto ParseBackend(std::string_view s) -> BackendType {
-    if (s == "vulkan" || s == "vk") {
-        return BackendType::Vulkan14;
-    }
-    if (s == "d3d12" || s == "dx12") {
-        return BackendType::D3D12;
-    }
-    if (s == "opengl" || s == "gl") {
-        return BackendType::OpenGL43;
-    }
-    if (s == "webgpu" || s == "wgpu") {
-        return BackendType::WebGPU;
-    }
-    return BackendType::Vulkan14;
-}
-
-static auto BackendName(BackendType t) -> const char* {
-    switch (t) {
-        case BackendType::Vulkan14: return "Vulkan";
-        case BackendType::D3D12: return "D3D12";
-        case BackendType::OpenGL43: return "OpenGL";
-        case BackendType::WebGPU: return "WebGPU";
-        default: return "Unknown";
-    }
-}
 
 // ============================================================================
 // Shader compilation (Slang -> per-backend bytecode)
 // ============================================================================
 
 struct CompiledShaders {
-    shader::ShaderBlob vs;
+    shader::ShaderBlob vs;  // empty when using mesh path
+    shader::ShaderBlob ms;  // empty when using vertex path
     shader::ShaderBlob fs;
+    bool useMeshShader = false;
 };
 
-static auto CompileShaders(BackendType backend) -> std::optional<CompiledShaders> {
+static auto CompileShaders(BackendType backend, bool useMesh) -> std::optional<CompiledShaders> {
     auto compilerResult = shader::SlangCompiler::Create();
     if (!compilerResult) {
         std::println("[demo] shader::SlangCompiler::Create failed");
@@ -114,45 +52,30 @@ static auto CompileShaders(BackendType backend) -> std::optional<CompiledShaders
     }
     auto compiler = std::move(*compilerResult);
     auto target = shader::ShaderTargetForBackend(backend);
+
+    if (useMesh) {
+        std::string src(kTriangleMeshSlangSource);
+        auto ms = CompileStage(compiler, src, "ms_main", shader::ShaderStage::Mesh, target, "MS");
+        if (!ms) {
+            return std::nullopt;
+        }
+        auto fs = CompileStage(compiler, src, "fs_mesh_main", shader::ShaderStage::Fragment, target, "FS(mesh)");
+        if (!fs) {
+            return std::nullopt;
+        }
+        return CompiledShaders{.ms = std::move(*ms), .fs = std::move(*fs), .useMeshShader = true};
+    }
+
     std::string src(kTriangleSlangSource);
-
-    shader::ShaderCompileDesc vsDesc{
-        .sourcePath = {},
-        .sourceCode = src,
-        .entryPoint = "vs_main",
-        .stage = shader::ShaderStage::Vertex,
-        .target = target,
-        .permutation = {},
-        .defines = {}
-    };
-    auto vsResult = compiler.Compile(vsDesc);
-    if (!vsResult) {
-        std::println("[demo] VS compilation failed for {}", BackendName(backend));
-        for (auto& d : compiler.GetLastDiagnostics()) {
-            std::println("  {}:{}:{}: {}", d.filePath, d.line, d.column, d.message);
-        }
+    auto vs = CompileStage(compiler, src, "vs_main", shader::ShaderStage::Vertex, target, "VS");
+    if (!vs) {
         return std::nullopt;
     }
-
-    shader::ShaderCompileDesc fsDesc{
-        .sourcePath = {},
-        .sourceCode = src,
-        .entryPoint = "fs_main",
-        .stage = shader::ShaderStage::Fragment,
-        .target = target,
-        .permutation = {},
-        .defines = {}
-    };
-    auto fsResult = compiler.Compile(fsDesc);
-    if (!fsResult) {
-        std::println("[demo] FS compilation failed for {}", BackendName(backend));
-        for (auto& d : compiler.GetLastDiagnostics()) {
-            std::println("  {}:{}:{}: {}", d.filePath, d.line, d.column, d.message);
-        }
+    auto fs = CompileStage(compiler, src, "fs_main", shader::ShaderStage::Fragment, target, "FS");
+    if (!fs) {
         return std::nullopt;
     }
-
-    return CompiledShaders{.vs = std::move(*vsResult), .fs = std::move(*fsResult)};
+    return CompiledShaders{.vs = std::move(*vs), .fs = std::move(*fs)};
 }
 
 // ============================================================================
@@ -162,18 +85,20 @@ static auto CompileShaders(BackendType backend) -> std::optional<CompiledShaders
 struct TriangleRenderer {
     DeviceHandle device;
     ShaderModuleHandle vertShader;
+    ShaderModuleHandle meshShader;
     ShaderModuleHandle fragShader;
     PipelineLayoutHandle pipelineLayout;
     PipelineHandle pipeline;
     SurfaceManager* surfaceManager = nullptr;
     WindowHandle window{};
+    bool useMeshPath = false;
 
     auto Init(DeviceHandle dev, CompiledShaders& shaders, SurfaceManager* sm, WindowHandle win) -> bool {
         device = dev;
         surfaceManager = sm;
         window = win;
+        useMeshPath = shaders.useMeshShader;
 
-        // Helper lambdas — explicit return type to avoid multi-backend type mismatch
         auto createShader = [&](const ShaderModuleDesc& sd) -> RhiResult<ShaderModuleHandle> {
             return device.Dispatch([&](auto& d) -> RhiResult<ShaderModuleHandle> { return d.CreateShaderModule(sd); });
         };
@@ -186,23 +111,31 @@ struct TriangleRenderer {
             return device.Dispatch([&](auto& d) -> RhiResult<PipelineHandle> { return d.CreateGraphicsPipeline(gpd); });
         };
 
-        // Shaders
-        ShaderModuleDesc vd{
-            .stage = ShaderStage::Vertex,
-            .code = std::span<const uint8_t>(shaders.vs.data),
-            .entryPoint = shaders.vs.entryPoint.c_str()
-        };
-        auto vs = createShader(vd);
-        if (!vs) {
-            std::println("[demo] VS create failed");
-            return false;
+        // Shader modules
+        if (useMeshPath) {
+            ShaderModuleDesc md{
+                .stage = ShaderStage::Mesh, .code = shaders.ms.data, .entryPoint = shaders.ms.entryPoint.c_str()
+            };
+            auto ms = createShader(md);
+            if (!ms) {
+                std::println("[demo] MS create failed");
+                return false;
+            }
+            meshShader = *ms;
+        } else {
+            ShaderModuleDesc vd{
+                .stage = ShaderStage::Vertex, .code = shaders.vs.data, .entryPoint = shaders.vs.entryPoint.c_str()
+            };
+            auto vs = createShader(vd);
+            if (!vs) {
+                std::println("[demo] VS create failed");
+                return false;
+            }
+            vertShader = *vs;
         }
-        vertShader = *vs;
 
         ShaderModuleDesc fd{
-            .stage = ShaderStage::Fragment,
-            .code = std::span<const uint8_t>(shaders.fs.data),
-            .entryPoint = shaders.fs.entryPoint.c_str()
+            .stage = ShaderStage::Fragment, .code = shaders.fs.data, .entryPoint = shaders.fs.entryPoint.c_str()
         };
         auto fs = createShader(fd);
         if (!fs) {
@@ -211,7 +144,6 @@ struct TriangleRenderer {
         }
         fragShader = *fs;
 
-        // Pipeline layout (empty)
         auto pl = createPipelineLayout(PipelineLayoutDesc{});
         if (!pl) {
             std::println("[demo] PipelineLayout failed");
@@ -219,12 +151,16 @@ struct TriangleRenderer {
         }
         pipelineLayout = *pl;
 
-        // Graphics pipeline — query actual swapchain format from the attached surface
+        // Graphics pipeline
         ColorAttachmentBlend blend{};
         auto* rs = surfaceManager->GetRenderSurface(window);
         Format colorFmt = rs ? rs->GetFormat() : Format::BGRA8_SRGB;
         GraphicsPipelineDesc gpd{};
-        gpd.vertexShader = vertShader;
+        if (useMeshPath) {
+            gpd.meshShader = meshShader;
+        } else {
+            gpd.vertexShader = vertShader;
+        }
         gpd.fragmentShader = fragShader;
         gpd.topology = PrimitiveTopology::TriangleList;
         gpd.cullMode = CullMode::None;
@@ -306,7 +242,11 @@ struct TriangleRenderer {
                  .maxDepth = 1}
             );
             cmd.CmdSetScissor({.offset = {0, 0}, .extent = {w, h}});
-            cmd.CmdDraw(3, 1, 0, 0);
+            if (useMeshPath) {
+                cmd.CmdDrawMeshTasks(1, 1, 1);
+            } else {
+                cmd.CmdDraw(3, 1, 0, 0);
+            }
             cmd.CmdEndRendering();
 
             // Transition: ColorAttachment -> Present
@@ -340,6 +280,9 @@ struct TriangleRenderer {
             }
             if (vertShader.IsValid()) {
                 d.DestroyShaderModule(vertShader);
+            }
+            if (meshShader.IsValid()) {
+                d.DestroyShaderModule(meshShader);
             }
             return 0;
         });
@@ -434,16 +377,7 @@ int main(int argc, char** argv) {
     logger.StartDrainThread();
 
     // Parse CLI
-    BackendType backend = BackendType::VulkanCompat;
-#if defined(__EMSCRIPTEN__)
-    backend = BackendType::WebGPU;
-#else
-    for (int i = 1; i < argc; ++i) {
-        if (std::string_view(argv[i]) == "--backend" && i + 1 < argc) {
-            backend = ParseBackend(argv[++i]);
-        }
-    }
-#endif
+    auto backend = ParseBackendFromArgs(argc, argv);
 
     std::println("[demo] Starting RHI Triangle with {} backend", BackendName(backend));
 
@@ -500,13 +434,25 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // 4. Compile shaders
-    auto shaders = CompileShaders(backend);
+    // 4. Compile shaders — use mesh shader path when device supports it
+    bool useMesh = device.GetHandle().Dispatch([](auto& d) { return d.GetCapabilities().HasMeshShader(); });
+    if (useMesh) {
+        std::println("[demo] Mesh shader supported — using mesh shader pipeline (no vertex shader)");
+    }
+    auto shaders = CompileShaders(backend, useMesh);
     if (!shaders) {
         std::println("[demo] Shader compilation failed");
         return 1;
     }
-    std::println("[demo] Shaders compiled: VS={} bytes, FS={} bytes", shaders->vs.data.size(), shaders->fs.data.size());
+    if (useMesh) {
+        std::println(
+            "[demo] Shaders compiled: MS={} bytes, FS={} bytes", shaders->ms.data.size(), shaders->fs.data.size()
+        );
+    } else {
+        std::println(
+            "[demo] Shaders compiled: VS={} bytes, FS={} bytes", shaders->vs.data.size(), shaders->fs.data.size()
+        );
+    }
 
     // 5. Initialize renderer (only pipeline resources + command list)
     TriangleRenderer renderer;

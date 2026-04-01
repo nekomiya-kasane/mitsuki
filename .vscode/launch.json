@@ -167,7 +167,6 @@
             "args": [],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "",
-            "stopAtEntry": false
         },
         {
             "name": "[Full] rhi_triangle_demo --backend vulkan",
@@ -177,6 +176,17 @@
             "args": [
                 "--backend",
                 "vulkan"
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "[Full] rhi_triangle_demo --backend vulkan11",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rhi_triangle_demo.exe",
+            "args": [
+                "--backend",
+                "vulkan11"
             ],
             "cwd": "${workspaceFolder}"
         },
