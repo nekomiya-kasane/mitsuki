@@ -616,8 +616,14 @@ namespace miki::rhi {
         barrier.srcAccessMask = ToVkAccessFlags2(desc.srcAccess);
         barrier.dstStageMask = ToVkPipelineStageFlags2(desc.dstStage);
         barrier.dstAccessMask = ToVkAccessFlags2(desc.dstAccess);
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        // TODO (Nekomiya) this should be reconsidered after completing render graph
+        if (desc.srcQueue != desc.dstQueue) {
+            barrier.srcQueueFamilyIndex = device_->QueueFamilyIndex(desc.srcQueue);
+            barrier.dstQueueFamilyIndex = device_->QueueFamilyIndex(desc.dstQueue);
+        } else {
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        }
         barrier.buffer = data->buffer;
         barrier.offset = desc.offset;
         barrier.size = (desc.size == 0) ? VK_WHOLE_SIZE : desc.size;
@@ -643,8 +649,13 @@ namespace miki::rhi {
         barrier.dstAccessMask = ToVkAccessFlags2(desc.dstAccess);
         barrier.oldLayout = ToVkImageLayout(desc.oldLayout);
         barrier.newLayout = ToVkImageLayout(desc.newLayout);
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        if (desc.srcQueue != desc.dstQueue) {
+            barrier.srcQueueFamilyIndex = device_->QueueFamilyIndex(desc.srcQueue);
+            barrier.dstQueueFamilyIndex = device_->QueueFamilyIndex(desc.dstQueue);
+        } else {
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        }
         barrier.image = data->image;
         barrier.subresourceRange.aspectMask = ToVkImageAspect(desc.subresource.aspect);
         barrier.subresourceRange.baseMipLevel = desc.subresource.baseMipLevel;

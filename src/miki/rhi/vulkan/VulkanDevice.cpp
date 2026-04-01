@@ -1263,12 +1263,17 @@ namespace miki::rhi {
     }
 
     void VulkanDevice::SubmitImpl(QueueType queue, const SubmitDesc& desc) {
-        // Select target queue
+        // Select target queue and corresponding mutex.
+        // When compute/transfer fall back to the graphics queue, we must lock the graphics mutex
+        // to avoid concurrent vkQueueSubmit2 on the same VkQueue (Vulkan spec §3.3.1).
         VkQueue targetQueue = graphicsQueue_;
+        std::mutex* queueMutex = &graphicsQueueMutex_;
         if (queue == QueueType::Compute) {
             targetQueue = computeQueue_;
+            queueMutex = (computeQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &computeQueueMutex_;
         } else if (queue == QueueType::Transfer) {
             targetQueue = transferQueue_;
+            queueMutex = (transferQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &transferQueueMutex_;
         }
 
         // Marshal command buffers
@@ -1335,7 +1340,10 @@ namespace miki::rhi {
         submitInfo.signalSemaphoreInfoCount = static_cast<uint32_t>(signalInfos.size());
         submitInfo.pSignalSemaphoreInfos = signalInfos.data();
 
-        vkQueueSubmit2(targetQueue, 1, &submitInfo, vkFence);
+        {
+            std::lock_guard lock(*queueMutex);
+            vkQueueSubmit2(targetQueue, 1, &submitInfo, vkFence);
+        }
     }
 
     // =========================================================================

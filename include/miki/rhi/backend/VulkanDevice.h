@@ -17,7 +17,11 @@
 
 #include <volk.h>
 
+#include <array>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 // VMA forward declaration — full include only in .cpp files
@@ -375,7 +379,21 @@ namespace miki::rhi {
         VkQueue computeQueue_ = VK_NULL_HANDLE;
         VkQueue transferQueue_ = VK_NULL_HANDLE;
         VulkanQueueFamilies queueFamilies_;
+        // TODO (Nekomiya) think about single summit thread
+        std::mutex graphicsQueueMutex_;
+        std::mutex computeQueueMutex_;
+        std::mutex transferQueueMutex_;
 
+       public:
+        [[nodiscard]] auto QueueFamilyIndex(QueueType q) const noexcept -> uint32_t {
+            switch (q) {
+                case QueueType::Compute: return queueFamilies_.compute;
+                case QueueType::Transfer: return queueFamilies_.transfer;
+                default: return queueFamilies_.graphics;
+            }
+        }
+
+       private:
         // -- Timeline semaphores (specs/03-sync.md §3.2) --
         // Created once at Init, registered in HandlePool, shared across all frames and windows.
         // Binary semaphores for swapchain are per-surface (in FrameManager).
