@@ -420,6 +420,29 @@ namespace miki::shader {
             blob.target = iTarget;
             blob.stage = iStage;
             blob.entryPoint = iEntryPoint;
+
+            // Post-process GLSL: Slang outputs Vulkan GLSL builtins, but OpenGL requires different names.
+            // gl_VertexIndex -> gl_VertexID, gl_InstanceIndex -> gl_InstanceID
+            if (iTarget.type == ShaderTargetType::GLSL) {
+                std::string glsl(reinterpret_cast<char const*>(blob.data.data()), blob.data.size());
+                bool modified = false;
+                // Replace gl_VertexIndex with gl_VertexID
+                for (size_t pos = 0; (pos = glsl.find("gl_VertexIndex", pos)) != std::string::npos;) {
+                    glsl.replace(pos, 14, "gl_VertexID");
+                    pos += 11;
+                    modified = true;
+                }
+                // Replace gl_InstanceIndex with gl_InstanceID
+                for (size_t pos = 0; (pos = glsl.find("gl_InstanceIndex", pos)) != std::string::npos;) {
+                    glsl.replace(pos, 16, "gl_InstanceID");
+                    pos += 13;
+                    modified = true;
+                }
+                if (modified) {
+                    blob.data.assign(glsl.begin(), glsl.end());
+                }
+            }
+
             return blob;
         }
 
