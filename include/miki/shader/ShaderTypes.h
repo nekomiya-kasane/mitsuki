@@ -7,6 +7,7 @@
 
 #include "miki/rhi/Descriptors.h"
 #include "miki/rhi/Format.h"
+#include "miki/rhi/GpuCapabilityProfile.h"
 #include "miki/rhi/RhiEnums.h"
 #include "miki/rhi/RhiTypes.h"
 
@@ -23,7 +24,7 @@ namespace miki::shader {
     enum class ShaderTargetType : uint8_t {
         SPIRV,  // Vulkan (Tier1/Tier2), OpenGL (via GL_ARB_gl_spirv)
         DXIL,   // D3D12
-        GLSL,   // Reserved -- not used at runtime (GL consumes SPIR-V)
+        GLSL,   // OpenGL 4.3+ (GLSL 4.30 text), fallback when GL_ARB_gl_spirv unavailable
         WGSL,   // WebGPU (Dawn)
     };
 
@@ -59,17 +60,19 @@ namespace miki::shader {
         }
     };
 
-    /** @brief Map RHI backend type to shader compilation target with appropriate version.
+    /** @brief Derive the shader compilation target from runtime device capabilities.
      *
-     * Canonical mapping used by all render passes. GL uses SPIR-V
-     * (consumed via GL_ARB_gl_spirv) to avoid Slang GLSL codegen issues.
-     * Call sites should NOT duplicate this logic.
+     *  Single canonical entry point for shader target selection. All runtime decisions
+     *  (e.g. GL_ARB_gl_spirv availability on OpenGL) are encapsulated here.
+     *  Call sites should NOT duplicate this logic.
      */
-    [[nodiscard]] constexpr auto ShaderTargetForBackend(rhi::BackendType iBackend) noexcept -> ShaderTarget {
-        switch (iBackend) {
+    [[nodiscard]] constexpr auto PreferredShaderTarget(const rhi::GpuCapabilityProfile& iCaps) noexcept
+        -> ShaderTarget {
+        switch (iCaps.backendType) {
             case rhi::BackendType::Vulkan14: return ShaderTarget::SPIRV_1_5();
             case rhi::BackendType::VulkanCompat: return ShaderTarget::SPIRV_1_3();
-            case rhi::BackendType::OpenGL43: return ShaderTarget::SPIRV_1_5();  // GL_ARB_gl_spirv
+            case rhi::BackendType::OpenGL43:
+                return iCaps.hasSpirvShaders ? ShaderTarget::SPIRV_1_5() : ShaderTarget::GLSL_430();
             case rhi::BackendType::D3D12: return ShaderTarget::DXIL_6_6();
             case rhi::BackendType::WebGPU: return ShaderTarget::WGSL_1_0();
             default: return ShaderTarget::SPIRV_1_5();  // Mock
@@ -188,7 +191,7 @@ namespace miki::shader {
         std::string sourceCode;            ///< If non-empty, compile from this string instead of reading sourcePath
         std::string entryPoint;
         ShaderStage stage = ShaderStage::Vertex;
-        ShaderTarget target;  ///< Target type + version (use ShaderTargetForBackend() or factory methods)
+        ShaderTarget target;  ///< Target type + version (use PreferredShaderTarget() or factory methods)
         ShaderPermutationKey permutation;
         std::vector<std::pair<std::string, std::string>> defines;
     };

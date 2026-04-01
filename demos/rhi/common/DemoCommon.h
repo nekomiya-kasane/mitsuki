@@ -54,92 +54,105 @@
 
 namespace miki::demo {
 
-using namespace miki::platform;
-using namespace miki::rhi;
-namespace shader = miki::shader;
+    using namespace miki::platform;
+    using namespace miki::rhi;
+    namespace shader = miki::shader;
 
-// ============================================================================
-// CLI parsing
-// ============================================================================
+    // ============================================================================
+    // CLI parsing
+    // ============================================================================
 
-[[nodiscard]] inline auto ParseBackend(std::string_view s) -> BackendType {
-    if (s == "vulkan" || s == "vk") return BackendType::Vulkan14;
-    if (s == "vulkan11" || s == "vk11") return BackendType::VulkanCompat;
-    if (s == "d3d12" || s == "dx12") return BackendType::D3D12;
-    if (s == "opengl" || s == "gl") return BackendType::OpenGL43;
-    if (s == "webgpu" || s == "wgpu") return BackendType::WebGPU;
-    return BackendType::VulkanCompat;
-}
-
-[[nodiscard]] inline auto BackendName(BackendType t) -> const char* {
-    switch (t) {
-        case BackendType::Vulkan14: return "Vulkan";
-        case BackendType::VulkanCompat: return "VulkanCompat";
-        case BackendType::D3D12: return "D3D12";
-        case BackendType::OpenGL43: return "OpenGL";
-        case BackendType::WebGPU: return "WebGPU";
-        default: return "Unknown";
+    [[nodiscard]] inline auto ParseBackend(std::string_view s) -> BackendType {
+        if (s == "vulkan" || s == "vk") {
+            return BackendType::Vulkan14;
+        }
+        if (s == "vulkan11" || s == "vk11") {
+            return BackendType::VulkanCompat;
+        }
+        if (s == "d3d12" || s == "dx12") {
+            return BackendType::D3D12;
+        }
+        if (s == "opengl" || s == "gl") {
+            return BackendType::OpenGL43;
+        }
+        if (s == "webgpu" || s == "wgpu") {
+            return BackendType::WebGPU;
+        }
+        return BackendType::VulkanCompat;
     }
-}
 
-[[nodiscard]] inline auto ParseBackendFromArgs(int argc, char** argv) -> BackendType {
+    [[nodiscard]] inline auto BackendName(BackendType t) -> const char* {
+        switch (t) {
+            case BackendType::Vulkan14: return "Vulkan";
+            case BackendType::VulkanCompat: return "VulkanCompat";
+            case BackendType::D3D12: return "D3D12";
+            case BackendType::OpenGL43: return "OpenGL";
+            case BackendType::WebGPU: return "WebGPU";
+            default: return "Unknown";
+        }
+    }
+
+    [[nodiscard]] inline auto ParseBackendFromArgs(int argc, char** argv) -> BackendType {
 #if defined(__EMSCRIPTEN__)
-    (void)argc; (void)argv;
-    return BackendType::WebGPU;
+        (void)argc;
+        (void)argv;
+        return BackendType::WebGPU;
 #else
-    for (int i = 1; i < argc; ++i) {
-        if (std::string_view(argv[i]) == "--backend" && i + 1 < argc) {
-            return ParseBackend(argv[++i]);
+        for (int i = 1; i < argc; ++i) {
+            if (std::string_view(argv[i]) == "--backend" && i + 1 < argc) {
+                return ParseBackend(argv[++i]);
+            }
         }
-    }
-    return BackendType::VulkanCompat;
+        return BackendType::VulkanCompat;
 #endif
-}
+    }
 
-// ============================================================================
-// Shader compilation helpers
-// ============================================================================
+    // ============================================================================
+    // Shader compilation helpers
+    // ============================================================================
 
-struct CompiledShaderPair {
-    shader::ShaderBlob vs;
-    shader::ShaderBlob fs;
-};
-
-[[nodiscard]] inline auto CompileStage(
-    shader::SlangCompiler& compiler, const std::string& src, const char* entry,
-    shader::ShaderStage stage, shader::ShaderTarget target, const char* label
-) -> std::optional<shader::ShaderBlob> {
-    shader::ShaderCompileDesc desc{
-        .sourcePath = {}, .sourceCode = src, .entryPoint = entry, .stage = stage, .target = target
+    struct CompiledShaderPair {
+        shader::ShaderBlob vs;
+        shader::ShaderBlob fs;
     };
-    auto result = compiler.Compile(desc);
-    if (!result) {
-        std::println("[demo] {} compilation failed", label);
-        for (auto& d : compiler.GetLastDiagnostics()) {
-            std::println("  {}:{}:{}: {}", d.filePath, d.line, d.column, d.message);
+
+    [[nodiscard]] inline auto CompileStage(
+        shader::SlangCompiler& compiler, const std::string& src, const char* entry, shader::ShaderStage stage,
+        shader::ShaderTarget target, const char* label
+    ) -> std::optional<shader::ShaderBlob> {
+        shader::ShaderCompileDesc desc{
+            .sourcePath = {}, .sourceCode = src, .entryPoint = entry, .stage = stage, .target = target
+        };
+        auto result = compiler.Compile(desc);
+        if (!result) {
+            std::println("[demo] {} compilation failed", label);
+            for (auto& d : compiler.GetLastDiagnostics()) {
+                std::println("  {}:{}:{}: {}", d.filePath, d.line, d.column, d.message);
+            }
+            return std::nullopt;
         }
-        return std::nullopt;
+        return std::move(*result);
     }
-    return std::move(*result);
-}
 
-[[nodiscard]] inline auto CompileShaderPair(
-    const char* src, BackendType backend, const char* label
-) -> std::optional<CompiledShaderPair> {
-    auto compilerResult = shader::SlangCompiler::Create();
-    if (!compilerResult) {
-        std::println("[demo] SlangCompiler::Create failed for {}", label);
-        return std::nullopt;
+    [[nodiscard]] inline auto CompileShaderPair(const char* src, shader::ShaderTarget target, const char* label)
+        -> std::optional<CompiledShaderPair> {
+        auto compilerResult = shader::SlangCompiler::Create();
+        if (!compilerResult) {
+            std::println("[demo] SlangCompiler::Create failed for {}", label);
+            return std::nullopt;
+        }
+        auto compiler = std::move(*compilerResult);
+        std::string source(src);
+
+        auto vs = CompileStage(compiler, source, "vs_main", shader::ShaderStage::Vertex, target, label);
+        if (!vs) {
+            return std::nullopt;
+        }
+        auto fs = CompileStage(compiler, source, "fs_main", shader::ShaderStage::Fragment, target, label);
+        if (!fs) {
+            return std::nullopt;
+        }
+        return CompiledShaderPair{.vs = std::move(*vs), .fs = std::move(*fs)};
     }
-    auto compiler = std::move(*compilerResult);
-    auto target = shader::ShaderTargetForBackend(backend);
-    std::string source(src);
-
-    auto vs = CompileStage(compiler, source, "vs_main", shader::ShaderStage::Vertex, target, label);
-    if (!vs) return std::nullopt;
-    auto fs = CompileStage(compiler, source, "fs_main", shader::ShaderStage::Fragment, target, label);
-    if (!fs) return std::nullopt;
-    return CompiledShaderPair{.vs = std::move(*vs), .fs = std::move(*fs)};
-}
 
 }  // namespace miki::demo

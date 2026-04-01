@@ -727,7 +727,8 @@ namespace miki::rhi {
         capabilities_.hasAsyncCompute = (queueFamilies_.compute != queueFamilies_.graphics);
         capabilities_.hasAsyncTransfer = (queueFamilies_.transfer != queueFamilies_.graphics);
         capabilities_.hasMultiDrawIndirect = (deviceFeatures.multiDrawIndirect == VK_TRUE);
-        capabilities_.hasSubgroupOps = true;  // Vulkan 1.1+ always has subgroup ops
+        capabilities_.hasSubgroupOps = true;   // Vulkan 1.1+ always has subgroup ops
+        capabilities_.hasSpirvShaders = true;  // Vulkan always consumes SPIR-V
         capabilities_.hasPushDescriptors = false;
 
         // Extension list (shared by tier-specific methods)

@@ -44,14 +44,13 @@ struct CompiledShaders {
     bool useMeshShader = false;
 };
 
-static auto CompileShaders(BackendType backend, bool useMesh) -> std::optional<CompiledShaders> {
+static auto CompileShaders(shader::ShaderTarget target, bool useMesh) -> std::optional<CompiledShaders> {
     auto compilerResult = shader::SlangCompiler::Create();
     if (!compilerResult) {
         std::println("[demo] shader::SlangCompiler::Create failed");
         return std::nullopt;
     }
     auto compiler = std::move(*compilerResult);
-    auto target = shader::ShaderTargetForBackend(backend);
 
     if (useMesh) {
         std::string src(kTriangleMeshSlangSource);
@@ -441,7 +440,9 @@ int main(int argc, char** argv) {
     if (useMesh) {
         std::println("[demo] Mesh shader supported — using mesh shader pipeline (no vertex shader)");
     }
-    auto shaders = CompileShaders(backend, useMesh);
+    auto shaderTarget
+        = device.GetHandle().Dispatch([](auto& d) { return shader::PreferredShaderTarget(d.GetCapabilities()); });
+    auto shaders = CompileShaders(shaderTarget, useMesh);
     if (!shaders) {
         std::println("[demo] Shader compilation failed");
         return 1;

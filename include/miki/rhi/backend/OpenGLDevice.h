@@ -49,10 +49,27 @@ namespace miki::rhi {
             }
         }
 
+        // GL_ARB_gl_spirv (GL 4.6 core or extension)
+        [[nodiscard]] auto HasSpirvSupport() const noexcept -> bool { return hasSpirvSupport_; }
+        void SpecializeShader(
+            GLuint shader, const GLchar* pEntryPoint, GLuint numSpecializationConstants, const GLuint* pConstantIndex,
+            const GLuint* pConstantValue
+        ) const {
+            if (pfnSpecializeShader_) {
+                pfnSpecializeShader_(shader, pEntryPoint, numSpecializationConstants, pConstantIndex, pConstantValue);
+            }
+        }
+
        private:
         using PFNGLDEPTHBOUNDSEXTPROC = void(GLAD_API_PTR*)(GLdouble, GLdouble);
         PFNGLDEPTHBOUNDSEXTPROC pfnDepthBoundsEXT_ = nullptr;
         bool hasDepthBoundsTest_ = false;
+
+        // GL_ARB_gl_spirv / GL 4.6
+        using PFNGLSPECIALIZESHADERPROC
+            = void(GLAD_API_PTR*)(GLuint, const GLchar*, GLuint, const GLuint*, const GLuint*);
+        PFNGLSPECIALIZESHADERPROC pfnSpecializeShader_ = nullptr;
+        bool hasSpirvSupport_ = false;
     };
 
     // =========================================================================
@@ -91,9 +108,12 @@ namespace miki::rhi {
     };
 
     struct GLShaderModuleData {
-        std::string source;  // GLSL 4.30 source text
+        std::string source;              // GLSL source text (used when isSPIRV == false)
+        std::vector<uint8_t> spirvData;  // SPIR-V binary (used when isSPIRV == true)
         ShaderStage stage = ShaderStage::Vertex;
         GLuint compiledShader = 0;  // Cached compiled GL shader object
+        bool isSPIRV = false;
+        std::string entryPoint = "main";  // Entry point name for SPIR-V specialization
     };
 
     struct GLFenceData {
@@ -253,6 +273,7 @@ namespace miki::rhi {
 
         // -- Native accessors --
         [[nodiscard]] auto GetGLContext() const noexcept -> GladGLContext* { return gl_; }
+        [[nodiscard]] auto HasSpirvSupport() const noexcept -> bool { return ext_.HasSpirvSupport(); }
 
         // -- Capability --
         auto GetBackendTypeImpl() const -> BackendType { return BackendType::OpenGL43; }

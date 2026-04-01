@@ -13,6 +13,11 @@
 
 #include <cassert>
 
+// GL_ARB_gl_spirv binary format constant (not in glad2 generated headers)
+#ifndef GL_SHADER_BINARY_FORMAT_SPIR_V
+#    define GL_SHADER_BINARY_FORMAT_SPIR_V 0x9551
+#endif
+
 namespace miki::rhi {
 
     namespace {
@@ -149,7 +154,8 @@ namespace miki::rhi {
             }
         }
 
-        auto CompileShader(GladGLContext* gl, GLuint& cachedShader, const std::string& source, GLenum type) -> GLuint {
+        auto CompileShaderGLSL(GladGLContext* gl, GLuint& cachedShader, const std::string& source, GLenum type)
+            -> GLuint {
             if (cachedShader != 0) {
                 return cachedShader;
             }
@@ -163,7 +169,33 @@ namespace miki::rhi {
             if (!success) {
                 char log[1024]{};
                 gl->GetShaderInfoLog(shader, sizeof(log), nullptr, log);
-                MIKI_LOG_ERROR(::miki::debug::LogCategory::Rhi, "[OpenGL] Shader compile error: {}", log);
+                MIKI_LOG_ERROR(::miki::debug::LogCategory::Rhi, "[OpenGL] GLSL compile error: {}", log);
+                gl->DeleteShader(shader);
+                return 0;
+            }
+            cachedShader = shader;
+            return shader;
+        }
+
+        auto CompileShaderSPIRV(
+            GladGLContext* gl, const GLExtContext& ext, GLuint& cachedShader, const std::vector<uint8_t>& spirvData,
+            const std::string& entryPoint, GLenum type
+        ) -> GLuint {
+            if (cachedShader != 0) {
+                return cachedShader;
+            }
+            GLuint shader = gl->CreateShader(type);
+            gl->ShaderBinary(
+                1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, spirvData.data(), static_cast<GLsizei>(spirvData.size())
+            );
+            ext.SpecializeShader(shader, entryPoint.c_str(), 0, nullptr, nullptr);
+
+            GLint success = 0;
+            gl->GetShaderiv(shader, GL_COMPILE_STATUS, &success);
+            if (!success) {
+                char log[1024]{};
+                gl->GetShaderInfoLog(shader, sizeof(log), nullptr, log);
+                MIKI_LOG_ERROR(::miki::debug::LogCategory::Rhi, "[OpenGL] SPIR-V specialization error: {}", log);
                 gl->DeleteShader(shader);
                 return 0;
             }
@@ -184,7 +216,7 @@ namespace miki::rhi {
 
         GLuint program = gl_->CreateProgram();
 
-        // Compile and attach shaders
+        // Compile and attach shaders (SPIR-V or GLSL path)
         auto attachShader = [&](ShaderModuleHandle h, GLenum type) -> bool {
             if (!h.IsValid()) {
                 return true;
@@ -193,7 +225,12 @@ namespace miki::rhi {
             if (!mod) {
                 return false;
             }
-            GLuint shader = CompileShader(gl_, mod->compiledShader, mod->source, type);
+            GLuint shader = 0;
+            if (mod->isSPIRV) {
+                shader = CompileShaderSPIRV(gl_, ext_, mod->compiledShader, mod->spirvData, mod->entryPoint, type);
+            } else {
+                shader = CompileShaderGLSL(gl_, mod->compiledShader, mod->source, type);
+            }
             if (!shader) {
                 return false;
             }
@@ -326,7 +363,14 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
-        GLuint shader = CompileShader(gl_, mod->compiledShader, mod->source, GL_COMPUTE_SHADER);
+        GLuint shader = 0;
+        if (mod->isSPIRV) {
+            shader = CompileShaderSPIRV(
+                gl_, ext_, mod->compiledShader, mod->spirvData, mod->entryPoint, GL_COMPUTE_SHADER
+            );
+        } else {
+            shader = CompileShaderGLSL(gl_, mod->compiledShader, mod->source, GL_COMPUTE_SHADER);
+        }
         if (!shader) {
             return std::unexpected(RhiError::ShaderCompilationFailed);
         }

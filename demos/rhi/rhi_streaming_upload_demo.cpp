@@ -614,7 +614,9 @@ int main(int argc, char** argv) {
     }
 
     // 5. Compile shaders
-    auto shaders = CompileShaderPair(kTorusSlangSource, backend, "torus");
+    auto shaderTarget
+        = g_device.Dispatch([](auto& d) { return miki::shader::PreferredShaderTarget(d.GetCapabilities()); });
+    auto shaders = CompileShaderPair(kTorusSlangSource, shaderTarget, "torus");
     if (!shaders) {
         return 1;
     }

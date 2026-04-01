@@ -105,6 +105,7 @@ namespace miki::rhi {
         // =====================================================================
         // Shading
         // =====================================================================
+        bool hasSpirvShaders = false;  ///< GL_ARB_gl_spirv / GL 4.6 (OpenGL only; always true for Vulkan/D3D12)
         bool hasVariableRateShading = false;
         bool hasFloat64 = false;
         bool hasInt64Atomics = false;

@@ -407,7 +407,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    auto shaders = CompileShaderPair(kTorusSlangSource, backend, "torus");
+    auto shaderTarget
+        = device.GetHandle().Dispatch([](auto& d) { return miki::shader::PreferredShaderTarget(d.GetCapabilities()); });
+    auto shaders = CompileShaderPair(kTorusSlangSource, shaderTarget, "torus");
     if (!shaders) {
         std::println("[torus] Shader compilation failed");
         return 1;

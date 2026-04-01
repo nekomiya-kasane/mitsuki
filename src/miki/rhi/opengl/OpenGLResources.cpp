@@ -8,6 +8,8 @@
 
 #include "miki/rhi/backend/OpenGLDevice.h"
 
+#include "miki/debug/StructuredLogger.h"
+
 #include <cassert>
 #include <cstring>
 
@@ -523,7 +525,7 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // ShaderModule (GLSL 4.30 source text)
+    // ShaderModule (GLSL text or SPIR-V binary)
     // =========================================================================
 
     auto OpenGLDevice::CreateShaderModuleImpl(const ShaderModuleDesc& desc) -> RhiResult<ShaderModuleHandle> {
@@ -531,9 +533,31 @@ namespace miki::rhi {
         if (!data) {
             return std::unexpected(RhiError::TooManyObjects);
         }
-        data->source.assign(reinterpret_cast<const char*>(desc.code.data()), desc.code.size());
+
+        // Detect SPIR-V: check for magic number 0x07230203
+        bool isSPIRV = desc.code.size() >= 4 && desc.code[0] == 0x03 && desc.code[1] == 0x02 && desc.code[2] == 0x23
+                       && desc.code[3] == 0x07;
+
+        if (isSPIRV && ext_.HasSpirvSupport()) {
+            data->spirvData.assign(desc.code.begin(), desc.code.end());
+            data->isSPIRV = true;
+        } else if (isSPIRV) {
+            // SPIR-V provided but GL_ARB_gl_spirv not available
+            MIKI_LOG_ERROR(
+                ::miki::debug::LogCategory::Rhi,
+                "[OpenGL] SPIR-V shader provided but GL_ARB_gl_spirv not available. Use GLSL target."
+            );
+            shaderModules_.Free(handle);
+            return std::unexpected(RhiError::FeatureNotSupported);
+        } else {
+            // GLSL source text
+            data->source.assign(reinterpret_cast<const char*>(desc.code.data()), desc.code.size());
+            data->isSPIRV = false;
+        }
+
         data->stage = desc.stage;
-        data->compiledShader = 0;  // Compiled lazily at pipeline creation
+        data->compiledShader = 0;
+        data->entryPoint = desc.entryPoint ? desc.entryPoint : "main";
         return handle;
     }
 

@@ -21,15 +21,52 @@ namespace miki::rhi {
         if (!loader) {
             return;
         }
+
+        // GL 4.6 has GL_ARB_gl_spirv in core — check version first
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) — GL API returns const GLubyte*
+        const char* versionStr = reinterpret_cast<const char*>(gl->GetString(GL_VERSION));
+        int glMajor = 0, glMinor = 0;
+        if (versionStr) {
+            char* end = nullptr;
+            constexpr int kBase10 = 10;
+            glMajor = static_cast<int>(std::strtol(versionStr, &end, kBase10));
+            if (end && *end == '.') {
+                glMinor = static_cast<int>(std::strtol(end + 1, nullptr, kBase10));
+            }
+        }
+        constexpr int kGL46Minor = 6;
+        bool isGL46 = (glMajor > 4 || (glMajor == 4 && glMinor >= kGL46Minor));
+
+        bool foundDepthBounds = false;
+        bool foundArbGlSpirv = isGL46;
+
         GLint numExtensions = 0;
         gl->GetIntegerv(GL_NUM_EXTENSIONS, &numExtensions);
         for (GLint i = 0; i < numExtensions; ++i) {
             const char* ext = reinterpret_cast<const char*>(gl->GetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
-            if (ext && std::strcmp(ext, "GL_EXT_depth_bounds_test") == 0) {
+            if (!ext) {
+                continue;
+            }
+            if (!foundDepthBounds && std::strcmp(ext, "GL_EXT_depth_bounds_test") == 0) {
                 pfnDepthBoundsEXT_ = reinterpret_cast<PFNGLDEPTHBOUNDSEXTPROC>(loader("glDepthBoundsEXT"));
                 hasDepthBoundsTest_ = (pfnDepthBoundsEXT_ != nullptr);
+                foundDepthBounds = true;
+            }
+            if (!foundArbGlSpirv && std::strcmp(ext, "GL_ARB_gl_spirv") == 0) {
+                foundArbGlSpirv = true;
+            }
+            if (foundDepthBounds && foundArbGlSpirv) {
                 break;
             }
+        }
+
+        // GL_ARB_gl_spirv requires both glShaderBinary (GL 4.1 core) and glSpecializeShader
+        if (foundArbGlSpirv) {
+            pfnSpecializeShader_ = reinterpret_cast<PFNGLSPECIALIZESHADERPROC>(loader("glSpecializeShader"));
+            if (!pfnSpecializeShader_) {
+                pfnSpecializeShader_ = reinterpret_cast<PFNGLSPECIALIZESHADERPROC>(loader("glSpecializeShaderARB"));
+            }
+            hasSpirvSupport_ = (pfnSpecializeShader_ != nullptr) && (gl->ShaderBinary != nullptr);
         }
     }
 
@@ -63,6 +100,13 @@ namespace miki::rhi {
 
         hasDSA_ = (glMajor_ > 4 || (glMajor_ == 4 && glMinor_ >= 5)) || gl_->ARB_direct_state_access;
 
+        // Probe extensions not covered by glad2 (GL_ARB_gl_spirv, GL_EXT_depth_bounds_test)
+        GLADloadfunc procLoader = nullptr;
+        if (windowBackend_) {
+            procLoader = reinterpret_cast<GLADloadfunc>(windowBackend_->GetGLProcLoader());
+        }
+        ext_.Init(gl_, procLoader);
+
         // Enable debug output if validation requested
         if (desc.enableValidation && gl_->KHR_debug) {
             gl_->Enable(GL_DEBUG_OUTPUT);
@@ -84,8 +128,8 @@ namespace miki::rhi {
         PopulateCapabilities();
 
         MIKI_LOG_INFO(
-            ::miki::debug::LogCategory::Rhi, "[OpenGL] Device initialized: {} (GL {}.{})", capabilities_.deviceName,
-            glMajor_, glMinor_
+            ::miki::debug::LogCategory::Rhi, "[OpenGL] Device initialized: {} (GL {}.{}, SPIR-V: {})",
+            capabilities_.deviceName, glMajor_, glMinor_, ext_.HasSpirvSupport() ? "yes" : "no"
         );
 
         return {};
@@ -136,6 +180,7 @@ namespace miki::rhi {
         capabilities_.hasRayQuery = false;
         capabilities_.hasRayTracingPipeline = false;
         capabilities_.hasAccelerationStructure = false;
+        capabilities_.hasSpirvShaders = ext_.HasSpirvSupport();
         capabilities_.hasVariableRateShading = false;
         capabilities_.hasSparseBinding = false;
         capabilities_.hasWorkGraphs = false;

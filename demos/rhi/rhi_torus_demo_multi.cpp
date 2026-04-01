@@ -431,11 +431,13 @@ int main(int argc, char** argv) {
     }
 
     // 5. Compile shaders
-    auto torusShaders = CompileShaderPair(kTorusSlangSource, backend, "torus");
+    auto shaderTarget
+        = device.GetHandle().Dispatch([](auto& d) { return miki::shader::PreferredShaderTarget(d.GetCapabilities()); });
+    auto torusShaders = CompileShaderPair(kTorusSlangSource, shaderTarget, "torus");
     if (!torusShaders) {
         return 1;
     }
-    auto cubeShaders = CompileShaderPair(kCubeSlangSource, backend, "cube");
+    auto cubeShaders = CompileShaderPair(kCubeSlangSource, shaderTarget, "cube");
     if (!cubeShaders) {
         return 1;
     }
