@@ -122,7 +122,6 @@ namespace miki::rhi {
 
        private:
         OpenGLDevice* device_ = nullptr;
-        GLuint currentFBO_ = 0;
         GLenum currentIndexType_ = GL_UNSIGNED_INT;
         GLenum currentTopology_ = GL_TRIANGLES;
         PipelineHandle currentPipeline_;

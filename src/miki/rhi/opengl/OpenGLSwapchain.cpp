@@ -150,10 +150,7 @@ namespace miki::rhi {
             return;
         }
 
-        // Bind default framebuffer before swap
-        gl_->BindFramebuffer(GL_FRAMEBUFFER, 0);
-
-        // Swap buffers via window backend
+        // Swap buffers via window backend (operates on default framebuffer implicitly)
         if (data->windowBackend) {
             data->windowBackend->SwapBuffers(data->nativeToken);
         }

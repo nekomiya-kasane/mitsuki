@@ -75,6 +75,217 @@ namespace miki::rhi {
     };
 
     // =========================================================================
+    // GLContext — per-GL-context state tracker with diff-based thin wrappers.
+    //
+    // OpenGL state is global per-context. This class owns the shadow cache and
+    // ensures GL calls are only issued when state actually changes.
+    // Device holds one GLContext per native GL context (render, transfer, ...).
+    // CommandBuffer and Device methods operate through GLContext*, never raw gl->.
+    // =========================================================================
+
+    class GLContext {
+       public:
+        void Init(GladGLContext* gl) { gl_ = gl; }
+        [[nodiscard]] auto Raw() const noexcept -> GladGLContext* { return gl_; }
+
+        // -- Program / VAO --
+        void UseProgram(GLuint program) {
+            if (cache_.program != program) {
+                gl_->UseProgram(program);
+                cache_.program = program;
+            }
+        }
+        void BindVertexArray(GLuint vao) {
+            if (cache_.vao != vao) {
+                gl_->BindVertexArray(vao);
+                cache_.vao = vao;
+            }
+        }
+
+        // -- Rasterizer --
+        void SetCullFace(bool enable, GLenum mode) {
+            if (cache_.cullFaceEnabled != enable) {
+                enable ? gl_->Enable(GL_CULL_FACE) : gl_->Disable(GL_CULL_FACE);
+                cache_.cullFaceEnabled = enable;
+            }
+            if (enable && cache_.cullMode != mode) {
+                gl_->CullFace(mode);
+                cache_.cullMode = mode;
+            }
+        }
+        void SetFrontFace(GLenum face) {
+            if (cache_.frontFace != face) {
+                gl_->FrontFace(face);
+                cache_.frontFace = face;
+            }
+        }
+        void SetPolygonMode(GLenum mode) {
+            if (cache_.polygonMode != mode) {
+                gl_->PolygonMode(GL_FRONT_AND_BACK, mode);
+                cache_.polygonMode = mode;
+            }
+        }
+
+        // -- Depth --
+        void SetDepthTest(bool enable, GLenum func) {
+            if (cache_.depthTestEnabled != enable) {
+                enable ? gl_->Enable(GL_DEPTH_TEST) : gl_->Disable(GL_DEPTH_TEST);
+                cache_.depthTestEnabled = enable;
+            }
+            if (enable && cache_.depthFunc != func) {
+                gl_->DepthFunc(func);
+                cache_.depthFunc = func;
+            }
+        }
+        void SetDepthWrite(bool enable) {
+            if (cache_.depthWriteEnabled != enable) {
+                gl_->DepthMask(enable ? GL_TRUE : GL_FALSE);
+                cache_.depthWriteEnabled = enable;
+            }
+        }
+        void SetDepthClamp(bool enable) {
+            if (cache_.depthClampEnabled != enable) {
+                enable ? gl_->Enable(GL_DEPTH_CLAMP) : gl_->Disable(GL_DEPTH_CLAMP);
+                cache_.depthClampEnabled = enable;
+            }
+        }
+
+        // -- Stencil --
+        void SetStencilTest(bool enable) {
+            if (cache_.stencilTestEnabled != enable) {
+                enable ? gl_->Enable(GL_STENCIL_TEST) : gl_->Disable(GL_STENCIL_TEST);
+                cache_.stencilTestEnabled = enable;
+            }
+        }
+
+        // -- Blend (per-attachment) --
+        void SetBlendEnable(uint32_t index, bool enable) {
+            if (cache_.blend[index].enabled != enable) {
+                enable ? gl_->Enablei(GL_BLEND, index) : gl_->Disablei(GL_BLEND, index);
+                cache_.blend[index].enabled = enable;
+            }
+        }
+        void SetBlendFunc(uint32_t i, GLenum srcC, GLenum dstC, GLenum srcA, GLenum dstA) {
+            auto& cb = cache_.blend[i];
+            if (cb.srcColor != srcC || cb.dstColor != dstC || cb.srcAlpha != srcA || cb.dstAlpha != dstA) {
+                gl_->BlendFuncSeparatei(i, srcC, dstC, srcA, dstA);
+                cb.srcColor = srcC;
+                cb.dstColor = dstC;
+                cb.srcAlpha = srcA;
+                cb.dstAlpha = dstA;
+            }
+        }
+        void SetBlendEquation(uint32_t i, GLenum colorOp, GLenum alphaOp) {
+            auto& cb = cache_.blend[i];
+            if (cb.colorOp != colorOp || cb.alphaOp != alphaOp) {
+                gl_->BlendEquationSeparatei(i, colorOp, alphaOp);
+                cb.colorOp = colorOp;
+                cb.alphaOp = alphaOp;
+            }
+        }
+        void SetColorMask(uint32_t i, GLuint mask) {
+            if (cache_.blend[i].writeMask != mask) {
+                gl_->ColorMaski(
+                    i, (mask & 0x1) ? GL_TRUE : GL_FALSE, (mask & 0x2) ? GL_TRUE : GL_FALSE,
+                    (mask & 0x4) ? GL_TRUE : GL_FALSE, (mask & 0x8) ? GL_TRUE : GL_FALSE
+                );
+                cache_.blend[i].writeMask = mask;
+            }
+        }
+        void SetGlobalBlendDisable() {
+            if (cache_.globalBlendEnabled) {
+                gl_->Disable(GL_BLEND);
+                cache_.globalBlendEnabled = false;
+            }
+        }
+        void SetGlobalBlendEnabled(bool v) { cache_.globalBlendEnabled = v; }
+        [[nodiscard]] auto IsGlobalBlendEnabled() const noexcept -> bool { return cache_.globalBlendEnabled; }
+
+        // -- FBO --
+        void BindFramebuffer(GLenum target, GLuint fbo) {
+            if (cache_.boundFBO != fbo) {
+                gl_->BindFramebuffer(target, fbo);
+                cache_.boundFBO = fbo;
+            }
+        }
+        [[nodiscard]] auto BoundFBO() const noexcept -> GLuint { return cache_.boundFBO; }
+
+        // -- Dynamic state: viewport --
+        void SetViewport(float x, float y, float w, float h) {
+            if (cache_.vpX != x || cache_.vpY != y || cache_.vpW != w || cache_.vpH != h) {
+                gl_->ViewportIndexedf(0, x, y, w, h);
+                cache_.vpX = x;
+                cache_.vpY = y;
+                cache_.vpW = w;
+                cache_.vpH = h;
+            }
+        }
+        void SetDepthRange(double nearVal, double farVal) {
+            if (cache_.depthRangeNear != nearVal || cache_.depthRangeFar != farVal) {
+                gl_->DepthRangeIndexed(0, nearVal, farVal);
+                cache_.depthRangeNear = nearVal;
+                cache_.depthRangeFar = farVal;
+            }
+        }
+
+        // -- Dynamic state: scissor --
+        void SetScissorTest(bool enable) {
+            if (cache_.scissorTestEnabled != enable) {
+                enable ? gl_->Enable(GL_SCISSOR_TEST) : gl_->Disable(GL_SCISSOR_TEST);
+                cache_.scissorTestEnabled = enable;
+            }
+        }
+        void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
+            if (cache_.scissorX != x || cache_.scissorY != y || cache_.scissorW != w || cache_.scissorH != h) {
+                gl_->ScissorIndexed(0, x, y, w, h);
+                cache_.scissorX = x;
+                cache_.scissorY = y;
+                cache_.scissorW = w;
+                cache_.scissorH = h;
+            }
+        }
+
+       private:
+        GladGLContext* gl_ = nullptr;
+
+        struct StateCache {
+            GLuint program = 0;
+            GLuint vao = 0;
+            // Rasterizer
+            bool cullFaceEnabled = false;
+            GLenum cullMode = GL_BACK;
+            GLenum frontFace = GL_CCW;
+            GLenum polygonMode = GL_FILL;
+            // Depth
+            bool depthTestEnabled = false;
+            bool depthWriteEnabled = true;
+            GLenum depthFunc = GL_LESS;
+            bool depthClampEnabled = false;
+            // Stencil
+            bool stencilTestEnabled = false;
+            // FBO
+            GLuint boundFBO = 0;
+            // Viewport
+            float vpX = 0, vpY = 0, vpW = 0, vpH = 0;
+            double depthRangeNear = 0.0, depthRangeFar = 1.0;
+            // Scissor
+            bool scissorTestEnabled = false;
+            int32_t scissorX = 0, scissorY = 0;
+            uint32_t scissorW = 0, scissorH = 0;
+            // Blend (per-attachment, up to 8)
+            struct AttachmentBlend {
+                bool enabled = false;
+                GLenum srcColor = GL_ONE, dstColor = GL_ZERO, colorOp = GL_FUNC_ADD;
+                GLenum srcAlpha = GL_ONE, dstAlpha = GL_ZERO, alphaOp = GL_FUNC_ADD;
+                GLuint writeMask = 0xF;
+            };
+            AttachmentBlend blend[8]{};
+            bool globalBlendEnabled = false;
+        };
+        StateCache cache_;
+    };
+
+    // =========================================================================
     // Per-resource backend payloads (stored in HandlePool slots)
     // =========================================================================
 
@@ -310,7 +521,9 @@ namespace miki::rhi {
         [[nodiscard]] auto Init(const OpenGLDeviceDesc& desc = {}) -> RhiResult<void>;
 
         // -- Native accessors --
-        [[nodiscard]] auto GetGLContext() const noexcept -> GladGLContext* { return gl_; }
+        [[nodiscard]] auto GetGLContext() const noexcept -> GladGLContext* { return renderCtx_.Raw(); }
+        [[nodiscard]] auto GetContext() noexcept -> GLContext& { return renderCtx_; }
+        [[nodiscard]] auto GetContext() const noexcept -> const GLContext& { return renderCtx_; }
         [[nodiscard]] auto HasSpirvSupport() const noexcept -> bool { return ext_.HasSpirvSupport(); }
 
         // -- Capability --
@@ -468,7 +681,8 @@ namespace miki::rhi {
 
        private:
         // -- GL context (glad2 MX) --
-        GladGLContext* gl_ = nullptr;
+        GladGLContext* gl_ = nullptr;  // Raw pointer, owned if ownsContext_==true. GLContext wraps this.
+        GLContext renderCtx_;          // Primary render context with state cache
         bool ownsContext_ = false;
         platform::IWindowBackend* windowBackend_ = nullptr;
         void* nativeToken_ = nullptr;

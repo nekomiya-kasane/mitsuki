@@ -75,7 +75,6 @@ namespace miki::rhi {
     // =========================================================================
 
     void OpenGLCommandBuffer::BeginImpl() {
-        currentFBO_ = 0;
         currentIndexType_ = GL_UNSIGNED_INT;
         currentTopology_ = GL_TRIANGLES;
         currentPipeline_ = {};
@@ -87,7 +86,6 @@ namespace miki::rhi {
     }
 
     void OpenGLCommandBuffer::ResetImpl() {
-        currentFBO_ = 0;
         currentIndexType_ = GL_UNSIGNED_INT;
         currentTopology_ = GL_TRIANGLES;
         currentPipeline_ = {};
@@ -99,13 +97,13 @@ namespace miki::rhi {
     // =========================================================================
 
     void OpenGLCommandBuffer::CmdBindPipelineImpl(PipelineHandle pipeline) {
-        auto* gl = device_->GetGLContext();
+        auto& ctx = device_->GetContext();
         auto* data = device_->GetPipelinePool().Lookup(pipeline);
         if (!data) {
             return;
         }
 
-        gl->UseProgram(data->program);
+        ctx.UseProgram(data->program);
         currentPipeline_ = pipeline;
 
         if (data->isCompute) {
@@ -113,41 +111,24 @@ namespace miki::rhi {
         }
 
         currentTopology_ = data->primitiveTopology;
-
-        // Bind VAO
         if (data->vao) {
-            gl->BindVertexArray(data->vao);
+            ctx.BindVertexArray(data->vao);
         }
 
-        // Apply fixed-function state
-        // Culling
-        if (data->cullMode == GL_NONE) {
-            gl->Disable(GL_CULL_FACE);
-        } else {
-            gl->Enable(GL_CULL_FACE);
-            gl->CullFace(data->cullMode);
-        }
-        gl->FrontFace(data->frontFace);
-        gl->PolygonMode(GL_FRONT_AND_BACK, data->polygonMode);
+        // Rasterizer
+        ctx.SetCullFace(data->cullMode != GL_NONE, data->cullMode);
+        ctx.SetFrontFace(data->frontFace);
+        ctx.SetPolygonMode(data->polygonMode);
 
         // Depth
-        if (data->depthTestEnable) {
-            gl->Enable(GL_DEPTH_TEST);
-            gl->DepthFunc(data->depthFunc);
-        } else {
-            gl->Disable(GL_DEPTH_TEST);
-        }
-        gl->DepthMask(data->depthWriteEnable ? GL_TRUE : GL_FALSE);
-
-        if (data->depthClampEnable) {
-            gl->Enable(GL_DEPTH_CLAMP);
-        } else {
-            gl->Disable(GL_DEPTH_CLAMP);
-        }
+        ctx.SetDepthTest(data->depthTestEnable, data->depthFunc);
+        ctx.SetDepthWrite(data->depthWriteEnable);
+        ctx.SetDepthClamp(data->depthClampEnable);
 
         // Stencil
+        ctx.SetStencilTest(data->stencilTestEnable);
         if (data->stencilTestEnable) {
-            gl->Enable(GL_STENCIL_TEST);
+            auto* gl = ctx.Raw();
             gl->StencilFuncSeparate(GL_FRONT, data->stencilFront.compareOp, 0, data->stencilFront.compareMask);
             gl->StencilOpSeparate(
                 GL_FRONT, data->stencilFront.failOp, data->stencilFront.depthFailOp, data->stencilFront.passOp
@@ -158,30 +139,24 @@ namespace miki::rhi {
                 GL_BACK, data->stencilBack.failOp, data->stencilBack.depthFailOp, data->stencilBack.passOp
             );
             gl->StencilMaskSeparate(GL_BACK, data->stencilBack.writeMask);
-        } else {
-            gl->Disable(GL_STENCIL_TEST);
         }
 
         // Blend (per-attachment)
         bool anyBlendEnabled = false;
         for (uint32_t i = 0; i < data->colorAttachmentCount; ++i) {
             auto& bs = data->blendStates[i];
+            ctx.SetBlendEnable(i, bs.enable);
             if (bs.enable) {
                 anyBlendEnabled = true;
-                gl->Enablei(GL_BLEND, i);
-                gl->BlendFuncSeparatei(i, bs.srcColor, bs.dstColor, bs.srcAlpha, bs.dstAlpha);
-                gl->BlendEquationSeparatei(i, bs.colorOp, bs.alphaOp);
-            } else {
-                gl->Disablei(GL_BLEND, i);
+                ctx.SetBlendFunc(i, bs.srcColor, bs.dstColor, bs.srcAlpha, bs.dstAlpha);
+                ctx.SetBlendEquation(i, bs.colorOp, bs.alphaOp);
             }
-            gl->ColorMaski(
-                i, (bs.writeMask & 0x1) ? GL_TRUE : GL_FALSE, (bs.writeMask & 0x2) ? GL_TRUE : GL_FALSE,
-                (bs.writeMask & 0x4) ? GL_TRUE : GL_FALSE, (bs.writeMask & 0x8) ? GL_TRUE : GL_FALSE
-            );
+            ctx.SetColorMask(i, bs.writeMask);
         }
         if (!anyBlendEnabled) {
-            gl->Disable(GL_BLEND);
+            ctx.SetGlobalBlendDisable();
         }
+        ctx.SetGlobalBlendEnabled(anyBlendEnabled);
     }
 
     void OpenGLCommandBuffer::CmdBindDescriptorSetImpl(
@@ -602,25 +577,76 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // Synchronization (coarse glMemoryBarrier)
+    // Synchronization (semantic glMemoryBarrier — skip pure layout transitions)
     // =========================================================================
 
-    void OpenGLCommandBuffer::CmdPipelineBarrierImpl(const PipelineBarrierDesc&) {
-        device_->GetGLContext()->MemoryBarrier(GL_ALL_BARRIER_BITS);
+    // OpenGL has no layout transitions. glMemoryBarrier is only needed when
+    // incoherent writes (image store, SSBO, buffer update) must be visible to
+    // subsequent reads. Pure render-attachment / present transitions are implicit.
+
+    namespace {
+        /// Access flags that represent incoherent writes requiring glMemoryBarrier.
+        constexpr auto kGLIncoherentAccess
+            = AccessFlags::ShaderWrite | AccessFlags::TransferWrite | AccessFlags::HostWrite | AccessFlags::MemoryWrite;
+
+        auto AccessToGLBarrierBits(AccessFlags src, AccessFlags dst) -> GLbitfield {
+            // Only emit barrier when source performed an incoherent write
+            if ((src & kGLIncoherentAccess) == AccessFlags::None) {
+                return 0;
+            }
+            GLbitfield bits = 0;
+            // Map destination access to the minimal GL barrier bits needed
+            if ((dst & (AccessFlags::ShaderRead | AccessFlags::ShaderWrite | AccessFlags::UniformRead))
+                != AccessFlags::None) {
+                bits |= GL_SHADER_STORAGE_BARRIER_BIT | GL_UNIFORM_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT;
+            }
+            if ((dst
+                 & (AccessFlags::ColorAttachmentRead | AccessFlags::ColorAttachmentWrite | AccessFlags::DepthStencilRead
+                    | AccessFlags::DepthStencilWrite))
+                != AccessFlags::None) {
+                bits |= GL_FRAMEBUFFER_BARRIER_BIT;
+            }
+            if ((dst & (AccessFlags::VertexAttributeRead | AccessFlags::IndexRead | AccessFlags::IndirectCommandRead))
+                != AccessFlags::None) {
+                bits |= GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_ELEMENT_ARRAY_BARRIER_BIT | GL_COMMAND_BARRIER_BIT;
+            }
+            if ((dst & (AccessFlags::TransferRead | AccessFlags::TransferWrite)) != AccessFlags::None) {
+                bits |= GL_BUFFER_UPDATE_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT;
+            }
+            if ((dst & AccessFlags::HostRead) != AccessFlags::None) {
+                bits |= GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT;
+            }
+            // Fallback: if source wrote but we couldn't map destination, use ALL_BARRIER_BITS
+            if (bits == 0) {
+                bits = GL_ALL_BARRIER_BITS;
+            }
+            return bits;
+        }
+    }  // namespace
+
+    void OpenGLCommandBuffer::CmdPipelineBarrierImpl(const PipelineBarrierDesc& desc) {
+        GLbitfield bits = AccessToGLBarrierBits(desc.srcAccess, desc.dstAccess);
+        if (bits != 0) {
+            device_->GetGLContext()->MemoryBarrier(bits);
+        }
     }
 
-    void OpenGLCommandBuffer::CmdBufferBarrierImpl(BufferHandle, const BufferBarrierDesc&) {
-        device_->GetGLContext()->MemoryBarrier(
-            GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_ELEMENT_ARRAY_BARRIER_BIT | GL_UNIFORM_BARRIER_BIT
-            | GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT
-        );
+    void OpenGLCommandBuffer::CmdBufferBarrierImpl(
+        [[maybe_unused]] BufferHandle buffer, const BufferBarrierDesc& desc
+    ) {
+        GLbitfield bits = AccessToGLBarrierBits(desc.srcAccess, desc.dstAccess);
+        if (bits != 0) {
+            device_->GetGLContext()->MemoryBarrier(bits);
+        }
     }
 
-    void OpenGLCommandBuffer::CmdTextureBarrierImpl(TextureHandle, const TextureBarrierDesc&) {
-        device_->GetGLContext()->MemoryBarrier(
-            GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT
-            | GL_TEXTURE_UPDATE_BARRIER_BIT
-        );
+    void OpenGLCommandBuffer::CmdTextureBarrierImpl(
+        [[maybe_unused]] TextureHandle texture, const TextureBarrierDesc& desc
+    ) {
+        GLbitfield bits = AccessToGLBarrierBits(desc.srcAccess, desc.dstAccess);
+        if (bits != 0) {
+            device_->GetGLContext()->MemoryBarrier(bits);
+        }
     }
 
     // =========================================================================
@@ -675,8 +701,7 @@ namespace miki::rhi {
             }
             fbo = device_->GetOrCreateMRTFramebuffer(key);
         }
-        gl->BindFramebuffer(GL_FRAMEBUFFER, fbo);
-        currentFBO_ = fbo;
+        device_->GetContext().BindFramebuffer(GL_FRAMEBUFFER, fbo);
 
         // ---- Handle LoadOp::Clear for color attachments ----
         for (size_t i = 0; i < desc.colorAttachments.size() && i < colorViews.size(); ++i) {
@@ -702,10 +727,7 @@ namespace miki::rhi {
     }
 
     void OpenGLCommandBuffer::CmdEndRenderingImpl() {
-        auto* gl = device_->GetGLContext();
-        // FBOs are owned by views or cache — just unbind, never delete here
-        gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
-        currentFBO_ = 0;
+        device_->GetContext().BindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
     // =========================================================================
@@ -713,15 +735,15 @@ namespace miki::rhi {
     // =========================================================================
 
     void OpenGLCommandBuffer::CmdSetViewportImpl(const Viewport& vp) {
-        auto* gl = device_->GetGLContext();
-        gl->ViewportIndexedf(0, vp.x, vp.y, vp.width, vp.height);
-        gl->DepthRangeIndexed(0, vp.minDepth, vp.maxDepth);
+        auto& ctx = device_->GetContext();
+        ctx.SetViewport(vp.x, vp.y, vp.width, vp.height);
+        ctx.SetDepthRange(static_cast<double>(vp.minDepth), static_cast<double>(vp.maxDepth));
     }
 
     void OpenGLCommandBuffer::CmdSetScissorImpl(const Rect2D& scissor) {
-        auto* gl = device_->GetGLContext();
-        gl->Enable(GL_SCISSOR_TEST);
-        gl->ScissorIndexed(0, scissor.offset.x, scissor.offset.y, scissor.extent.width, scissor.extent.height);
+        auto& ctx = device_->GetContext();
+        ctx.SetScissorTest(true);
+        ctx.SetScissor(scissor.offset.x, scissor.offset.y, scissor.extent.width, scissor.extent.height);
     }
 
     void OpenGLCommandBuffer::CmdSetDepthBiasImpl(float constantFactor, float clamp, float slopeFactor) {

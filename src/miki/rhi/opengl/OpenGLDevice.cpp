@@ -152,6 +152,7 @@ namespace miki::rhi {
         }
 
         hasDSA_ = (glMajor_ > 4 || (glMajor_ == 4 && glMinor_ >= 5)) || gl_->ARB_direct_state_access;
+        renderCtx_.Init(gl_);
 
         // Probe extensions not covered by glad2 (GL_ARB_gl_spirv, GL_EXT_depth_bounds_test)
         GLADloadfunc procLoader = nullptr;
