@@ -72,7 +72,10 @@ namespace miki::shader {
             case rhi::BackendType::Vulkan14: return ShaderTarget::SPIRV_1_5();
             case rhi::BackendType::VulkanCompat: return ShaderTarget::SPIRV_1_3();
             case rhi::BackendType::OpenGL43:
-                return iCaps.hasSpirvShaders ? ShaderTarget::SPIRV_1_5() : ShaderTarget::GLSL_430();
+                // TODO (Nekomiya) this is bad
+                // Always use GLSL text: GL_ARB_gl_spirv cannot consume Vulkan SPIR-V builtins
+                // (VertexIndex/InstanceIndex always read 0 — OpenGL only has VertexId/InstanceId).
+                return ShaderTarget::GLSL_430();
             case rhi::BackendType::D3D12: return ShaderTarget::DXIL_6_6();
             case rhi::BackendType::WebGPU: return ShaderTarget::WGSL_1_0();
             default: return ShaderTarget::SPIRV_1_5();  // Mock
