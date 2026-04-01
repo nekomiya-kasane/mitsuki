@@ -557,7 +557,9 @@ namespace miki::rhi {
 
         data->stage = desc.stage;
         data->compiledShader = 0;
-        data->entryPoint = desc.entryPoint ? desc.entryPoint : "main";
+        // Slang compiles each entry point into a separate SPIR-V module with entry "main".
+        // The caller's entryPoint (e.g. "vs_main") is only meaningful for GLSL text or Vulkan.
+        data->entryPoint = isSPIRV || !desc.entryPoint ? "main" : desc.entryPoint;
         return handle;
     }
 

@@ -1,0 +1,11 @@
+# LLDB initialization file for miki project
+# Suppress noisy third-party type errors
+
+# Type formatters and summaries can be added here
+# For now, we focus on suppressing error messages
+
+# Example: Add custom type formatters if needed in the future
+# type summary add --regex "std::.*" -s "${var%S}"
+
+# Disable evaluation of certain expressions that cause errors
+# This helps reduce the noise from incomplete type definitions

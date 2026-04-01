@@ -167,6 +167,12 @@
             "args": [],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
         },
         {
             "name": "[Full] rhi_triangle_demo --backend vulkan",
@@ -177,7 +183,13 @@
                 "--backend",
                 "vulkan"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
         },
         {
             "name": "[Full] rhi_triangle_demo --backend vulkan11",
@@ -188,7 +200,13 @@
                 "--backend",
                 "vulkan11"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
         },
         {
             "name": "[Full] rhi_triangle_demo --backend d3d12",
@@ -199,7 +217,13 @@
                 "--backend",
                 "d3d12"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
         },
         {
             "name": "[Full] rhi_triangle_demo --backend opengl",
@@ -210,7 +234,13 @@
                 "--backend",
                 "opengl"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
         },
         {
             "name": "[Full] rhi_triangle_demo --backend webgpu",
@@ -221,7 +251,13 @@
                 "--backend",
                 "webgpu"
             ],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
         },
         // ============================================================
         // WASM (Emscripten + WebGPU) - Browser debugging
