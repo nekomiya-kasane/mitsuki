@@ -480,7 +480,15 @@ namespace miki::rhi {
             return;
         }
 
-        // GL_ATI_meminfo (AMD-only) — could add here if needed
+        // GL_ATI_meminfo (AMD-only)
+        // VBO_FREE_MEMORY_ATI returns [total, largest block, total aux, largest aux block]
+        constexpr GLenum GL_VBO_FREE_MEMORY_ATI = 0x87FB;
+        GLint atiMemInfo[4]{};
+        gl_->GetIntegerv(GL_VBO_FREE_MEMORY_ATI, atiMemInfo);
+        if (gl_->GetError() == GL_NO_ERROR && atiMemInfo[0] > 0) {
+            capabilities_.deviceLocalMemoryBytes = static_cast<uint64_t>(atiMemInfo[0]) * 1024;
+            capabilities_.hasMemoryBudgetQuery = true;
+        }
     }
 
     // =========================================================================
