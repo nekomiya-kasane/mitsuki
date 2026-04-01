@@ -19,8 +19,71 @@
 
 #include <algorithm>
 #include <cstring>
+#include <format>
 
 namespace miki::rhi {
+
+    // =========================================================================
+    // D3D12 debug message helpers
+    // =========================================================================
+
+    namespace {
+        constexpr auto D3D12SeverityToString(D3D12_MESSAGE_SEVERITY sev) -> std::string_view {
+            switch (sev) {
+                case D3D12_MESSAGE_SEVERITY_CORRUPTION: return "Corruption";
+                case D3D12_MESSAGE_SEVERITY_ERROR: return "Error";
+                case D3D12_MESSAGE_SEVERITY_WARNING: return "Warning";
+                case D3D12_MESSAGE_SEVERITY_INFO: return "Info";
+                case D3D12_MESSAGE_SEVERITY_MESSAGE: return "Message";
+                default: return "Unknown";
+            }
+        }
+
+        constexpr auto D3D12CategoryToString(D3D12_MESSAGE_CATEGORY cat) -> std::string_view {
+            switch (cat) {
+                case D3D12_MESSAGE_CATEGORY_APPLICATION_DEFINED: return "Application";
+                case D3D12_MESSAGE_CATEGORY_MISCELLANEOUS: return "Miscellaneous";
+                case D3D12_MESSAGE_CATEGORY_INITIALIZATION: return "Initialization";
+                case D3D12_MESSAGE_CATEGORY_CLEANUP: return "Cleanup";
+                case D3D12_MESSAGE_CATEGORY_COMPILATION: return "Compilation";
+                case D3D12_MESSAGE_CATEGORY_STATE_CREATION: return "StateCreation";
+                case D3D12_MESSAGE_CATEGORY_STATE_SETTING: return "StateSetting";
+                case D3D12_MESSAGE_CATEGORY_STATE_GETTING: return "StateGetting";
+                case D3D12_MESSAGE_CATEGORY_RESOURCE_MANIPULATION: return "ResourceManipulation";
+                case D3D12_MESSAGE_CATEGORY_EXECUTION: return "Execution";
+                case D3D12_MESSAGE_CATEGORY_SHADER: return "Shader";
+                default: return "Unknown";
+            }
+        }
+
+        void LogD3D12Message(
+            D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_ID id,
+            const char* description
+        ) {
+            using enum ::miki::debug::LogCategory;
+            auto msg = std::format(
+                "[D3D12] [{}:{}] (id={}) {}", D3D12SeverityToString(severity), D3D12CategoryToString(category),
+                static_cast<int>(id), description ? description : ""
+            );
+
+            switch (severity) {
+                case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+                case D3D12_MESSAGE_SEVERITY_ERROR: MIKI_LOG_ERROR(Rhi, "{}", msg); break;
+                case D3D12_MESSAGE_SEVERITY_WARNING: MIKI_LOG_WARN(Rhi, "{}", msg); break;
+                case D3D12_MESSAGE_SEVERITY_INFO: MIKI_LOG_INFO(Rhi, "{}", msg); break;
+                case D3D12_MESSAGE_SEVERITY_MESSAGE:
+                default: MIKI_LOG_TRACE(Rhi, "{}", msg); break;
+            }
+            MIKI_LOG_FLUSH();
+        }
+
+        void CALLBACK D3D12DebugMessageCallback(
+            D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR description,
+            void* /*context*/
+        ) {
+            LogD3D12Message(severity, category, id, description);
+        }
+    }  // namespace
 
     // =========================================================================
     // DXGI Factory creation
@@ -120,13 +183,9 @@ namespace miki::rhi {
             hasEnhancedBarriers_ = options12.EnhancedBarriersSupported;
         }
 
-        // Set info queue break on errors in debug mode
+        // Setup debug message routing
         if (debugController_) {
-            ComPtr<ID3D12InfoQueue> infoQueue;
-            if (SUCCEEDED(device_.As(&infoQueue))) {
-                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
-            }
+            SetupInfoQueue();
         }
 
         return {};
@@ -530,6 +589,18 @@ namespace miki::rhi {
             WaitIdleImpl();
         }
 
+        // Unregister info queue callback before releasing device
+        if (infoQueueCallbackCookie_ != 0 && infoQueue_) {
+            ComPtr<ID3D12InfoQueue1> iq1;
+            if (SUCCEEDED(infoQueue_.As(&iq1))) {
+                iq1->UnregisterMessageCallback(infoQueueCallbackCookie_);
+            }
+            infoQueueCallbackCookie_ = 0;
+        }
+        // Drain any remaining messages from the polling fallback path
+        DrainInfoQueueMessages();
+        infoQueue_.Reset();
+
         if (frameFenceEvent_) {
             CloseHandle(frameFenceEvent_);
             frameFenceEvent_ = nullptr;
@@ -748,6 +819,9 @@ namespace miki::rhi {
                 targetQueue->Signal(fenceData->fence.Get(), fenceData->value);
             }
         }
+
+        // Drain debug messages (polling fallback; no-op if real-time callback is active)
+        DrainInfoQueueMessages();
     }
 
     // =========================================================================
@@ -796,6 +870,71 @@ namespace miki::rhi {
             ++count;
         }
         return count;
+    }
+
+    // =========================================================================
+    // Debug message infrastructure
+    // =========================================================================
+
+    void D3D12Device::SetupInfoQueue() {
+        if (FAILED(device_.As(&infoQueue_))) {
+            return;
+        }
+
+        // Break on corruption/error in debugger
+        infoQueue_->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+        infoQueue_->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+
+        // Try real-time callback via ID3D12InfoQueue1 (Agility SDK / Win11)
+        ComPtr<ID3D12InfoQueue1> iq1;
+        if (SUCCEEDED(infoQueue_.As(&iq1))) {
+            HRESULT hr = iq1->RegisterMessageCallback(
+                D3D12DebugMessageCallback, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &infoQueueCallbackCookie_
+            );
+            if (SUCCEEDED(hr) && infoQueueCallbackCookie_ != 0) {
+                MIKI_LOG_INFO(::miki::debug::LogCategory::Rhi, "[D3D12] Real-time debug message callback registered");
+                return;  // Callback path active, no need for polling
+            }
+        }
+
+        // Fallback: polling mode. Allow storage so DrainInfoQueueMessages can retrieve them.
+        infoQueue_->SetMuteDebugOutput(FALSE);
+        MIKI_LOG_INFO(
+            ::miki::debug::LogCategory::Rhi,
+            "[D3D12] Using polling fallback for debug messages (ID3D12InfoQueue1 not available)"
+        );
+    }
+
+    void D3D12Device::DrainInfoQueueMessages() {
+        if (!infoQueue_ || infoQueueCallbackCookie_ != 0) {
+            return;  // Either no info queue, or real-time callback is handling messages
+        }
+
+        UINT64 msgCount = infoQueue_->GetNumStoredMessagesAllowedByRetrievalFilter();
+        for (UINT64 i = 0; i < msgCount; ++i) {
+            SIZE_T msgLen = 0;
+            if (FAILED(infoQueue_->GetMessage(i, nullptr, &msgLen)) || msgLen == 0) {
+                continue;
+            }
+
+            // Allocate on stack for small messages, heap for large
+            constexpr SIZE_T kStackThreshold = 1024;
+            alignas(D3D12_MESSAGE) char stackBuf[kStackThreshold];
+            std::unique_ptr<char[]> heapBuf;
+            D3D12_MESSAGE* msg = nullptr;
+
+            if (msgLen <= kStackThreshold) {
+                msg = reinterpret_cast<D3D12_MESSAGE*>(stackBuf);
+            } else {
+                heapBuf = std::make_unique<char[]>(msgLen);
+                msg = reinterpret_cast<D3D12_MESSAGE*>(heapBuf.get());
+            }
+
+            if (SUCCEEDED(infoQueue_->GetMessage(i, msg, &msgLen))) {
+                LogD3D12Message(msg->Severity, msg->Category, msg->ID, msg->pDescription);
+            }
+        }
+        infoQueue_->ClearStoredMessages();
     }
 
 }  // namespace miki::rhi

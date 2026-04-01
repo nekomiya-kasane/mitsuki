@@ -10,8 +10,61 @@
 #include "miki/platform/WindowManager.h"
 
 #include <cstring>
+#include <format>
 
 namespace miki::rhi {
+
+    // =========================================================================
+    // GL debug message callback (KHR_debug)
+    // =========================================================================
+
+    namespace {
+        constexpr auto GLSourceToString(GLenum source) -> std::string_view {
+            switch (source) {
+                case GL_DEBUG_SOURCE_API: return "API";
+                case GL_DEBUG_SOURCE_WINDOW_SYSTEM: return "WindowSystem";
+                case GL_DEBUG_SOURCE_SHADER_COMPILER: return "ShaderCompiler";
+                case GL_DEBUG_SOURCE_THIRD_PARTY: return "ThirdParty";
+                case GL_DEBUG_SOURCE_APPLICATION: return "Application";
+                case GL_DEBUG_SOURCE_OTHER: return "Other";
+                default: return "Unknown";
+            }
+        }
+
+        constexpr auto GLTypeToString(GLenum type) -> std::string_view {
+            switch (type) {
+                case GL_DEBUG_TYPE_ERROR: return "Error";
+                case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: return "Deprecated";
+                case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: return "UndefinedBehavior";
+                case GL_DEBUG_TYPE_PORTABILITY: return "Portability";
+                case GL_DEBUG_TYPE_PERFORMANCE: return "Performance";
+                case GL_DEBUG_TYPE_MARKER: return "Marker";
+                case GL_DEBUG_TYPE_PUSH_GROUP: return "PushGroup";
+                case GL_DEBUG_TYPE_POP_GROUP: return "PopGroup";
+                case GL_DEBUG_TYPE_OTHER: return "Other";
+                default: return "Unknown";
+            }
+        }
+
+        void GLAD_API_PTR GLDebugCallback(
+            GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei /*length*/, const GLchar* message,
+            const void* /*userParam*/
+        ) {
+            using enum ::miki::debug::LogCategory;
+            auto msg = std::format(
+                "[OpenGL] [{}:{}] (id={}) {}", GLSourceToString(source), GLTypeToString(type), id, message
+            );
+
+            switch (severity) {
+                case GL_DEBUG_SEVERITY_HIGH: MIKI_LOG_ERROR(Rhi, "{}", msg); break;
+                case GL_DEBUG_SEVERITY_MEDIUM: MIKI_LOG_WARN(Rhi, "{}", msg); break;
+                case GL_DEBUG_SEVERITY_LOW: MIKI_LOG_INFO(Rhi, "{}", msg); break;
+                case GL_DEBUG_SEVERITY_NOTIFICATION:
+                default: MIKI_LOG_TRACE(Rhi, "{}", msg); break;
+            }
+            MIKI_LOG_FLUSH();
+        }
+    }  // namespace
 
     // =========================================================================
     // GLExtContext — probe and load extension functions not in glad2
@@ -111,6 +164,9 @@ namespace miki::rhi {
         if (desc.enableValidation && gl_->KHR_debug) {
             gl_->Enable(GL_DEBUG_OUTPUT);
             gl_->Enable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+            gl_->DebugMessageCallback(GLDebugCallback, nullptr);
+            // Accept all messages — filtering is done by StructuredLogger category level
+            gl_->DebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
         }
 
         // Create push constant emulation UBO (128 bytes at binding 0)

@@ -403,6 +403,8 @@ namespace miki::rhi {
         ComPtr<IDXGIAdapter4> adapter_;
         ComPtr<ID3D12Device10> device_;
         ComPtr<ID3D12Debug6> debugController_;
+        ComPtr<ID3D12InfoQueue> infoQueue_;
+        DWORD infoQueueCallbackCookie_ = 0;  // Non-zero if ID3D12InfoQueue1 callback registered
         D3D12MA::Allocator* allocator_ = nullptr;
 
         // -- Queues --
@@ -457,6 +459,8 @@ namespace miki::rhi {
         auto CreateDescriptorHeaps() -> RhiResult<void>;
         void PopulateCapabilities();
         void PopulateFormatSupport();
+        void SetupInfoQueue();
+        void DrainInfoQueueMessages();
     };
 
 }  // namespace miki::rhi
