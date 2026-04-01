@@ -422,6 +422,22 @@ namespace miki::rhi {
         data->target = viewTarget;
         data->ownsView = true;
         data->isDefaultFramebuffer = false;
+        data->isDepthStencil = IsDepthFormat(internalFormat);
+
+        // Pre-create single-attachment FBO for fast-path rendering.
+        // CmdBeginRendering can bind this directly instead of allocating per-frame.
+        GLuint fbo = 0;
+        gl_->GenFramebuffers(1, &fbo);
+        gl_->BindFramebuffer(GL_FRAMEBUFFER, fbo);
+        GLenum attachPoint = data->isDepthStencil ? GL_DEPTH_ATTACHMENT : GL_COLOR_ATTACHMENT0;
+        gl_->FramebufferTexture(GL_FRAMEBUFFER, attachPoint, viewTex, 0);
+        if (!data->isDepthStencil) {
+            GLenum buf = GL_COLOR_ATTACHMENT0;
+            gl_->DrawBuffers(1, &buf);
+        }
+        gl_->BindFramebuffer(GL_FRAMEBUFFER, 0);
+        data->fbo = fbo;
+
         return handle;
     }
 
@@ -434,6 +450,10 @@ namespace miki::rhi {
         auto* data = textureViews_.Lookup(h);
         if (!data) {
             return;
+        }
+        if (data->fbo) {
+            gl_->DeleteFramebuffers(1, &data->fbo);
+            data->fbo = 0;
         }
         if (data->ownsView && data->viewTexture) {
             gl_->DeleteTextures(1, &data->viewTexture);

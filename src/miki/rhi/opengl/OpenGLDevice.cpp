@@ -181,6 +181,9 @@ namespace miki::rhi {
         }
         gl_->BindBufferBase(GL_UNIFORM_BUFFER, 0, pushConstantUBO_);
 
+        // Create utility FBO for transfer operations (CmdCopy, CmdClear, CmdBlit)
+        gl_->GenFramebuffers(1, &utilityFBO_);
+
         PopulateCapabilities();
 
         MIKI_LOG_INFO(
@@ -197,6 +200,13 @@ namespace miki::rhi {
         if (gl_) {
             WaitIdleImpl();
 
+            DestroyAllCachedFBOs();
+
+            if (utilityFBO_) {
+                gl_->DeleteFramebuffers(1, &utilityFBO_);
+                utilityFBO_ = 0;
+            }
+
             if (pushConstantUBO_) {
                 gl_->DeleteBuffers(1, &pushConstantUBO_);
                 pushConstantUBO_ = 0;
@@ -207,6 +217,49 @@ namespace miki::rhi {
             }
             gl_ = nullptr;
         }
+    }
+
+    // =========================================================================
+    // FBO cache for MRT (multi-color-attachment) rendering passes
+    // =========================================================================
+
+    auto OpenGLDevice::GetOrCreateMRTFramebuffer(const GLFBOCacheKey& key) -> GLuint {
+        auto it = fboCache_.find(key);
+        if (it != fboCache_.end()) {
+            return it->second;
+        }
+
+        GLuint fbo = 0;
+        gl_->GenFramebuffers(1, &fbo);
+        gl_->BindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+        std::array<GLenum, GLFBOCacheKey::kMaxCachedAttachments> drawBuffers{};
+        for (uint32_t i = 0; i < key.colorCount; ++i) {
+            auto attachPoint = static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + i);
+            gl_->FramebufferTexture(GL_FRAMEBUFFER, attachPoint, key.colorTextures[i], 0);
+            drawBuffers[i] = attachPoint;
+        }
+        gl_->DrawBuffers(static_cast<GLsizei>(key.colorCount), drawBuffers.data());
+
+        if (key.depthTexture) {
+            gl_->FramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, key.depthTexture, 0);
+        }
+        if (key.stencilTexture) {
+            gl_->FramebufferTexture(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, key.stencilTexture, 0);
+        }
+
+        gl_->BindFramebuffer(GL_FRAMEBUFFER, 0);
+        fboCache_.emplace(key, fbo);
+        return fbo;
+    }
+
+    void OpenGLDevice::DestroyAllCachedFBOs() {
+        for (auto& [key, fbo] : fboCache_) {
+            if (fbo) {
+                gl_->DeleteFramebuffers(1, &fbo);
+            }
+        }
+        fboCache_.clear();
     }
 
     // =========================================================================

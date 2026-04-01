@@ -9,6 +9,7 @@
 
 #include "miki/rhi/backend/D3D12CommandBuffer.h"
 
+#include <array>
 #include <cassert>
 #include <cstring>
 
@@ -606,18 +607,22 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // Dynamic rendering (OMSetRenderTargets)
+    // Dynamic rendering (OMSetRenderTargets + clear)
     // =========================================================================
 
     void D3D12CommandBuffer::CmdBeginRenderingImpl(const RenderingDesc& desc) {
-        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtvs;
-        rtvs.reserve(desc.colorAttachments.size());
+        static constexpr uint32_t kMaxRTVs = 8;
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxRTVs> rtvs{};
+        uint32_t rtvCount = 0;
 
         for (auto& att : desc.colorAttachments) {
+            if (rtvCount >= kMaxRTVs) {
+                break;
+            }
             if (att.view.IsValid()) {
                 auto* viewData = device_->GetTextureViewPool().Lookup(att.view);
                 if (viewData && viewData->hasRtv) {
-                    rtvs.push_back(viewData->rtvHandle);
+                    rtvs[rtvCount++] = viewData->rtvHandle;
 
                     if (att.loadOp == AttachmentLoadOp::Clear) {
                         float clearColor[]
@@ -650,7 +655,7 @@ namespace miki::rhi {
             }
         }
 
-        cmd_->OMSetRenderTargets(static_cast<UINT>(rtvs.size()), rtvs.empty() ? nullptr : rtvs.data(), FALSE, pDsv);
+        cmd_->OMSetRenderTargets(rtvCount, rtvCount > 0 ? rtvs.data() : nullptr, FALSE, pDsv);
     }
 
     void D3D12CommandBuffer::CmdEndRenderingImpl() {

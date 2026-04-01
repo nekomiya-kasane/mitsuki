@@ -447,9 +447,8 @@ namespace miki::rhi {
 
         auto [format, type] = InternalFormatToTransfer(srcData->internalFormat);
 
-        // GL 4.3 fallback: use FBO + glReadPixels instead of glGetTextureSubImage (GL 4.5)
-        GLuint fbo = 0;
-        gl->GenFramebuffers(1, &fbo);
+        // GL 4.3 fallback: use utility FBO + glReadPixels instead of glGetTextureSubImage (GL 4.5)
+        GLuint fbo = device_->GetUtilityFBO();
         gl->BindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
         gl->FramebufferTexture2D(
             GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcData->target, srcData->texture,
@@ -463,7 +462,6 @@ namespace miki::rhi {
         );
         gl->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         gl->BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        gl->DeleteFramebuffers(1, &fbo);
     }
 
     void OpenGLCommandBuffer::CmdCopyTextureImpl(
@@ -494,20 +492,24 @@ namespace miki::rhi {
             return;
         }
 
-        // Blit requires FBOs
-        GLuint srcFBO = 0, dstFBO = 0;
-        gl->GenFramebuffers(1, &srcFBO);
-        gl->GenFramebuffers(1, &dstFBO);
+        // Blit uses utility FBO for read, and a second cached FBO for draw.
+        // We reuse the utility FBO as GL_READ_FRAMEBUFFER and create/cache the draw target via MRT cache.
+        GLuint utilFBO = device_->GetUtilityFBO();
 
-        gl->BindFramebuffer(GL_READ_FRAMEBUFFER, srcFBO);
+        gl->BindFramebuffer(GL_READ_FRAMEBUFFER, utilFBO);
         gl->FramebufferTexture(
             GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcData->texture, region.srcSubresource.baseMipLevel
         );
 
+        // For draw target, look up the dest texture view's FBO or use utility FBO trick:
+        // We bind utility FBO as READ and create a temp attachment on DRAW side.
+        // Since blit needs two separate FBOs, we use the MRT cache for the dst.
+        GLFBOCacheKey dstKey{};
+        dstKey.colorTextures[0] = dstData->texture;
+        dstKey.colorCount = 1;
+        GLuint dstFBO = device_->GetOrCreateMRTFramebuffer(dstKey);
+
         gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFBO);
-        gl->FramebufferTexture(
-            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, dstData->texture, region.dstSubresource.baseMipLevel
-        );
 
         GLenum glFilter = (filter == Filter::Linear) ? GL_LINEAR : GL_NEAREST;
         gl->BlitFramebuffer(
@@ -518,8 +520,6 @@ namespace miki::rhi {
 
         gl->BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        gl->DeleteFramebuffers(1, &srcFBO);
-        gl->DeleteFramebuffers(1, &dstFBO);
     }
 
     void OpenGLCommandBuffer::CmdFillBufferImpl(BufferHandle buffer, uint64_t offset, uint64_t size, uint32_t value) {
@@ -545,9 +545,8 @@ namespace miki::rhi {
             return;
         }
 
-        // GL 4.3 fallback: use FBO + glClearBufferfv instead of glClearTexImage (GL 4.4)
-        GLuint fbo = 0;
-        gl->GenFramebuffers(1, &fbo);
+        // GL 4.3 fallback: use utility FBO + glClearBufferfv instead of glClearTexImage (GL 4.4)
+        GLuint fbo = device_->GetUtilityFBO();
         gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
 
         float clearColor[] = {color.r, color.g, color.b, color.a};
@@ -559,7 +558,6 @@ namespace miki::rhi {
         }
 
         gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        gl->DeleteFramebuffers(1, &fbo);
     }
 
     void OpenGLCommandBuffer::CmdClearDepthStencilImpl(
@@ -580,8 +578,7 @@ namespace miki::rhi {
             = (data->internalFormat == GL_DEPTH24_STENCIL8 || data->internalFormat == GL_DEPTH32F_STENCIL8
                || data->internalFormat == GL_STENCIL_INDEX8);
 
-        GLuint fbo = 0;
-        gl->GenFramebuffers(1, &fbo);
+        GLuint fbo = device_->GetUtilityFBO();
         gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
 
         uint32_t mipCount = (range.mipLevelCount == 0) ? data->mipLevels - range.baseMipLevel : range.mipLevelCount;
@@ -602,7 +599,6 @@ namespace miki::rhi {
         }
 
         gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        gl->DeleteFramebuffers(1, &fbo);
     }
 
     // =========================================================================
@@ -633,75 +629,83 @@ namespace miki::rhi {
 
     void OpenGLCommandBuffer::CmdBeginRenderingImpl(const RenderingDesc& desc) {
         auto* gl = device_->GetGLContext();
+        auto& viewPool = device_->GetTextureViewPool();
 
-        // Create temporary FBO for the rendering pass
+        // Gather valid color views
+        uint32_t colorCount = 0;
+        std::array<GLTextureViewData*, GLFBOCacheKey::kMaxCachedAttachments> colorViews{};
+        for (size_t i = 0; i < desc.colorAttachments.size() && i < colorViews.size(); ++i) {
+            auto& att = desc.colorAttachments[i];
+            if (att.view.IsValid()) {
+                colorViews[colorCount] = viewPool.Lookup(att.view);
+                if (colorViews[colorCount]) {
+                    ++colorCount;
+                }
+            }
+        }
+
+        GLTextureViewData* depthView = desc.depthAttachment ? viewPool.Lookup(desc.depthAttachment->view) : nullptr;
+        GLTextureViewData* stencilView
+            = desc.stencilAttachment ? viewPool.Lookup(desc.stencilAttachment->view) : nullptr;
+
+        // ---- FBO selection: 3 paths ----
+        // Path A: Default framebuffer (swapchain) — bind FBO 0
+        // Path B: Single attachment — bind view-owned pre-created FBO (zero overhead)
+        // Path C: Multi-attachment — build key, lookup/create in MRT cache
+        uint32_t totalAttachments = colorCount + (depthView ? 1 : 0) + (stencilView ? 1 : 0);
+        GLTextureViewData* soleView = (totalAttachments == 1) ? (colorCount == 1 ? colorViews[0] : depthView) : nullptr;
+
         GLuint fbo = 0;
-        gl->GenFramebuffers(1, &fbo);
+        if (soleView && soleView->isDefaultFramebuffer) {
+            fbo = 0;  // Path A
+        } else if (soleView && soleView->fbo) {
+            fbo = soleView->fbo;  // Path B
+        } else {
+            // Path C: construct cache key from all attachments
+            GLFBOCacheKey key{};
+            key.colorCount = colorCount;
+            for (uint32_t i = 0; i < colorCount; ++i) {
+                key.colorTextures[i] = colorViews[i]->viewTexture;
+            }
+            if (depthView) {
+                key.depthTexture = depthView->viewTexture;
+            }
+            if (stencilView) {
+                key.stencilTexture = stencilView->viewTexture;
+            }
+            fbo = device_->GetOrCreateMRTFramebuffer(key);
+        }
         gl->BindFramebuffer(GL_FRAMEBUFFER, fbo);
         currentFBO_ = fbo;
 
-        // Attach color targets
-        std::vector<GLenum> drawBuffers;
-        for (size_t i = 0; i < desc.colorAttachments.size(); ++i) {
+        // ---- Handle LoadOp::Clear for color attachments ----
+        for (size_t i = 0; i < desc.colorAttachments.size() && i < colorViews.size(); ++i) {
             auto& att = desc.colorAttachments[i];
-            if (!att.view.IsValid()) {
-                continue;
-            }
-
-            auto* viewData = device_->GetTextureViewPool().Lookup(att.view);
-            if (!viewData) {
-                continue;
-            }
-
-            GLenum attachPoint = static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + i);
-            gl->FramebufferTexture(GL_FRAMEBUFFER, attachPoint, viewData->viewTexture, 0);
-            drawBuffers.push_back(attachPoint);
-
-            if (att.loadOp == AttachmentLoadOp::Clear) {
+            if (att.loadOp == AttachmentLoadOp::Clear && att.view.IsValid()) {
                 float clearColor[]
                     = {att.clearValue.color.r, att.clearValue.color.g, att.clearValue.color.b, att.clearValue.color.a};
                 gl->ClearBufferfv(GL_COLOR, static_cast<GLint>(i), clearColor);
             }
         }
 
-        if (!drawBuffers.empty()) {
-            gl->DrawBuffers(static_cast<GLsizei>(drawBuffers.size()), drawBuffers.data());
+        // ---- Handle LoadOp::Clear for depth ----
+        if (desc.depthAttachment && depthView && desc.depthAttachment->loadOp == AttachmentLoadOp::Clear) {
+            float d = desc.depthAttachment->clearValue.depthStencil.depth;
+            gl->ClearBufferfv(GL_DEPTH, 0, &d);
         }
 
-        // Attach depth
-        if (desc.depthAttachment) {
-            auto* viewData = device_->GetTextureViewPool().Lookup(desc.depthAttachment->view);
-            if (viewData) {
-                gl->FramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, viewData->viewTexture, 0);
-
-                if (desc.depthAttachment->loadOp == AttachmentLoadOp::Clear) {
-                    float d = desc.depthAttachment->clearValue.depthStencil.depth;
-                    gl->ClearBufferfv(GL_DEPTH, 0, &d);
-                }
-            }
-        }
-
-        // Attach stencil
-        if (desc.stencilAttachment) {
-            auto* viewData = device_->GetTextureViewPool().Lookup(desc.stencilAttachment->view);
-            if (viewData) {
-                gl->FramebufferTexture(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, viewData->viewTexture, 0);
-
-                if (desc.stencilAttachment->loadOp == AttachmentLoadOp::Clear) {
-                    GLint s = desc.stencilAttachment->clearValue.depthStencil.stencil;
-                    gl->ClearBufferiv(GL_STENCIL, 0, &s);
-                }
-            }
+        // ---- Handle LoadOp::Clear for stencil ----
+        if (desc.stencilAttachment && stencilView && desc.stencilAttachment->loadOp == AttachmentLoadOp::Clear) {
+            GLint s = desc.stencilAttachment->clearValue.depthStencil.stencil;
+            gl->ClearBufferiv(GL_STENCIL, 0, &s);
         }
     }
 
     void OpenGLCommandBuffer::CmdEndRenderingImpl() {
         auto* gl = device_->GetGLContext();
-        if (currentFBO_ != 0) {
-            gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
-            gl->DeleteFramebuffers(1, &currentFBO_);
-            currentFBO_ = 0;
-        }
+        // FBOs are owned by views or cache — just unbind, never delete here
+        gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
+        currentFBO_ = 0;
     }
 
     // =========================================================================

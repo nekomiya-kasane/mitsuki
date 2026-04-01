@@ -23,8 +23,10 @@
 #pragma clang diagnostic pop
 #pragma warning(pop)
 
+#include <array>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace miki::platform {
@@ -101,8 +103,42 @@ namespace miki::rhi {
         GLuint viewTexture = 0;
         TextureHandle parentTexture;
         GLenum target = GL_TEXTURE_2D;
+        GLuint fbo = 0;  // Pre-created single-attachment FBO (color or depth/stencil)
+        // TODO (Nekomiya) this seems bad. review this in the future
         bool ownsView = false;              // true if created via glTextureView, false if alias
         bool isDefaultFramebuffer = false;  // true for swapchain default FBO (render via glBindFramebuffer(0))
+        bool isDepthStencil = false;        // true if this view is a depth/stencil attachment
+    };
+
+    // FBO cache key for MRT (multi-color-attachment) rendering passes.
+    // Single-color + optional depth uses the fast path (view-owned FBO).
+    struct GLFBOCacheKey {
+        static constexpr uint32_t kMaxCachedAttachments = 8;
+        std::array<GLuint, kMaxCachedAttachments> colorTextures{};
+        GLuint depthTexture = 0;
+        GLuint stencilTexture = 0;
+        uint32_t colorCount = 0;
+
+        bool operator==(const GLFBOCacheKey&) const = default;
+    };
+
+    struct GLFBOCacheKeyHash {
+        static constexpr size_t kHashCombineSeed = 0x9e3779b9;  // Golden ratio fractional bits
+        static constexpr size_t kHashShiftLeft = 6;
+        static constexpr size_t kHashShiftRight = 2;
+
+        auto operator()(const GLFBOCacheKey& k) const noexcept -> size_t {
+            size_t h = std::hash<uint32_t>{}(k.colorCount);
+            for (uint32_t i = 0; i < k.colorCount; ++i) {
+                h ^= std::hash<GLuint>{}(k.colorTextures[i]) + kHashCombineSeed + (h << kHashShiftLeft)
+                     + (h >> kHashShiftRight);
+            }
+            h ^= std::hash<GLuint>{}(k.depthTexture) + kHashCombineSeed + (h << kHashShiftLeft)
+                 + (h >> kHashShiftRight);
+            h ^= std::hash<GLuint>{}(k.stencilTexture) + kHashCombineSeed + (h << kHashShiftLeft)
+                 + (h >> kHashShiftRight);
+            return h;
+        }
     };
 
     struct GLSamplerData {
@@ -468,10 +504,23 @@ namespace miki::rhi {
         HandlePool<GLCommandBufferData, CommandBufferTag, kMaxCommandBuffers> commandBuffers_;
         HandlePool<GLCommandPoolData, CommandPoolTag, kMaxCommandPools> commandPools_;
 
+        // -- FBO cache for MRT rendering passes --
+        std::unordered_map<GLFBOCacheKey, GLuint, GLFBOCacheKeyHash> fboCache_;
+
+        // -- Utility FBO for transfer operations (CmdCopy, CmdClear, CmdBlit) --
+        GLuint utilityFBO_ = 0;
+
         // -- Init helpers --
         void PopulateCapabilities();
         void PopulateFormatSupport();
         void ProbeVendorMemoryExtensions();
+
+        // -- FBO management --
+        void DestroyAllCachedFBOs();
+
+       public:
+        auto GetOrCreateMRTFramebuffer(const GLFBOCacheKey& key) -> GLuint;
+        auto GetUtilityFBO() noexcept -> GLuint { return utilityFBO_; }
     };
 
 }  // namespace miki::rhi
