@@ -306,17 +306,8 @@ namespace miki::rhi {
         capabilities_.deviceLocalMemoryBytes = 0;
         capabilities_.hostVisibleMemoryBytes = 0;
 
-        // Check NV/ATI memory info extensions
-        if (gl_->GetString(GL_EXTENSIONS)) {
-            // GL_NVX_gpu_memory_info
-            constexpr GLenum GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX = 0x9048;
-            GLint totalMemKB = 0;
-            gl_->GetIntegerv(GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX, &totalMemKB);
-            if (gl_->GetError() == GL_NO_ERROR && totalMemKB > 0) {
-                capabilities_.deviceLocalMemoryBytes = static_cast<uint64_t>(totalMemKB) * 1024;
-                capabilities_.hasMemoryBudgetQuery = true;
-            }
-        }
+        // Check NV/ATI memory info extensions (probe may generate expected GL_INVALID_ENUM)
+        ProbeVendorMemoryExtensions();
 
         // Probe non-glad2 extensions
         auto loader = windowBackend_ ? reinterpret_cast<GLADloadfunc>(windowBackend_->GetGLProcLoader()) : nullptr;
@@ -460,6 +451,36 @@ namespace miki::rhi {
         }
         // Clear any accumulated GL errors from probing
         while (gl_->GetError() != GL_NO_ERROR) {}
+    }
+
+    void OpenGLDevice::ProbeVendorMemoryExtensions() {
+        // RAII guard to suppress expected GL_INVALID_ENUM on non-NVIDIA/AMD GPUs
+        struct DebugOutputGuard {
+            GladGLContext* gl;
+            bool wasEnabled;
+            explicit DebugOutputGuard(GladGLContext* ctx) : gl(ctx), wasEnabled(ctx->KHR_debug) {
+                if (wasEnabled) {
+                    gl->Disable(GL_DEBUG_OUTPUT);
+                }
+            }
+            ~DebugOutputGuard() {
+                if (wasEnabled) {
+                    gl->Enable(GL_DEBUG_OUTPUT);
+                }
+            }
+        } guard(gl_);
+
+        // GL_NVX_gpu_memory_info (NVIDIA-only)
+        constexpr GLenum GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX = 0x9048;
+        GLint totalMemKB = 0;
+        gl_->GetIntegerv(GL_GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX, &totalMemKB);
+        if (gl_->GetError() == GL_NO_ERROR && totalMemKB > 0) {
+            capabilities_.deviceLocalMemoryBytes = static_cast<uint64_t>(totalMemKB) * 1024;
+            capabilities_.hasMemoryBudgetQuery = true;
+            return;
+        }
+
+        // GL_ATI_meminfo (AMD-only) — could add here if needed
     }
 
     // =========================================================================
