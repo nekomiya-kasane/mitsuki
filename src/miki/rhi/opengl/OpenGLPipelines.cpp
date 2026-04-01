@@ -124,28 +124,28 @@ namespace miki::rhi {
 
         auto ToGLVertexFormat(Format fmt) -> GLVertexFormatInfo {
             switch (fmt) {
-                case Format::R32_FLOAT: return {GL_FLOAT, 1, false};
-                case Format::RG32_FLOAT: return {GL_FLOAT, 2, false};
-                case Format::RGB32_FLOAT: return {GL_FLOAT, 3, false};
-                case Format::RGBA32_FLOAT: return {GL_FLOAT, 4, false};
-                case Format::R32_UINT: return {GL_UNSIGNED_INT, 1, false};
-                case Format::RG32_UINT: return {GL_UNSIGNED_INT, 2, false};
-                case Format::RGB32_UINT: return {GL_UNSIGNED_INT, 3, false};
-                case Format::RGBA32_UINT: return {GL_UNSIGNED_INT, 4, false};
-                case Format::R32_SINT: return {GL_INT, 1, false};
-                case Format::RG32_SINT: return {GL_INT, 2, false};
-                case Format::RGB32_SINT: return {GL_INT, 3, false};
-                case Format::RGBA32_SINT: return {GL_INT, 4, false};
-                case Format::R16_FLOAT: return {GL_HALF_FLOAT, 1, false};
-                case Format::RG16_FLOAT: return {GL_HALF_FLOAT, 2, false};
-                case Format::RGBA16_FLOAT: return {GL_HALF_FLOAT, 4, false};
-                case Format::R8_UNORM: return {GL_UNSIGNED_BYTE, 1, true};
-                case Format::RG8_UNORM: return {GL_UNSIGNED_BYTE, 2, true};
-                case Format::RGBA8_UNORM: return {GL_UNSIGNED_BYTE, 4, true};
-                case Format::R16_UNORM: return {GL_UNSIGNED_SHORT, 1, true};
-                case Format::RG16_UNORM: return {GL_UNSIGNED_SHORT, 2, true};
-                case Format::RGBA16_UNORM: return {GL_UNSIGNED_SHORT, 4, true};
-                default: return {GL_FLOAT, 4, false};
+                case Format::R32_FLOAT: return {.type = GL_FLOAT, .components = 1, .normalized = false};
+                case Format::RG32_FLOAT: return {.type = GL_FLOAT, .components = 2, .normalized = false};
+                case Format::RGB32_FLOAT: return {.type = GL_FLOAT, .components = 3, .normalized = false};
+                case Format::RGBA32_FLOAT: return {.type = GL_FLOAT, .components = 4, .normalized = false};
+                case Format::R32_UINT: return {.type = GL_UNSIGNED_INT, .components = 1, .normalized = false};
+                case Format::RG32_UINT: return {.type = GL_UNSIGNED_INT, .components = 2, .normalized = false};
+                case Format::RGB32_UINT: return {.type = GL_UNSIGNED_INT, .components = 3, .normalized = false};
+                case Format::RGBA32_UINT: return {.type = GL_UNSIGNED_INT, .components = 4, .normalized = false};
+                case Format::R32_SINT: return {.type = GL_INT, .components = 1, .normalized = false};
+                case Format::RG32_SINT: return {.type = GL_INT, .components = 2, .normalized = false};
+                case Format::RGB32_SINT: return {.type = GL_INT, .components = 3, .normalized = false};
+                case Format::RGBA32_SINT: return {.type = GL_INT, .components = 4, .normalized = false};
+                case Format::R16_FLOAT: return {.type = GL_HALF_FLOAT, .components = 1, .normalized = false};
+                case Format::RG16_FLOAT: return {.type = GL_HALF_FLOAT, .components = 2, .normalized = false};
+                case Format::RGBA16_FLOAT: return {.type = GL_HALF_FLOAT, .components = 4, .normalized = false};
+                case Format::R8_UNORM: return {.type = GL_UNSIGNED_BYTE, .components = 1, .normalized = true};
+                case Format::RG8_UNORM: return {.type = GL_UNSIGNED_BYTE, .components = 2, .normalized = true};
+                case Format::RGBA8_UNORM: return {.type = GL_UNSIGNED_BYTE, .components = 4, .normalized = true};
+                case Format::R16_UNORM: return {.type = GL_UNSIGNED_SHORT, .components = 1, .normalized = true};
+                case Format::RG16_UNORM: return {.type = GL_UNSIGNED_SHORT, .components = 2, .normalized = true};
+                case Format::RGBA16_UNORM: return {.type = GL_UNSIGNED_SHORT, .components = 4, .normalized = true};
+                default: return {.type = GL_FLOAT, .components = 4, .normalized = false};
             }
         }
 
@@ -269,12 +269,20 @@ namespace miki::rhi {
         data->colorAttachmentCount = static_cast<uint32_t>(desc.colorBlends.size());
 
         // Stencil state
-        data->stencilFront = {ToGLStencilOp(desc.stencilFront.failOp), ToGLStencilOp(desc.stencilFront.depthFailOp),
-                              ToGLStencilOp(desc.stencilFront.passOp), ToGLCompareFunc(desc.stencilFront.compareOp),
-                              desc.stencilFront.compareMask,           desc.stencilFront.writeMask};
-        data->stencilBack = {ToGLStencilOp(desc.stencilBack.failOp), ToGLStencilOp(desc.stencilBack.depthFailOp),
-                             ToGLStencilOp(desc.stencilBack.passOp), ToGLCompareFunc(desc.stencilBack.compareOp),
-                             desc.stencilBack.compareMask,           desc.stencilBack.writeMask};
+        data->stencilFront
+            = {.failOp = ToGLStencilOp(desc.stencilFront.failOp),
+               .depthFailOp = ToGLStencilOp(desc.stencilFront.depthFailOp),
+               .passOp = ToGLStencilOp(desc.stencilFront.passOp),
+               .compareOp = ToGLCompareFunc(desc.stencilFront.compareOp),
+               .compareMask = desc.stencilFront.compareMask,
+               .writeMask = desc.stencilFront.writeMask};
+        data->stencilBack
+            = {.failOp = ToGLStencilOp(desc.stencilBack.failOp),
+               .depthFailOp = ToGLStencilOp(desc.stencilBack.depthFailOp),
+               .passOp = ToGLStencilOp(desc.stencilBack.passOp),
+               .compareOp = ToGLCompareFunc(desc.stencilBack.compareOp),
+               .compareMask = desc.stencilBack.compareMask,
+               .writeMask = desc.stencilBack.writeMask};
 
         // Blend state
         for (size_t i = 0; i < desc.colorBlends.size() && i < 8; ++i) {
