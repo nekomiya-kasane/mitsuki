@@ -170,11 +170,22 @@ namespace miki::rhi {
             return std::unexpected(RhiError::DeviceLost);
         }
 
+        // Try ID3D12Device10 first (Agility SDK / Win11), fallback to ID3D12Device5 (Win10 1809+)
         HRESULT hr = baseDevice.As(&device_);
         if (FAILED(hr)) {
-            // Fall back: ID3D12Device10 not available, try lower interface
-            // This shouldn't happen with Agility SDK but handle gracefully
-            return std::unexpected(RhiError::DeviceLost);
+            // ID3D12Device10 not available, try ID3D12Device5 (still supports most features)
+            ComPtr<ID3D12Device5> device5;
+            hr = baseDevice.As(&device5);
+            if (FAILED(hr)) {
+                return std::unexpected(RhiError::DeviceLost);
+            }
+            // Store as ID3D12Device10 pointer (will be null for unsupported methods)
+            // We check hasEnhancedBarriers_ before using Device10-specific features
+            device_ = reinterpret_cast<ID3D12Device10*>(device5.Detach());
+            MIKI_LOG_WARN(
+                ::miki::debug::LogCategory::Rhi,
+                "[D3D12] ID3D12Device10 not available, using ID3D12Device5 fallback (Enhanced Barriers disabled)"
+            );
         }
 
         // Check for Enhanced Barriers support

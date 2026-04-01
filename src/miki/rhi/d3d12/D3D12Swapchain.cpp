@@ -35,6 +35,18 @@ namespace miki::rhi {
             }
         }
 
+        auto ToDxgiRtvFormat(Format fmt) -> DXGI_FORMAT {
+            switch (fmt) {
+                case Format::BGRA8_SRGB: return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+                case Format::BGRA8_UNORM: return DXGI_FORMAT_B8G8R8A8_UNORM;
+                case Format::RGBA8_SRGB: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+                case Format::RGBA8_UNORM: return DXGI_FORMAT_R8G8B8A8_UNORM;
+                case Format::RGBA16_FLOAT: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+                case Format::RGB10A2_UNORM: return DXGI_FORMAT_R10G10B10A2_UNORM;
+                default: return DXGI_FORMAT_B8G8R8A8_UNORM;
+            }
+        }
+
         auto ToDxgiColorSpace(SurfaceColorSpace cs) -> DXGI_COLOR_SPACE_TYPE {
             switch (cs) {
                 case SurfaceColorSpace::SRGB: return DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
@@ -128,13 +140,18 @@ namespace miki::rhi {
             texData->ownsResource = false;
             textureHandles.push_back(texHandle);
 
-            // Create RTV
+            // Create RTV with correct format (SRGB view for SRGB formats)
             uint32_t rtvOffset = rtvHeap_.Allocate(1);
             if (rtvOffset == UINT32_MAX) {
                 return std::unexpected(RhiError::TooManyObjects);
             }
             D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rtvHeap_.GetCpuHandle(rtvOffset);
-            device_->CreateRenderTargetView(backBuffers[i].Get(), nullptr, rtvHandle);
+            D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
+            rtvDesc.Format = ToDxgiRtvFormat(desc.preferredFormat);
+            rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+            rtvDesc.Texture2D.MipSlice = 0;
+            rtvDesc.Texture2D.PlaneSlice = 0;
+            device_->CreateRenderTargetView(backBuffers[i].Get(), &rtvDesc, rtvHandle);
             rtvHandles.push_back(rtvHandle);
         }
 
@@ -394,8 +411,12 @@ namespace miki::rhi {
         -> RenderSurfaceCapabilities {
         RenderSurfaceCapabilities caps;
 
-        // DXGI flip model supports a limited set of formats
-        caps.supportedFormats = {Format::BGRA8_UNORM, Format::RGBA8_UNORM, Format::RGBA16_FLOAT, Format::RGB10A2_UNORM};
+        // DXGI flip model supports a limited set of formats.
+        // SRGB formats are supported via UNORM swapchain + SRGB RTV view (handled in CreateSwapchain).
+        caps.supportedFormats = {
+            Format::BGRA8_UNORM, Format::BGRA8_SRGB,   Format::RGBA8_UNORM,
+            Format::RGBA8_SRGB,  Format::RGBA16_FLOAT, Format::RGB10A2_UNORM,
+        };
         caps.supportedPresentModes = {PresentMode::Fifo, PresentMode::Immediate};
 
         // Check tearing support (VRR / Mailbox-like)

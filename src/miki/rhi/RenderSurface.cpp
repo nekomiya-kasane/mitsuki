@@ -66,6 +66,43 @@ namespace miki::rhi {
         return desc;
     }
 
+    /// Apply capability-based fallbacks to SwapchainDesc.
+    /// RenderSurfaceConfig is "intent", not exact requirement — gracefully degrade to supported values.
+    static void ApplyCapabilityFallbacks(SwapchainDesc& ioDesc, const RenderSurfaceCapabilities& iCaps) {
+        // SRGB -> UNORM fallback table (D3D12 flip model, some Vulkan drivers)
+        static constexpr std::array<std::pair<Format, Format>, 2> kSrgbFallbacks = {{
+            {Format::BGRA8_SRGB, Format::BGRA8_UNORM},
+            {Format::RGBA8_SRGB, Format::RGBA8_UNORM},
+        }};
+
+        auto contains = [](const auto& vec, auto val) { return std::ranges::find(vec, val) != vec.end(); };
+
+        // Format fallback
+        if (!iCaps.supportedFormats.empty() && !contains(iCaps.supportedFormats, ioDesc.preferredFormat)) {
+            // Try SRGB -> UNORM fallback first
+            for (auto [srgb, unorm] : kSrgbFallbacks) {
+                if (ioDesc.preferredFormat == srgb && contains(iCaps.supportedFormats, unorm)) {
+                    ioDesc.preferredFormat = unorm;
+                    break;
+                }
+            }
+            // If still not supported, use first available
+            if (!contains(iCaps.supportedFormats, ioDesc.preferredFormat)) {
+                ioDesc.preferredFormat = iCaps.supportedFormats.front();
+            }
+        }
+
+        // Present mode fallback
+        if (!iCaps.supportedPresentModes.empty() && !contains(iCaps.supportedPresentModes, ioDesc.presentMode)) {
+            ioDesc.presentMode = iCaps.supportedPresentModes.front();
+        }
+
+        // Color space fallback
+        if (!iCaps.supportedColorSpaces.empty() && !contains(iCaps.supportedColorSpaces, ioDesc.colorSpace)) {
+            ioDesc.colorSpace = iCaps.supportedColorSpaces.front();
+        }
+    }
+
     // =========================================================================
     // Lifecycle
     // =========================================================================
@@ -99,27 +136,14 @@ namespace miki::rhi {
             return std::unexpected(core::ErrorCode::InvalidState);
         }
 
-        // Validate and clamp against real backend surface capabilities
+        // Clamp extent and resolve config to precise swapchain parameters
         auto caps = GetCapabilities();
         iWidth = std::clamp(iWidth, caps.minExtent.width, caps.maxExtent.width);
         iHeight = std::clamp(iHeight, caps.minExtent.height, caps.maxExtent.height);
         auto desc = ResolveSwapchainDesc(iConfig, impl_->nativeWindow, iWidth, iHeight);
 
-        if (!caps.supportedFormats.empty()) {
-            if (std::ranges::find(caps.supportedFormats, desc.preferredFormat) == caps.supportedFormats.end()) {
-                return std::unexpected(core::ErrorCode::InvalidArgument);
-            }
-        }
-        if (!caps.supportedPresentModes.empty()) {
-            if (std::ranges::find(caps.supportedPresentModes, desc.presentMode) == caps.supportedPresentModes.end()) {
-                return std::unexpected(core::ErrorCode::InvalidArgument);
-            }
-        }
-        if (!caps.supportedColorSpaces.empty()) {
-            if (std::ranges::find(caps.supportedColorSpaces, desc.colorSpace) == caps.supportedColorSpaces.end()) {
-                return std::unexpected(core::ErrorCode::InvalidArgument);
-            }
-        }
+        // Apply capability-based fallbacks (format, present mode, color space)
+        ApplyCapabilityFallbacks(desc, caps);
 
         // Destroy old swapchain if exists
         if (impl_->swapchain.IsValid()) {
