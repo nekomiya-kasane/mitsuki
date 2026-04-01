@@ -206,8 +206,10 @@ struct TriangleRenderer {
             cmd.Begin();
 
             // Transition: Undefined -> ColorAttachment
+            // srcStage must match submit waitDstStageMask (ColorAttachmentOutput) so the layout transition waits for
+            // the acquire semaphore
             TextureBarrierDesc toRender{};
-            toRender.srcStage = PipelineStage::TopOfPipe;
+            toRender.srcStage = PipelineStage::ColorAttachmentOutput;
             toRender.dstStage = PipelineStage::ColorAttachmentOutput;
             toRender.srcAccess = AccessFlags::None;
             toRender.dstAccess = AccessFlags::ColorAttachmentWrite;

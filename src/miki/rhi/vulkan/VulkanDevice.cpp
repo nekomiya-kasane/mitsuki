@@ -197,8 +197,18 @@ namespace miki::rhi {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
 
+        // Enable synchronization validation for debugging semaphore/fence issues
+        VkValidationFeatureEnableEXT enabledFeatures[] = {
+            VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+        };
+        VkValidationFeaturesEXT validationFeatures{};
+        validationFeatures.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+        validationFeatures.enabledValidationFeatureCount = desc.enableValidation ? 1 : 0;
+        validationFeatures.pEnabledValidationFeatures = enabledFeatures;
+
         VkInstanceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        createInfo.pNext = desc.enableValidation ? &validationFeatures : nullptr;
         createInfo.pApplicationInfo = &appInfo;
         createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         createInfo.ppEnabledExtensionNames = extensions.data();
@@ -426,7 +436,6 @@ namespace miki::rhi {
         VkPhysicalDeviceVulkan13Features features13{};
         VkPhysicalDeviceDynamicRenderingFeaturesKHR dynRenderFeature{};
         VkPhysicalDeviceSynchronization2FeaturesKHR sync2Feature{};
-        VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeature{};
         VkPhysicalDeviceShaderDrawParametersFeatures drawParamsFeature{};
         VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeature{};
 
@@ -454,9 +463,9 @@ namespace miki::rhi {
             features13.dynamicRendering = VK_TRUE;
             features13.maintenance4 = VK_TRUE;
 
-            void** pNextTail = &features13.pNext;
+            // Optional Tier1 extensions — append to end of chain (features11.pNext)
+            void** pNextTail = &features11.pNext;
 
-            // Optional Tier1 extensions (mesh shader, ray tracing, etc.)
             if (hasExt(VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
                 meshShaderFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
@@ -466,6 +475,7 @@ namespace miki::rhi {
                 pNextTail = &meshShaderFeature.pNext;
             }
 
+            // Chain: features2 -> features13 -> features12 -> features11 -> [optional extensions]
             features2.pNext = &features13;
             features2.features.shaderFloat64 = supported2.features.shaderFloat64;
             features2.features.shaderInt64 = supported2.features.shaderInt64;
@@ -473,13 +483,14 @@ namespace miki::rhi {
         } else {
             // -----------------------------------------------------------------
             // Tier2: VulkanCompat — Vulkan 1.1 core + KHR extensions
+            // Sync model: VkFence (CPU↔GPU) + Binary semaphore (GPU↔GPU)
             // -----------------------------------------------------------------
             if (!hasExt(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
                 MIKI_LOG_ERROR(Rhi, "[Vulkan] VulkanCompat requires VK_KHR_dynamic_rendering; use OpenGL (Tier4)");
                 return std::unexpected(RhiError::FeatureNotSupported);
             }
 
-            // Mandatory extension
+            // Mandatory: dynamic rendering
             deviceExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
             dynRenderFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
             dynRenderFeature.dynamicRendering = VK_TRUE;
@@ -501,13 +512,6 @@ namespace miki::rhi {
                 sync2Feature.synchronization2 = VK_TRUE;
                 *pNextTail = &sync2Feature;
                 pNextTail = &sync2Feature.pNext;
-            }
-            if (hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
-                deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
-                timelineFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
-                timelineFeature.timelineSemaphore = VK_TRUE;
-                *pNextTail = &timelineFeature;
-                pNextTail = &timelineFeature.pNext;
             }
             if (hasExt(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
@@ -1063,9 +1067,12 @@ namespace miki::rhi {
             return r4;
         }
 
-        auto r5 = CreateTimelineSemaphores();
-        if (!r5) {
-            return r5;
+        // Tier1 uses timeline semaphores; Tier2 uses VkFence + binary semaphores
+        if (tier_ == BackendType::Vulkan14) {
+            auto r5 = CreateTimelineSemaphores();
+            if (!r5) {
+                return r5;
+            }
         }
 
         PopulateCapabilities();

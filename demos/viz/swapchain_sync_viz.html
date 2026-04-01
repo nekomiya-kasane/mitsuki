@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>miki — Swapchain Image Ownership Cycle</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text-dim: #8b949e; --accent: #58a6ff;
+    --cpu-color: #f0883e; --gpu-color: #3fb950; --driver-color: #a371f7;
+    --wsi-color: #f778ba; --display-color: #79c0ff;
+    --sem-avail: #ffa657; --sem-done: #56d364;
+    --fence-color: #ff7b72; --timeline-color: #d2a8ff;
+    --phase-active: rgba(88,166,255,0.15);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; }
+
+  /* Header */
+  header { padding: 24px 32px 16px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 22px; font-weight: 600; }
+  header p { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
+
+  /* Controls */
+  .controls { display: flex; gap: 12px; padding: 16px 32px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--border); }
+  .tier-btn {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); cursor: pointer;
+    font-size: 13px; font-weight: 500; transition: all 0.2s;
+  }
+  .tier-btn:hover { border-color: var(--accent); }
+  .tier-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+  .speed-control { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .speed-control label { font-size: 13px; color: var(--text-dim); }
+  .speed-control input[type=range] { width: 100px; accent-color: var(--accent); }
+  .play-btn {
+    padding: 8px 20px; border-radius: 6px; border: 1px solid var(--accent);
+    background: transparent; color: var(--accent); cursor: pointer;
+    font-size: 13px; font-weight: 600; transition: all 0.2s;
+  }
+  .play-btn:hover { background: var(--accent); color: #000; }
+  .step-btn {
+    padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); cursor: pointer;
+    font-size: 13px; transition: all 0.2s;
+  }
+  .step-btn:hover { border-color: var(--accent); }
+
+  /* Main layout */
+  .main { display: flex; height: calc(100vh - 130px); }
+  .canvas-area { flex: 1; position: relative; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* Info panel */
+  .info-panel {
+    width: 380px; min-width: 320px; border-left: 1px solid var(--border);
+    background: var(--surface); overflow-y: auto; padding: 20px;
+  }
+  .info-panel h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--accent); }
+  .info-panel h3 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; color: var(--text); }
+  .phase-info { font-size: 13px; line-height: 1.7; color: var(--text-dim); }
+  .phase-info .highlight { color: var(--text); font-weight: 500; }
+  .phase-info .tag {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    font-size: 11px; font-weight: 600; margin: 0 2px;
+  }
+  .tag-cpu { background: rgba(240,136,62,0.2); color: var(--cpu-color); }
+  .tag-gpu { background: rgba(63,185,80,0.2); color: var(--gpu-color); }
+  .tag-driver { background: rgba(163,113,247,0.2); color: var(--driver-color); }
+  .tag-wsi { background: rgba(247,120,186,0.2); color: var(--wsi-color); }
+  .tag-async { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .tag-sync { background: rgba(255,123,114,0.15); color: var(--fence-color); }
+
+  /* Legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* Tier summary table */
+  .tier-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+  .tier-table th, .tier-table td { padding: 6px 8px; border: 1px solid var(--border); text-align: left; }
+  .tier-table th { background: rgba(88,166,255,0.08); color: var(--accent); font-weight: 600; }
+  .tier-table td { color: var(--text-dim); }
+  .tier-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+  /* Phase progress */
+  .phase-steps { display: flex; gap: 4px; margin: 12px 0; }
+  .phase-dot {
+    width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; color: var(--text-dim); transition: all 0.3s;
+  }
+  .phase-dot.active { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,0.15); }
+  .phase-dot.done { border-color: var(--gpu-color); color: var(--gpu-color); background: rgba(63,185,80,0.1); }
+
+  /* Code block */
+  .code-block {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 11.5px; line-height: 1.6; color: var(--text-dim);
+    overflow-x: auto; margin: 8px 0;
+  }
+  .code-block .kw { color: var(--fence-color); }
+  .code-block .fn { color: var(--driver-color); }
+  .code-block .cm { color: #484f58; }
+  .code-block .str { color: var(--sem-avail); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>miki Swapchain Image Ownership Cycle</h1>
+  <p>Interactive visualization of frame synchronization across Tier 1–4 backends</p>
+</header>
+
+<div class="controls">
+  <button class="tier-btn active" data-tier="0">Tier 1 — Vulkan 1.4</button>
+  <button class="tier-btn" data-tier="1">Tier 2 — Vulkan Compat</button>
+  <button class="tier-btn" data-tier="2">Tier 3 — WebGPU</button>
+  <button class="tier-btn" data-tier="3">Tier 4 — OpenGL</button>
+  <div class="speed-control">
+    <label>Speed</label>
+    <input type="range" id="speedSlider" min="0.2" max="3" step="0.1" value="1">
+    <span id="speedLabel">1.0x</span>
+  </div>
+  <button class="step-btn" id="stepBtn">Step ▶</button>
+  <button class="play-btn" id="playBtn">▶ Play</button>
+  <button class="step-btn" id="resetBtn">↺ Reset</button>
+</div>
+
+<div class="main">
+  <div class="canvas-area">
+    <canvas id="canvas"></canvas>
+  </div>
+  <div class="info-panel" id="infoPanel">
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--cpu-color)"></div>CPU</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--gpu-color)"></div>GPU</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--driver-color)"></div>Driver</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--wsi-color)"></div>WSI/Display</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--sem-avail)"></div>imageAvail</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--sem-done)"></div>renderDone</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--fence-color)"></div>Fence</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--timeline-color)"></div>Timeline</div>
+    </div>
+    <div id="phaseContent"></div>
+  </div>
+</div>
+
+<script>
+// =========================================================================
+// Tier definitions
+// =========================================================================
+const FRAMES_TO_SHOW = 3; // Show 3 frames (Frame 0, 1, 2)
+const FRAMES_IN_FLIGHT = 2;
+
+const TIERS = [
+  {
+    name: 'Tier 1 — Vulkan 1.4 (Timeline Semaphore)',
+    shortName: 'T1',
+    syncModel: 'Timeline Semaphore + Binary Semaphore (swapchain)',
+    cpuGpuSync: 'Timeline semaphore wait (no VkFence)',
+    gpuGpuSync: 'Timeline semaphore signal/wait',
+    swapSync: 'Binary semaphore (imageAvail / renderDone)',
+    framesInFlight: 2,
+    async: true,
+    hasTimeline: true,
+    hasFence: false,
+    phases: [
+      {
+        id: 0, title: 'CPU: Wait Timeline',
+        exec: 'CPU', async: false,
+        desc: 'CPU waits on timeline semaphore to ensure slot N-2 GPU work is done before reusing its resources.',
+        code: 'vkWaitSemaphores(dev, &waitInfo, UINT64_MAX);\n// waitInfo.semaphore = graphicsTimeline\n// waitInfo.value = slot.timelineValue',
+        detail: 'Timeline semaphore replaces VkFence for CPU↔GPU sync. No kernel transition needed — pure userspace poll on mapped memory.',
+        owner: 'CPU', imageState: 'N/A (waiting for slot reuse)',
+        cpuAction: 'Block until timeline >= slot value', gpuAction: 'None',
+      },
+      {
+        id: 1, title: 'Driver: Acquire Image',
+        exec: 'Driver', async: false,
+        desc: 'Driver/WSI checks available images. Returns image index and signals imageAvail binary semaphore.',
+        code: 'vkAcquireNextImageKHR(\n  device, swapchain, UINT64_MAX,\n  slot.imageAvail,  // signal this\n  VK_NULL_HANDLE,   // no fence (T1)\n  &imageIndex\n);',
+        detail: 'imageAvail is per-slot (not per-image) because the image index is unknown before this call returns. Driver holds ownership until signal.',
+        owner: 'Driver → CPU', imageState: 'Available → Acquired',
+        cpuAction: 'Receives image index', gpuAction: 'None (not involved)',
+      },
+      {
+        id: 2, title: 'CPU: Record Commands',
+        exec: 'CPU', async: false,
+        desc: 'CPU records all rendering commands into the command buffer. Image data is NOT touched yet.',
+        code: 'cmd.Begin();\ncmd.CmdTextureBarrier(img, Undefined→ColorAttachment);\ncmd.CmdBeginRendering(...);\ncmd.CmdDraw(...);\ncmd.CmdEndRendering();\ncmd.CmdTextureBarrier(img, ColorAttachment→Present);\ncmd.End();',
+        detail: 'Command recording is pure CPU work — no GPU involvement. The barrier srcStage=ColorAttachmentOutput ensures the layout transition waits for imageAvail.',
+        owner: 'CPU', imageState: 'Acquired (not yet rendered)',
+        cpuAction: 'Record commands to system memory', gpuAction: 'None',
+      },
+      {
+        id: 3, title: 'GPU: Execute Rendering',
+        exec: 'GPU', async: true,
+        desc: 'vkQueueSubmit2 is ASYNC — returns immediately. GPU waits imageAvail, executes commands, signals renderDone + timeline.',
+        code: 'vkQueueSubmit2(queue, &submitInfo, VK_NULL_HANDLE);\n// wait:   imageAvail (binary, stage=ColorAttachmentOutput)\n// signal: renderDone[imgIdx] (binary)\n// signal: graphicsTimeline (value=N+1)',
+        detail: 'GPU waits for imageAvail before touching the image. After rendering, signals renderDone (for present) and increments timeline (for CPU reuse of slot N).',
+        owner: 'GPU', imageState: 'Rendering in progress',
+        cpuAction: 'Submit returns immediately — CPU free to work on next frame', gpuAction: 'Wait imageAvail → Execute cmds → Signal renderDone + timeline',
+      },
+      {
+        id: 4, title: 'WSI: Present to Display',
+        exec: 'WSI', async: true,
+        desc: 'vkQueuePresentKHR is ASYNC — returns immediately. WSI waits renderDone, then queues image for display.',
+        code: 'vkQueuePresentKHR(queue, &presentInfo);\n// presentInfo.waitSemaphores = [renderDone[imgIdx]]\n// presentInfo.swapchains = [swapchain]\n// presentInfo.imageIndices = [imgIdx]',
+        detail: 'renderDone is per-image (not per-slot) because present holds the semaphore asynchronously until the image is re-acquired. Per-slot would cause reuse conflicts.',
+        owner: 'WSI/Display', imageState: 'Presenting → Displayed',
+        cpuAction: 'Present returns immediately', gpuAction: 'WSI waits renderDone internally',
+      },
+      {
+        id: 5, title: 'WSI: Release (implicit)',
+        exec: 'WSI', async: true,
+        desc: 'After scanout completes, WSI internally releases the image back to the available pool. No application API call.',
+        code: '// No explicit API call\n// WSI/compositor internally:\n//   1. Finish scanout / flip\n//   2. Mark image as "available"\n//   3. Next AcquireNextImage can return it',
+        detail: 'This is fully implicit — the application never sees this step. The image becomes available for the next vkAcquireNextImageKHR call.',
+        owner: 'WSI → Driver', imageState: 'Displayed → Available',
+        cpuAction: 'None', gpuAction: 'None',
+      },
+    ]
+  },
+  {
+    name: 'Tier 2 — Vulkan Compat (VkFence + Binary Semaphore)',
+    shortName: 'T2',
+    syncModel: 'VkFence (CPU↔GPU) + Binary Semaphore (swapchain)',
+    cpuGpuSync: 'VkFence per-slot (signaled at submit, waited before reuse)',
+    gpuGpuSync: 'Binary semaphore',
+    swapSync: 'Binary semaphore (imageAvail / renderDone)',
+    framesInFlight: 2,
+    async: true,
+    hasTimeline: false,
+    hasFence: true,
+    phases: [
+      {
+        id: 0, title: 'CPU: Wait Fence',
+        exec: 'CPU', async: false,
+        desc: 'CPU waits on per-slot VkFence to ensure slot N-2 GPU work is done. Fence was created signaled so first frame doesn\'t block.',
+        code: 'vkWaitForFences(dev, 1, &slot.fence, VK_TRUE, UINT64_MAX);\nvkResetFences(dev, 1, &slot.fence);',
+        detail: 'VkFence is heavier than timeline semaphore — requires kernel transition for signal/wait. But universally supported on Vulkan 1.1+.',
+        owner: 'CPU', imageState: 'N/A (waiting for slot reuse)',
+        cpuAction: 'Block until fence signaled, then reset', gpuAction: 'None',
+      },
+      {
+        id: 1, title: 'Driver: Acquire Image',
+        exec: 'Driver', async: false,
+        desc: 'Same as Tier1 — Driver returns image index and signals imageAvail binary semaphore.',
+        code: 'vkAcquireNextImageKHR(\n  device, swapchain, UINT64_MAX,\n  slot.imageAvail,  // signal\n  VK_NULL_HANDLE,   // fence not used here\n  &imageIndex\n);',
+        detail: 'Identical to T1. imageAvail is per-slot binary semaphore.',
+        owner: 'Driver → CPU', imageState: 'Available → Acquired',
+        cpuAction: 'Receives image index', gpuAction: 'None',
+      },
+      {
+        id: 2, title: 'CPU: Record Commands',
+        exec: 'CPU', async: false,
+        desc: 'Same as Tier1 — CPU records rendering commands.',
+        code: '// Same command recording as Tier1\ncmd.Begin();\n// ... barriers, draw, end ...\ncmd.End();',
+        detail: 'No difference from T1 in command recording.',
+        owner: 'CPU', imageState: 'Acquired',
+        cpuAction: 'Record commands', gpuAction: 'None',
+      },
+      {
+        id: 3, title: 'GPU: Execute Rendering',
+        exec: 'GPU', async: true,
+        desc: 'vkQueueSubmit with VkFence. GPU waits imageAvail, renders, signals renderDone + fence.',
+        code: 'vkQueueSubmit(queue, 1, &submitInfo, slot.fence);\n// wait:   imageAvail (binary)\n// signal: renderDone[imgIdx] (binary)\n// fence:  slot.fence (CPU↔GPU sync)',
+        detail: 'Key difference from T1: VkFence replaces timeline semaphore for CPU↔GPU sync. Fence is passed directly to vkQueueSubmit.',
+        owner: 'GPU', imageState: 'Rendering',
+        cpuAction: 'Submit returns immediately', gpuAction: 'Wait imageAvail → Execute → Signal renderDone + fence',
+      },
+      {
+        id: 4, title: 'WSI: Present',
+        exec: 'WSI', async: true,
+        desc: 'Same as Tier1 — present waits renderDone.',
+        code: 'vkQueuePresentKHR(queue, &presentInfo);\n// wait: renderDone[imgIdx]',
+        detail: 'Identical to T1.',
+        owner: 'WSI', imageState: 'Presenting',
+        cpuAction: 'Returns immediately', gpuAction: 'WSI waits renderDone',
+      },
+      {
+        id: 5, title: 'WSI: Release (implicit)',
+        exec: 'WSI', async: true,
+        desc: 'Same as Tier1 — implicit release after scanout.',
+        code: '// Implicit — no API call',
+        detail: 'Identical to T1.',
+        owner: 'WSI → Driver', imageState: 'Available',
+        cpuAction: 'None', gpuAction: 'None',
+      },
+    ]
+  },
+  {
+    name: 'Tier 3 — WebGPU (Single Queue, Implicit Sync)',
+    shortName: 'T3',
+    syncModel: 'Implicit sync (Dawn/wgpu handles all barriers)',
+    cpuGpuSync: 'onSubmittedWorkDone callback (async)',
+    gpuGpuSync: 'Implicit (single queue, sequential)',
+    swapSync: 'Implicit (getCurrentTexture / present)',
+    framesInFlight: 1,
+    async: false,
+    hasTimeline: false,
+    hasFence: false,
+    phases: [
+      {
+        id: 0, title: 'CPU: Get Current Texture',
+        exec: 'CPU', async: false,
+        desc: 'WebGPU surface provides the current texture. No explicit semaphore — Dawn handles sync internally.',
+        code: 'WGPUSurfaceTexture surfTex;\nwgpuSurfaceGetCurrentTexture(surface, &surfTex);\n// surfTex.texture is ready to use\n// No semaphore needed — implicit sync',
+        detail: 'Unlike Vulkan, WebGPU merges acquire + sync into a single call. The returned texture is guaranteed usable.',
+        owner: 'Driver → CPU', imageState: 'Available → Acquired',
+        cpuAction: 'Receives texture handle', gpuAction: 'None',
+      },
+      {
+        id: 1, title: 'CPU: Record Commands',
+        exec: 'CPU', async: false,
+        desc: 'CPU creates a command encoder, records passes, and finalizes into a command buffer.',
+        code: 'WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(dev, &desc);\nWGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &rpDesc);\nwgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);\nwgpuRenderPassEncoderEnd(pass);\nWGPUCommandBuffer cmdBuf = wgpuCommandEncoderFinish(enc, &finishDesc);',
+        detail: 'Deferred recording — commands are buffered in the encoder, then finalized into an immutable command buffer.',
+        owner: 'CPU', imageState: 'Acquired',
+        cpuAction: 'Record + finalize commands', gpuAction: 'None',
+      },
+      {
+        id: 2, title: 'GPU: Execute (sequential)',
+        exec: 'GPU', async: true,
+        desc: 'wgpuQueueSubmit sends commands to the single GPU queue. Dawn handles all barriers implicitly.',
+        code: 'wgpuQueueSubmit(queue, 1, &cmdBuf);\n// Dawn internally:\n//   1. Insert necessary barriers\n//   2. Execute commands\n//   3. No explicit semaphore signal',
+        detail: 'WebGPU has a single queue — no cross-queue sync needed. All resource transitions are handled by the implementation.',
+        owner: 'GPU', imageState: 'Rendering',
+        cpuAction: 'Submit returns immediately', gpuAction: 'Execute commands (Dawn manages barriers)',
+      },
+      {
+        id: 3, title: 'WSI: Present',
+        exec: 'WSI', async: true,
+        desc: 'wgpuSurfacePresent queues the rendered texture for display. No explicit wait semaphore.',
+        code: 'wgpuSurfacePresent(surface);\n// Implicit: waits for GPU to finish\n// then presents to display',
+        detail: 'Dawn internally ensures GPU work is complete before presenting. The application doesn\'t manage any sync primitives.',
+        owner: 'WSI', imageState: 'Presenting → Displayed → Available',
+        cpuAction: 'Returns immediately', gpuAction: 'Implicit sync',
+      },
+    ]
+  },
+  {
+    name: 'Tier 4 — OpenGL (Fully Implicit)',
+    shortName: 'T4',
+    syncModel: 'Fully implicit (driver manages everything)',
+    cpuGpuSync: 'glFinish / glClientWaitSync (optional)',
+    gpuGpuSync: 'Implicit (single context, sequential)',
+    swapSync: 'glfwSwapBuffers (blocking, includes present wait)',
+    framesInFlight: 1,
+    async: false,
+    hasTimeline: false,
+    hasFence: false,
+    phases: [
+      {
+        id: 0, title: 'CPU: Issue GL Commands',
+        exec: 'CPU', async: false,
+        desc: 'OpenGL commands execute immediately on the driver. No deferred recording — each call is dispatched to the GPU pipeline.',
+        code: 'glClearColor(0.08f, 0.08f, 0.12f, 1.0f);\nglClear(GL_COLOR_BUFFER_BIT);\nglUseProgram(program);\nglBindVertexArray(vao);\nglDrawArrays(GL_TRIANGLES, 0, 3);',
+        detail: 'OpenGL is immediate-mode — no command buffer concept. The driver batches commands internally and flushes when needed.',
+        owner: 'CPU → GPU', imageState: 'Default framebuffer (FBO 0)',
+        cpuAction: 'Issue GL calls (driver may batch)', gpuAction: 'Execute as driver flushes',
+      },
+      {
+        id: 1, title: 'GPU: Execute (immediate)',
+        exec: 'GPU', async: true,
+        desc: 'GPU executes batched GL commands. The driver decides when to flush — no explicit submit.',
+        code: '// No explicit submit\n// Driver internally batches and flushes\n// GL commands may already be executing\n// while CPU issues more commands',
+        detail: 'The driver pipeline means some commands may already be executing on the GPU while the CPU is still issuing new ones.',
+        owner: 'GPU', imageState: 'Rendering to FBO 0',
+        cpuAction: 'May continue issuing commands', gpuAction: 'Execute batched commands',
+      },
+      {
+        id: 2, title: 'SwapBuffers (blocking)',
+        exec: 'Driver', async: false,
+        desc: 'glfwSwapBuffers is typically BLOCKING — it waits for VSync, presents the back buffer, and swaps front/back.',
+        code: 'glfwSwapBuffers(window);\n// Internally:\n//   1. glFlush (ensure all commands submitted)\n//   2. Wait for VSync (if enabled)\n//   3. Swap front/back buffer pointers\n//   4. Return to application',
+        detail: 'This single call replaces Vulkan\'s entire acquire + present + sync dance. Simplest model but least control. VSync wait blocks the CPU.',
+        owner: 'Driver/WSI', imageState: 'Present + Swap + Acquire (all in one)',
+        cpuAction: 'BLOCKED until swap complete', gpuAction: 'Finish rendering → display → swap',
+      },
+    ]
+  }
+];
+
+// =========================================================================
+// Canvas renderer
+// =========================================================================
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let W, H, dpr;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  W = rect.width; H = rect.height;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', () => { resize(); draw(); });
+
+// =========================================================================
+// State
+// =========================================================================
+let currentTier = 0;
+let currentPhase = -1;  // Global phase index across all frames (0 to totalPhases-1)
+let playing = false;
+let playTimer = null;
+let speed = 1.0;
+let animT = 0; // 0..1 animation progress within phase
+let animFrame = null;
+
+function getTier() { return TIERS[currentTier]; }
+function getPhases() { return getTier().phases; }
+function getTotalPhases() { return getPhases().length * FRAMES_TO_SHOW; }
+function getCurrentFrame() { return Math.floor(currentPhase / getPhases().length); }
+function getPhaseInFrame() { return currentPhase % getPhases().length; }
+
+// =========================================================================
+// Drawing helpers
+// =========================================================================
+const LANE_LABELS = ['CPU', 'Driver/WSI', 'GPU', 'Display'];
+const LANE_COLORS = ['var(--cpu-color)', 'var(--driver-color)', 'var(--gpu-color)', 'var(--display-color)'];
+const LANE_HEX = ['#f0883e', '#a371f7', '#3fb950', '#79c0ff'];
+
+function laneY(i) {
+  const top = 60, gap = (H - top - 40) / 4;
+  return top + gap * i + gap / 2;
+}
+
+function drawLanes() {
+  const top = 60;
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = '600 14px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i < 4; i++) {
+    const y = laneY(i);
+    // Lane line
+    ctx.strokeStyle = '#21262d';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(120, y); ctx.lineTo(W - 20, y); ctx.stroke();
+    // Label
+    ctx.fillStyle = LANE_HEX[i];
+    ctx.fillText(LANE_LABELS[i], 110, y + 5);
+  }
+}
+
+function drawTitle() {
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = '600 16px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(getTier().name, 20, 30);
+
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '400 12px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(`Frames in flight: ${getTier().framesInFlight} | Sync: ${getTier().syncModel}`, 20, 48);
+}
+
+function execToLane(exec) {
+  if (exec === 'CPU') return 0;
+  if (exec === 'Driver') return 1;
+  if (exec === 'GPU') return 2;
+  if (exec === 'WSI') return 3;
+  return 1;
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// Frame colors for visual distinction
+const FRAME_COLORS = ['#58a6ff', '#f0883e', '#3fb950'];
+const FRAME_BG_ALPHA = ['15', '12', '10'];
+
+function drawPhaseBlocks() {
+  const phases = getPhases();
+  const n = phases.length;
+  const tier = getTier();
+  
+  // Calculate layout for 3 frames
+  const startX = 140, endX = W - 20;
+  const frameGap = 24;
+  const totalWidth = endX - startX;
+  const frameWidth = (totalWidth - (FRAMES_TO_SHOW - 1) * frameGap) / FRAMES_TO_SHOW;
+  const blockW = Math.min(90, (frameWidth - (n - 1) * 8) / n);
+  const blockH = 32;
+
+  // Draw frame separators and labels
+  for (let f = 0; f < FRAMES_TO_SHOW; f++) {
+    const frameX = startX + f * (frameWidth + frameGap);
+    
+    // Frame background
+    ctx.fillStyle = FRAME_COLORS[f] + '08';
+    roundRect(frameX - 4, 55, frameWidth + 8, H - 100, 8);
+    ctx.fill();
+    
+    // Frame label
+    ctx.fillStyle = FRAME_COLORS[f];
+    ctx.font = '700 13px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Frame ${f}`, frameX + frameWidth / 2, 72);
+    
+    // Slot indicator (for frames in flight)
+    if (tier.framesInFlight > 1) {
+      const slotIdx = f % tier.framesInFlight;
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '500 10px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText(`Slot ${slotIdx}`, frameX + frameWidth / 2, 86);
+    }
+
+    // Draw phases for this frame
+    for (let i = 0; i < n; i++) {
+      const p = phases[i];
+      const lane = execToLane(p.exec);
+      const x = frameX + i * (blockW + 8);
+      const y = laneY(lane) - blockH / 2;
+      
+      // Global phase index
+      const globalIdx = f * n + i;
+      
+      // Determine state
+      let isActive = globalIdx === currentPhase;
+      let isDone = globalIdx < currentPhase;
+      let isFuture = globalIdx > currentPhase;
+
+      // Determine color
+      let color, bgAlpha;
+      if (isActive) {
+        color = FRAME_COLORS[f]; bgAlpha = 0.35;
+      } else if (isDone) {
+        color = LANE_HEX[lane]; bgAlpha = 0.15;
+      } else {
+        color = '#484f58'; bgAlpha = 0.06;
+      }
+
+      // Block
+      roundRect(x, y, blockW, blockH, 5);
+      ctx.fillStyle = color + (bgAlpha < 0.1 ? '10' : bgAlpha < 0.2 ? '28' : '58');
+      ctx.fill();
+      ctx.strokeStyle = isActive ? FRAME_COLORS[f] : (isDone ? color : '#30363d');
+      ctx.lineWidth = isActive ? 2.5 : 1;
+      ctx.stroke();
+
+      // Pulse animation for active phase
+      if (isActive && animT > 0) {
+        const pulse = Math.sin(animT * Math.PI) * 0.4;
+        roundRect(x - 2, y - 2, blockW + 4, blockH + 4, 7);
+        ctx.strokeStyle = FRAME_COLORS[f];
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = pulse;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      // Label
+      ctx.fillStyle = isDone || isActive ? '#e6edf3' : '#484f58';
+      ctx.font = '500 9px "Segoe UI", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      const label = p.title.replace(/^(CPU|GPU|Driver|WSI): /, '');
+      // Truncate long labels
+      const shortLabel = label.length > 12 ? label.substring(0, 10) + '..' : label;
+      ctx.fillText(shortLabel, x + blockW / 2, y + blockH / 2 + 3);
+
+      // Async indicator
+      if (p.async && (isActive || isDone)) {
+        ctx.fillStyle = '#58a6ff';
+        ctx.font = '600 7px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText('ASYNC', x + blockW / 2, y - 4);
+      }
+
+      // Arrow to next phase within frame
+      if (i < n - 1) {
+        const nextLane = execToLane(phases[i + 1].exec);
+        const ax = x + blockW + 1;
+        const ay = laneY(lane);
+        const bx = x + blockW + 7;
+        const by = laneY(nextLane);
+
+        ctx.strokeStyle = isDone ? '#58a6ff80' : '#30363d';
+        ctx.lineWidth = 1;
+        ctx.setLineDash(p.async ? [3, 2] : []);
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    
+    // Arrow to next frame
+    if (f < FRAMES_TO_SHOW - 1) {
+      const ax = frameX + frameWidth + 4;
+      const bx = frameX + frameWidth + frameGap - 4;
+      const y = laneY(0);
+      
+      const frameDone = (f + 1) * n <= currentPhase;
+      ctx.strokeStyle = frameDone ? '#58a6ff' : '#30363d';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(ax, y); ctx.lineTo(bx, y); ctx.stroke();
+      ctx.setLineDash([]);
+      
+      // Arrowhead
+      ctx.beginPath();
+      ctx.moveTo(bx, y);
+      ctx.lineTo(bx - 5, y - 4);
+      ctx.moveTo(bx, y);
+      ctx.lineTo(bx - 5, y + 4);
+      ctx.stroke();
+    }
+  }
+
+  // Draw sync objects for all frames
+  drawSyncObjects(phases, n, startX, frameWidth, frameGap, blockW);
+}
+
+function drawSyncObjects(phases, n, startX, frameWidth, frameGap, blockW) {
+  const tier = getTier();
+  
+  for (let f = 0; f < FRAMES_TO_SHOW; f++) {
+    const frameX = startX + f * (frameWidth + frameGap);
+    const slotIdx = f % tier.framesInFlight;
+    
+    for (let i = 0; i < n; i++) {
+      const p = phases[i];
+      const x = frameX + i * (blockW + 8) + blockW / 2;
+      const globalIdx = f * n + i;
+      const isDone = globalIdx < currentPhase;
+      const isActive = globalIdx === currentPhase;
+
+      // imageAvail semaphore (after Acquire)
+      if (p.title.includes('Acquire') || p.title.includes('Get Current')) {
+        if (tier.hasTimeline || tier.hasFence) {
+          const sy = laneY(1) + 22;
+          const label = `imgAvail[${slotIdx}]`;
+          drawSemaphore(x, sy, label, '#ffa657', isDone || isActive);
+        }
+      }
+
+      // renderDone semaphore (after GPU execute) - per image
+      if (p.title.includes('Execute') && p.exec === 'GPU') {
+        if (tier.hasTimeline || tier.hasFence) {
+          const sy = laneY(2) + 22;
+          // renderDone is per-image, image index cycles with swapchain
+          const imgIdx = f % 3; // Assume 3 swapchain images
+          const label = `done[img${imgIdx}]`;
+          drawSemaphore(x + blockW * 0.3, sy, label, '#56d364', isDone);
+        }
+      }
+
+      // Timeline semaphore value (T1 only) - after GPU execute
+      if (p.title.includes('Execute') && p.exec === 'GPU') {
+        if (tier.hasTimeline) {
+          const sy = laneY(2) - 26;
+          // Timeline value = frame number + 1 (starts at 1)
+          const timelineValue = f + 1;
+          const label = `Timeline=${timelineValue}`;
+          drawTimelineBadge(x, sy, label, '#d2a8ff', isDone, timelineValue);
+        } else if (tier.hasFence) {
+          const sy = laneY(2) - 26;
+          const label = `Fence[${slotIdx}]`;
+          drawSyncPrimitive(x, sy, label, '#ff7b72', isDone);
+        }
+      }
+      
+      // CPU wait on timeline (T1) or fence (T2) - at frame start
+      if (p.title.includes('Wait') && p.exec === 'CPU') {
+        if (tier.hasTimeline) {
+          const sy = laneY(0) - 20;
+          // CPU waits for timeline value from 2 frames ago (frames in flight = 2)
+          const waitValue = f - tier.framesInFlight + 1;
+          if (waitValue > 0) {
+            const label = `wait(T≥${waitValue})`;
+            drawTimelineWait(x, sy, label, '#d2a8ff', isDone || isActive, waitValue);
+          } else {
+            const label = `(no wait)`;
+            drawTimelineWait(x, sy, label, '#484f58', isDone || isActive, 0);
+          }
+        }
+      }
+    }
+  }
+}
+
+function drawSemaphore(x, y, label, color, active) {
+  // Diamond shape
+  const s = 6;
+  ctx.beginPath();
+  ctx.moveTo(x, y - s); ctx.lineTo(x + s, y);
+  ctx.lineTo(x, y + s); ctx.lineTo(x - s, y);
+  ctx.closePath();
+  ctx.fillStyle = active ? color + '90' : color + '20';
+  ctx.fill();
+  ctx.strokeStyle = active ? color : color + '50';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = active ? color : '#484f58';
+  ctx.font = '500 8px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x, y + s + 10);
+}
+
+function drawSyncPrimitive(x, y, label, color, active) {
+  const w = 55, h = 14, r = 3;
+  roundRect(x - w/2, y - h/2, w, h, r);
+  ctx.fillStyle = active ? color + '35' : color + '10';
+  ctx.fill();
+  ctx.strokeStyle = active ? color : color + '40';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = active ? color : '#484f58';
+  ctx.font = '600 8px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x, y + 3);
+}
+
+function drawTimelineBadge(x, y, label, color, active, value) {
+  const w = 70, h = 16, r = 4;
+  roundRect(x - w/2, y - h/2, w, h, r);
+  
+  // Gradient-like effect for timeline
+  ctx.fillStyle = active ? color + '40' : color + '15';
+  ctx.fill();
+  ctx.strokeStyle = active ? color : color + '50';
+  ctx.lineWidth = active ? 2 : 1;
+  ctx.stroke();
+
+  // Value circle
+  const cx = x - w/2 + 12;
+  ctx.beginPath();
+  ctx.arc(cx, y, 6, 0, Math.PI * 2);
+  ctx.fillStyle = active ? color : color + '60';
+  ctx.fill();
+  
+  ctx.fillStyle = active ? '#000' : '#8b949e';
+  ctx.font = '700 8px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(value.toString(), cx, y + 3);
+
+  // Label
+  ctx.fillStyle = active ? '#e6edf3' : '#8b949e';
+  ctx.font = '500 8px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('signal', x - w/2 + 22, y + 3);
+}
+
+function drawTimelineWait(x, y, label, color, active, value) {
+  const w = 65, h = 14, r = 3;
+  roundRect(x - w/2, y - h/2, w, h, r);
+  ctx.fillStyle = active ? color + '25' : color + '08';
+  ctx.fill();
+  ctx.strokeStyle = active ? color : color + '30';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 2]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = active ? color : '#484f58';
+  ctx.font = '500 8px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x, y + 3);
+}
+
+// Image ownership indicator
+function drawImageOwnership() {
+  if (currentPhase < 0) return;
+  const phases = getPhases();
+  const frameIdx = getCurrentFrame();
+  const phaseInFrame = getPhaseInFrame();
+  const p = phases[phaseInFrame];
+  const tier = getTier();
+  const slotIdx = frameIdx % tier.framesInFlight;
+  const imgIdx = frameIdx % 3;
+  
+  const boxW = W - 160, boxH = 32;
+  const x = 140, y = H - 42;
+
+  roundRect(x, y, boxW, boxH, 4);
+  ctx.fillStyle = '#161b22';
+  ctx.fill();
+  ctx.strokeStyle = FRAME_COLORS[frameIdx] + '60';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Frame indicator
+  ctx.fillStyle = FRAME_COLORS[frameIdx];
+  ctx.font = '700 11px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Frame ${frameIdx}`, x + 10, y + 20);
+  
+  // Slot and image info
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '500 10px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(`Slot ${slotIdx} | Image ${imgIdx}`, x + 80, y + 20);
+
+  // Image state
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '500 10px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`State: ${p.imageState}`, x + boxW / 2, y + 20);
+
+  // Owner badge
+  ctx.fillStyle = '#58a6ff';
+  ctx.font = '600 10px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`Owner: ${p.owner}`, x + boxW - 10, y + 20);
+  
+  // Timeline value indicator (T1 only)
+  if (tier.hasTimeline) {
+    const timelineVal = Math.max(0, Math.floor((currentPhase + 1) / phases.length));
+    ctx.fillStyle = '#d2a8ff';
+    ctx.font = '600 10px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`Timeline: ${timelineVal}`, x + boxW - 120, y + 20);
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  drawTitle();
+  drawLanes();
+  drawPhaseBlocks();
+  drawImageOwnership();
+}
+
+// =========================================================================
+// Info panel
+// =========================================================================
+function updateInfoPanel() {
+  const tier = getTier();
+  const el = document.getElementById('phaseContent');
+
+  if (currentPhase < 0) {
+    el.innerHTML = `
+      <h2>${tier.name}</h2>
+      <h3>Sync Model</h3>
+      <table class="tier-table">
+        <tr><th>Aspect</th><th>Mechanism</th></tr>
+        <tr><td>CPU↔GPU</td><td>${tier.cpuGpuSync}</td></tr>
+        <tr><td>GPU↔GPU</td><td>${tier.gpuGpuSync}</td></tr>
+        <tr><td>Swapchain</td><td>${tier.swapSync}</td></tr>
+        <tr><td>Frames in Flight</td><td>${tier.framesInFlight}</td></tr>
+      </table>
+      <h3>Comparison</h3>
+      <table class="tier-table">
+        <tr><th></th><th>T1</th><th>T2</th><th>T3</th><th>T4</th></tr>
+        <tr><td>Acquire</td><td>vkAcquireNextImageKHR</td><td>vkAcquireNextImageKHR</td><td>getCurrentTexture</td><td>implicit</td></tr>
+        <tr><td>CPU↔GPU sync</td><td>Timeline sem</td><td>VkFence</td><td>callback</td><td>glFinish</td></tr>
+        <tr><td>Present wait</td><td>Binary sem</td><td>Binary sem</td><td>implicit</td><td>SwapBuffers</td></tr>
+        <tr><td>Frames in flight</td><td>2</td><td>2</td><td>1</td><td>1</td></tr>
+        <tr><td>Explicit barriers</td><td>Yes</td><td>Yes</td><td>No</td><td>No</td></tr>
+      </table>
+      <p class="phase-info" style="margin-top:16px">Click <b>Step ▶</b> or <b>▶ Play</b> to start the animation.</p>
+    `;
+    return;
+  }
+
+  const phases = tier.phases;
+  const n = phases.length;
+  const frameIdx = getCurrentFrame();
+  const phaseInFrame = getPhaseInFrame();
+  const p = phases[phaseInFrame];
+  const slotIdx = frameIdx % tier.framesInFlight;
+  const imgIdx = frameIdx % 3;
+
+  // Phase dots for current frame
+  let dotsHtml = `<div style="margin-bottom:8px;color:${FRAME_COLORS[frameIdx]};font-weight:600">Frame ${frameIdx} (Slot ${slotIdx})</div>`;
+  dotsHtml += '<div class="phase-steps">';
+  for (let i = 0; i < n; i++) {
+    const cls = i === phaseInFrame ? 'active' : i < phaseInFrame ? 'done' : '';
+    dotsHtml += `<div class="phase-dot ${cls}">${i + 1}</div>`;
+  }
+  dotsHtml += '</div>';
+
+  // Timeline info for T1
+  let timelineHtml = '';
+  if (tier.hasTimeline) {
+    const currentTimelineVal = Math.floor((currentPhase + 1) / n);
+    const waitVal = frameIdx - tier.framesInFlight + 1;
+    timelineHtml = `
+      <h3>Timeline Semaphore</h3>
+      <table class="tier-table">
+        <tr><th>Aspect</th><th>Value</th></tr>
+        <tr><td>Current Timeline Value</td><td style="color:#d2a8ff;font-weight:600">${currentTimelineVal}</td></tr>
+        <tr><td>Frame ${frameIdx} will signal</td><td style="color:#d2a8ff">${frameIdx + 1}</td></tr>
+        <tr><td>Frame ${frameIdx} waits for</td><td style="color:#d2a8ff">${waitVal > 0 ? '≥ ' + waitVal : '(no wait, first frames)'}</td></tr>
+      </table>
+    `;
+  }
+
+  // Tags
+  const execTag = p.exec === 'CPU' ? '<span class="tag tag-cpu">CPU</span>' :
+                  p.exec === 'GPU' ? '<span class="tag tag-gpu">GPU</span>' :
+                  p.exec === 'Driver' ? '<span class="tag tag-driver">Driver</span>' :
+                  '<span class="tag tag-wsi">WSI</span>';
+  const asyncTag = p.async ? '<span class="tag tag-async">ASYNC</span>' : '<span class="tag tag-sync">SYNC/BLOCK</span>';
+
+  el.innerHTML = `
+    <h2>Phase ${phaseInFrame + 1} / ${n}: ${p.title}</h2>
+    ${dotsHtml}
+    <div style="margin: 8px 0">${execTag} ${asyncTag}</div>
+    <div class="phase-info">
+      <p>${p.desc}</p>
+    </div>
+    ${timelineHtml}
+    <h3>Code</h3>
+    <div class="code-block">${formatCode(p.code)}</div>
+    <h3>Details</h3>
+    <div class="phase-info"><p>${p.detail}</p></div>
+    <h3>State Changes</h3>
+    <table class="tier-table">
+      <tr><th>Aspect</th><th>Value</th></tr>
+      <tr><td>Frame / Slot / Image</td><td>F${frameIdx} / S${slotIdx} / I${imgIdx}</td></tr>
+      <tr><td>Image Owner</td><td>${p.owner}</td></tr>
+      <tr><td>Image State</td><td>${p.imageState}</td></tr>
+      <tr><td>CPU Action</td><td>${p.cpuAction}</td></tr>
+      <tr><td>GPU Action</td><td>${p.gpuAction}</td></tr>
+    </table>
+  `;
+}
+
+function formatCode(code) {
+  return code
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/(\/\/.*)/g, '<span class="cm">$1</span>')
+    .replace(/\b(vkAcquireNextImageKHR|vkQueueSubmit2|vkQueueSubmit|vkQueuePresentKHR|vkWaitSemaphores|vkWaitForFences|vkResetFences|wgpuSurfaceGetCurrentTexture|wgpuQueueSubmit|wgpuSurfacePresent|wgpuDeviceCreateCommandEncoder|wgpuCommandEncoderBeginRenderPass|wgpuRenderPassEncoderDraw|wgpuRenderPassEncoderEnd|wgpuCommandEncoderFinish|glfwSwapBuffers|glClearColor|glClear|glUseProgram|glBindVertexArray|glDrawArrays|glFlush)\b/g, '<span class="fn">$1</span>')
+    .replace(/\b(VK_TRUE|VK_NULL_HANDLE|VK_FALSE|UINT64_MAX|GL_COLOR_BUFFER_BIT|GL_TRIANGLES)\b/g, '<span class="kw">$1</span>');
+}
+
+// =========================================================================
+// Controls
+// =========================================================================
+document.querySelectorAll('.tier-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tier-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentTier = parseInt(btn.dataset.tier);
+    currentPhase = -1;
+    stopPlay();
+    resize();
+    draw();
+    updateInfoPanel();
+  });
+});
+
+document.getElementById('stepBtn').addEventListener('click', () => {
+  stopPlay();
+  stepForward();
+});
+
+document.getElementById('playBtn').addEventListener('click', () => {
+  if (playing) { stopPlay(); return; }
+  playing = true;
+  document.getElementById('playBtn').textContent = '⏸ Pause';
+  if (currentPhase < 0) currentPhase = -1;
+  playNext();
+});
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  stopPlay();
+  currentPhase = -1;
+  animT = 0;
+  draw();
+  updateInfoPanel();
+});
+
+document.getElementById('speedSlider').addEventListener('input', (e) => {
+  speed = parseFloat(e.target.value);
+  document.getElementById('speedLabel').textContent = speed.toFixed(1) + 'x';
+});
+
+function stepForward() {
+  const totalPhases = getTotalPhases();
+  if (currentPhase < totalPhases - 1) {
+    currentPhase++;
+    animT = 1;
+    draw();
+    updateInfoPanel();
+  } else {
+    // Loop back to start
+    currentPhase = -1;
+    animT = 0;
+    draw();
+    updateInfoPanel();
+  }
+}
+
+function playNext() {
+  if (!playing) return;
+  const totalPhases = getTotalPhases();
+  if (currentPhase >= totalPhases - 1) {
+    // Loop back after all 3 frames complete
+    currentPhase = -1;
+    animT = 0;
+    draw();
+    updateInfoPanel();
+    playTimer = setTimeout(playNext, 1200 / speed);
+    return;
+  }
+
+  currentPhase++;
+  animT = 0;
+  draw();
+  updateInfoPanel();
+
+  // Animate
+  const duration = 900 / speed;
+  const startTime = performance.now();
+  function animate(now) {
+    if (!playing) return;
+    animT = Math.min(1, (now - startTime) / duration);
+    draw();
+    if (animT < 1) {
+      animFrame = requestAnimationFrame(animate);
+    } else {
+      // Longer pause between frames
+      const isFrameEnd = (currentPhase + 1) % getPhases().length === 0;
+      const delay = isFrameEnd ? 600 / speed : 300 / speed;
+      playTimer = setTimeout(playNext, delay);
+    }
+  }
+  animFrame = requestAnimationFrame(animate);
+}
+
+function stopPlay() {
+  playing = false;
+  document.getElementById('playBtn').textContent = '▶ Play';
+  if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+}
+
+// =========================================================================
+// Init
+// =========================================================================
+resize();
+draw();
+updateInfoPanel();
+</script>
+</body>
+</html>

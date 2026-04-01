@@ -154,8 +154,11 @@ namespace miki::platform {
         }
 
 #ifndef __EMSCRIPTEN__
-        if (backendType_ == miki::rhi::BackendType::OpenGL43 && !glShareContext_) {
-            glShareContext_ = window;
+        if (backendType_ == miki::rhi::BackendType::OpenGL43) {
+            glfwMakeContextCurrent(window);
+            if (!glShareContext_) {
+                glShareContext_ = window;
+            }
         }
 #endif
 
