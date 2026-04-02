@@ -314,7 +314,8 @@ namespace miki::rhi {
         GLuint viewTexture = 0;
         TextureHandle parentTexture;
         GLenum target = GL_TEXTURE_2D;
-        GLuint fbo = 0;  // Pre-created single-attachment FBO (color or depth/stencil)
+        GLenum internalFormat = 0;  // GL internal format (e.g. GL_SRGB8_ALPHA8, GL_RGBA8)
+        GLuint fbo = 0;             // Pre-created single-attachment FBO (color or depth/stencil)
         // TODO (Nekomiya) this seems bad. review this in the future
         bool ownsView = false;              // true if created via glTextureView, false if alias
         bool isDefaultFramebuffer = false;  // true for swapchain default FBO (render via glBindFramebuffer(0))

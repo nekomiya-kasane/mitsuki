@@ -8,6 +8,7 @@
 
 #include "miki/rhi/RenderSurface.h"
 #include "miki/rhi/backend/AllBackends.h"
+#include "miki/debug/StructuredLogger.h"
 
 #include <algorithm>
 #include <array>
@@ -144,6 +145,11 @@ namespace miki::rhi {
 
         // Apply capability-based fallbacks (format, present mode, color space)
         ApplyCapabilityFallbacks(desc, caps);
+
+        MIKI_LOG_INFO(
+            ::miki::debug::LogCategory::Rhi, "RenderSurface::Configure: resolved format={}, presentMode={}, {}x{}",
+            static_cast<int>(desc.preferredFormat), static_cast<int>(desc.presentMode), iWidth, iHeight
+        );
 
         // Destroy old swapchain if exists
         if (impl_->swapchain.IsValid()) {

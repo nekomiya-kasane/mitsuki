@@ -388,6 +388,7 @@ namespace miki::rhi {
             data->viewTexture = 0;
             data->parentTexture = desc.texture;
             data->target = GL_TEXTURE_2D;
+            data->internalFormat = texData->internalFormat;
             data->ownsView = false;
             data->isDefaultFramebuffer = true;
             return handle;
@@ -420,6 +421,7 @@ namespace miki::rhi {
         data->viewTexture = viewTex;
         data->parentTexture = desc.texture;
         data->target = viewTarget;
+        data->internalFormat = internalFormat;
         data->ownsView = true;
         data->isDefaultFramebuffer = false;
         data->isDepthStencil = IsDepthFormat(internalFormat);

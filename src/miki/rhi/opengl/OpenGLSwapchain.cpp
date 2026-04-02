@@ -21,7 +21,10 @@ namespace miki::rhi {
         }
         texData->texture = 0;
         texData->target = GL_TEXTURE_2D;
-        texData->internalFormat = GL_RGBA8;
+        // Default FBO has no real GL texture — store sRGB internal format for
+        // CmdBeginRenderingImpl to decide GL_FRAMEBUFFER_SRGB enable/disable.
+        bool isSrgb = (desc.preferredFormat == Format::BGRA8_SRGB || desc.preferredFormat == Format::RGBA8_SRGB);
+        texData->internalFormat = isSrgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
         texData->width = desc.width;
         texData->height = desc.height;
         texData->depth = 1;

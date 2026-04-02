@@ -755,7 +755,11 @@ namespace miki::rhi {
     // =========================================================================
 
     void VulkanCommandBuffer::CmdSetViewportImpl(const Viewport& vp) {
-        VkViewport viewport{vp.x, vp.y, vp.width, vp.height, vp.minDepth, vp.maxDepth};
+        // Flip Y: Vulkan NDC Y points down; all other backends point up.
+        // VK_KHR_maintenance1 (Vulkan 1.1 core) allows negative viewport height.
+        // y' = y + height moves origin to bottom; height' = -height flips direction.
+        // FrontFace is compensated in CreateGraphicsPipelineImpl.
+        VkViewport viewport{vp.x, vp.y + vp.height, vp.width, -vp.height, vp.minDepth, vp.maxDepth};
         vkCmdSetViewport(cmd_, 0, 1, &viewport);
     }
 

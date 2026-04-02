@@ -703,6 +703,20 @@ namespace miki::rhi {
         }
         device_->GetContext().BindFramebuffer(GL_FRAMEBUFFER, fbo);
 
+        // ---- sRGB write-back: enable only for sRGB render targets ----
+        // GL_FRAMEBUFFER_SRGB is global state — must be set per render pass and
+        // restored in CmdEndRenderingImpl to avoid polluting subsequent passes.
+        bool needSrgb = false;
+        if (colorCount > 0 && colorViews[0]) {
+            GLenum fmt = colorViews[0]->internalFormat;
+            needSrgb = (fmt == GL_SRGB8_ALPHA8);
+        }
+        if (needSrgb) {
+            gl->Enable(GL_FRAMEBUFFER_SRGB);
+        } else {
+            gl->Disable(GL_FRAMEBUFFER_SRGB);
+        }
+
         // ---- Handle LoadOp::Clear for color attachments ----
         for (size_t i = 0; i < desc.colorAttachments.size() && i < colorViews.size(); ++i) {
             auto& att = desc.colorAttachments[i];
@@ -727,6 +741,8 @@ namespace miki::rhi {
     }
 
     void OpenGLCommandBuffer::CmdEndRenderingImpl() {
+        // Restore sRGB state to disabled — clean slate for next pass.
+        device_->GetGLContext()->Disable(GL_FRAMEBUFFER_SRGB);
         device_->GetContext().BindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 

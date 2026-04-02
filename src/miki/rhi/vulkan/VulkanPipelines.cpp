@@ -79,7 +79,9 @@ namespace miki::rhi {
         }
 
         auto ToVkFrontFace(FrontFace face) -> VkFrontFace {
-            return (face == FrontFace::CounterClockwise) ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+            // Inverted: negative viewport height (Y-flip in CmdSetViewport) reverses winding order.
+            // Compensate here so application-visible winding stays consistent with OpenGL/D3D12/WebGPU.
+            return (face == FrontFace::CounterClockwise) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
         }
 
         auto ToVkCompareOp(CompareOp op) -> VkCompareOp {

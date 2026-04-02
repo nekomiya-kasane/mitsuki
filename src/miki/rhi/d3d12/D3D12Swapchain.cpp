@@ -130,7 +130,9 @@ namespace miki::rhi {
             }
             texData->resource = backBuffers[i];
             texData->allocation = nullptr;
-            texData->format = swapDesc.Format;
+            // Store the RTV format (SRGB) not the UNORM swapchain buffer format, so that CreateTextureViewImpl creates
+            // an SRGB RTV for correct gamma.
+            texData->format = ToDxgiRtvFormat(desc.preferredFormat);
             texData->width = desc.width;
             texData->height = desc.height;
             texData->depth = 1;
