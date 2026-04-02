@@ -252,7 +252,7 @@ namespace miki::rhi {
         // -- Capability --
         auto GetBackendTypeImpl() const -> BackendType { return BackendType::D3D12; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
-        auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
+        auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
 
         // -- Swapchain (D3D12Swapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
@@ -417,6 +417,9 @@ namespace miki::rhi {
         uint64_t frameFenceValue_ = 0;
         HANDLE frameFenceEvent_ = nullptr;
 
+        // -- Per-queue timeline semaphores (specs/03-sync.md §3.2) --
+        QueueTimelines queueTimelines_;
+
         // -- Capabilities --
         GpuCapabilityProfile capabilities_;
         bool hasEnhancedBarriers_ = false;
@@ -458,6 +461,7 @@ namespace miki::rhi {
         auto CreateDevice() -> RhiResult<void>;
         auto CreateAllocator() -> RhiResult<void>;
         auto CreateQueues() -> RhiResult<void>;
+        auto CreateQueueTimelines() -> RhiResult<void>;
         auto CreateDescriptorHeaps() -> RhiResult<void>;
         void PopulateCapabilities();
         void PopulateFormatSupport();

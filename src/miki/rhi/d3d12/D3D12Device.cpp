@@ -257,6 +257,40 @@ namespace miki::rhi {
     }
 
     // =========================================================================
+    // Per-queue timeline semaphores (specs/03-sync.md §3.2)
+    // =========================================================================
+
+    auto D3D12Device::CreateQueueTimelines() -> RhiResult<void> {
+        auto makeSem = [&]() -> RhiResult<SemaphoreHandle> {
+            return CreateSemaphoreImpl({.type = SemaphoreType::Timeline, .initialValue = 0});
+        };
+
+        auto gfx = makeSem();
+        if (!gfx) {
+            return std::unexpected(gfx.error());
+        }
+        queueTimelines_.graphics = *gfx;
+
+        if (queues_.compute && queues_.compute.Get() != queues_.graphics.Get()) {
+            auto comp = makeSem();
+            if (!comp) {
+                return std::unexpected(comp.error());
+            }
+            queueTimelines_.compute = *comp;
+        }
+
+        if (queues_.copy && queues_.copy.Get() != queues_.graphics.Get()) {
+            auto xfer = makeSem();
+            if (!xfer) {
+                return std::unexpected(xfer.error());
+            }
+            queueTimelines_.transfer = *xfer;
+        }
+
+        return {};
+    }
+
+    // =========================================================================
     // Descriptor heap creation
     // =========================================================================
 
@@ -578,6 +612,11 @@ namespace miki::rhi {
             return r5;
         }
 
+        auto r5b = CreateQueueTimelines();
+        if (!r5b) {
+            return r5b;
+        }
+
         auto r6 = CreateDescriptorHeaps();
         if (!r6) {
             return r6;
@@ -794,6 +833,11 @@ namespace miki::rhi {
             if (!semData) {
                 continue;
             }
+            // D3D12 fences are always timeline; Wait(fence, 0) is always satisfied (no-op).
+            // Binary semaphores (value=0) are used for swapchain sync which DXGI handles implicitly.
+            if (semData->type == SemaphoreType::Binary || w.value == 0) {
+                continue;
+            }
             targetQueue->Wait(semData->fence.Get(), w.value);
         }
 
@@ -816,6 +860,10 @@ namespace miki::rhi {
         for (auto& s : desc.signalSemaphores) {
             auto* semData = semaphores_.Lookup(s.semaphore);
             if (!semData) {
+                continue;
+            }
+            // Skip binary semaphores — D3D12 swapchain sync is implicit via DXGI Present.
+            if (semData->type == SemaphoreType::Binary || s.value == 0) {
                 continue;
             }
             targetQueue->Signal(semData->fence.Get(), s.value);

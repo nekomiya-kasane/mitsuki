@@ -331,14 +331,9 @@ namespace miki::rhi {
         // DXGI swapchain automatically manages back buffer index
         data->currentBackBufferIndex = data->swapchain->GetCurrentBackBufferIndex();
 
-        // Signal the semaphore (D3D12 doesn't have a separate acquire sync point)
-        if (signal.IsValid()) {
-            auto* semData = semaphores_.Lookup(signal);
-            if (semData) {
-                ++semData->value;
-                queues_.graphics->Signal(semData->fence.Get(), semData->value);
-            }
-        }
+        // D3D12/DXGI: swapchain acquire is implicit — no semaphore signal needed.
+        // Binary semaphore is a Vulkan concept; DXGI Present handles all sync internally.
+        (void)signal;
 
         return data->currentBackBufferIndex;
     }
@@ -381,13 +376,9 @@ namespace miki::rhi {
             return;
         }
 
-        // Wait for rendering to complete (GPU-side waits)
-        for (auto& sem : waitSemaphores) {
-            auto* semData = semaphores_.Lookup(sem);
-            if (semData) {
-                queues_.graphics->Wait(semData->fence.Get(), semData->value);
-            }
-        }
+        // D3D12/DXGI: Present implicitly waits for GPU work on the back buffer.
+        // Binary semaphore waits are a Vulkan concept; skip them here.
+        (void)waitSemaphores;
 
         // Present with tearing support (Immediate/Mailbox: syncInterval=0)
         UINT syncInterval = 0;  // VSync off by default; production code maps PresentMode

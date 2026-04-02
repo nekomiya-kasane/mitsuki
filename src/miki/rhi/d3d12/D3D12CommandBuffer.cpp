@@ -101,7 +101,10 @@ namespace miki::rhi {
         }
 
         auto ToD3D12BarrierAccess(AccessFlags access) -> D3D12_BARRIER_ACCESS {
-            D3D12_BARRIER_ACCESS flags = D3D12_BARRIER_ACCESS_NO_ACCESS;
+            if (access == AccessFlags::None) {
+                return D3D12_BARRIER_ACCESS_NO_ACCESS;
+            }
+            D3D12_BARRIER_ACCESS flags = D3D12_BARRIER_ACCESS_COMMON;  // == 0, safe to OR
             auto has = [access](AccessFlags bit) {
                 return (static_cast<uint32_t>(access) & static_cast<uint32_t>(bit)) != 0;
             };
@@ -120,8 +123,11 @@ namespace miki::rhi {
             if (has(AccessFlags::ColorAttachmentRead) || has(AccessFlags::ColorAttachmentWrite)) {
                 flags |= D3D12_BARRIER_ACCESS_RENDER_TARGET;
             }
-            if (has(AccessFlags::DepthStencilRead) || has(AccessFlags::DepthStencilWrite)) {
-                flags |= D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ | D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE;
+            if (has(AccessFlags::DepthStencilRead)) {
+                flags |= D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ;
+            }
+            if (has(AccessFlags::DepthStencilWrite)) {
+                flags |= D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE;
             }
             if (has(AccessFlags::TransferRead)) {
                 flags |= D3D12_BARRIER_ACCESS_COPY_SOURCE;
@@ -180,8 +186,11 @@ namespace miki::rhi {
     // =========================================================================
 
     void D3D12CommandBuffer::BeginImpl() {
-        allocator_->Reset();
-        cmd_->Reset(allocator_, nullptr);
+        // NOTE: Do NOT call allocator_->Reset() or cmd_->Reset() here.
+        // Pool-reset model (spec §19):
+        //   - ResetCommandPoolImpl resets the allocator
+        //   - AllocateFromPoolImpl calls cmd->Reset(allocator, nullptr), entering Recording state
+        //   - BeginImpl only performs per-recording setup (descriptor heaps, etc.)
 
         // Set descriptor heaps
         ID3D12DescriptorHeap* heaps[] = {
@@ -196,7 +205,7 @@ namespace miki::rhi {
     }
 
     void D3D12CommandBuffer::ResetImpl() {
-        allocator_->Reset();
+        // NOTE: Do NOT call allocator_->Reset() here — see BeginImpl comment.
         cmd_->Reset(allocator_, nullptr);
         currentRootSignature_ = nullptr;
         currentIsCompute_ = false;
@@ -538,10 +547,15 @@ namespace miki::rhi {
 
     void D3D12CommandBuffer::CmdPipelineBarrierImpl(const PipelineBarrierDesc& desc) {
         D3D12_GLOBAL_BARRIER globalBarrier{};
-        globalBarrier.SyncBefore = ToD3D12BarrierSync(desc.srcStage);
-        globalBarrier.SyncAfter = ToD3D12BarrierSync(desc.dstStage);
         globalBarrier.AccessBefore = ToD3D12BarrierAccess(desc.srcAccess);
         globalBarrier.AccessAfter = ToD3D12BarrierAccess(desc.dstAccess);
+        // D3D12 Enhanced Barriers: Access NO_ACCESS requires Sync SYNC_NONE
+        globalBarrier.SyncBefore = (globalBarrier.AccessBefore == D3D12_BARRIER_ACCESS_NO_ACCESS)
+                                       ? D3D12_BARRIER_SYNC_NONE
+                                       : ToD3D12BarrierSync(desc.srcStage);
+        globalBarrier.SyncAfter = (globalBarrier.AccessAfter == D3D12_BARRIER_ACCESS_NO_ACCESS)
+                                      ? D3D12_BARRIER_SYNC_NONE
+                                      : ToD3D12BarrierSync(desc.dstStage);
 
         D3D12_BARRIER_GROUP group{};
         group.Type = D3D12_BARRIER_TYPE_GLOBAL;
@@ -557,10 +571,15 @@ namespace miki::rhi {
         }
 
         D3D12_BUFFER_BARRIER bufBarrier{};
-        bufBarrier.SyncBefore = ToD3D12BarrierSync(desc.srcStage);
-        bufBarrier.SyncAfter = ToD3D12BarrierSync(desc.dstStage);
         bufBarrier.AccessBefore = ToD3D12BarrierAccess(desc.srcAccess);
         bufBarrier.AccessAfter = ToD3D12BarrierAccess(desc.dstAccess);
+        // D3D12 Enhanced Barriers: Access NO_ACCESS requires Sync SYNC_NONE
+        bufBarrier.SyncBefore = (bufBarrier.AccessBefore == D3D12_BARRIER_ACCESS_NO_ACCESS)
+                                    ? D3D12_BARRIER_SYNC_NONE
+                                    : ToD3D12BarrierSync(desc.srcStage);
+        bufBarrier.SyncAfter = (bufBarrier.AccessAfter == D3D12_BARRIER_ACCESS_NO_ACCESS)
+                                   ? D3D12_BARRIER_SYNC_NONE
+                                   : ToD3D12BarrierSync(desc.dstStage);
         bufBarrier.pResource = data->resource.Get();
         bufBarrier.Offset = desc.offset;
         bufBarrier.Size = (desc.size == 0) ? UINT64_MAX : desc.size;
@@ -579,10 +598,15 @@ namespace miki::rhi {
         }
 
         D3D12_TEXTURE_BARRIER texBarrier{};
-        texBarrier.SyncBefore = ToD3D12BarrierSync(desc.srcStage);
-        texBarrier.SyncAfter = ToD3D12BarrierSync(desc.dstStage);
         texBarrier.AccessBefore = ToD3D12BarrierAccess(desc.srcAccess);
         texBarrier.AccessAfter = ToD3D12BarrierAccess(desc.dstAccess);
+        // D3D12 Enhanced Barriers rule: when Access is NO_ACCESS, Sync MUST be SYNC_NONE
+        texBarrier.SyncBefore = (texBarrier.AccessBefore == D3D12_BARRIER_ACCESS_NO_ACCESS)
+                                    ? D3D12_BARRIER_SYNC_NONE
+                                    : ToD3D12BarrierSync(desc.srcStage);
+        texBarrier.SyncAfter = (texBarrier.AccessAfter == D3D12_BARRIER_ACCESS_NO_ACCESS)
+                                   ? D3D12_BARRIER_SYNC_NONE
+                                   : ToD3D12BarrierSync(desc.dstStage);
         texBarrier.LayoutBefore = ToD3D12BarrierLayout(desc.oldLayout);
         texBarrier.LayoutAfter = ToD3D12BarrierLayout(desc.newLayout);
         texBarrier.pResource = data->resource.Get();
