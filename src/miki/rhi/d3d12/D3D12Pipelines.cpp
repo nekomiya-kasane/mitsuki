@@ -142,6 +142,41 @@ namespace miki::rhi {
     }  // namespace
 
     // =========================================================================
+    // =========================================================================
+    // Mesh Shader Pipeline (Pipeline State Stream API)
+    // =========================================================================
+
+    namespace {
+        // Pipeline State Stream subobject wrapper
+        template <typename Inner, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type>
+        struct alignas(void*) PipelineStateStreamSubobject {
+            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type = Type;
+            Inner inner{};
+        };
+
+        // Mesh shader pipeline state stream structure
+        struct MeshShaderPipelineStateStream {
+            PipelineStateStreamSubobject<ID3D12RootSignature*, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE>
+                rootSig;
+            PipelineStateStreamSubobject<D3D12_SHADER_BYTECODE, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS> ampShader;
+            PipelineStateStreamSubobject<D3D12_SHADER_BYTECODE, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS> meshShader;
+            PipelineStateStreamSubobject<D3D12_SHADER_BYTECODE, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS> pixelShader;
+            PipelineStateStreamSubobject<D3D12_BLEND_DESC, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND> blend;
+            PipelineStateStreamSubobject<D3D12_RASTERIZER_DESC, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER>
+                rasterizer;
+            PipelineStateStreamSubobject<D3D12_DEPTH_STENCIL_DESC, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL>
+                depthStencil;
+            PipelineStateStreamSubobject<
+                D3D12_RT_FORMAT_ARRAY, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS>
+                rtvFormats;
+            PipelineStateStreamSubobject<DXGI_FORMAT, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT>
+                dsvFormat;
+            PipelineStateStreamSubobject<DXGI_SAMPLE_DESC, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC> sampleDesc;
+            PipelineStateStreamSubobject<UINT, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK> sampleMask;
+        };
+    }  // namespace
+
+    // =========================================================================
     // Graphics Pipeline
     // =========================================================================
 
@@ -151,6 +186,111 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
+        // Helper to get shader bytecode
+        auto getShaderBytecode = [&](ShaderModuleHandle h) -> D3D12_SHADER_BYTECODE {
+            if (!h.IsValid()) {
+                return {};
+            }
+            auto* mod = shaderModules_.Lookup(h);
+            if (!mod) {
+                return {};
+            }
+            return {mod->bytecode.data(), mod->bytecode.size()};
+        };
+
+        // =====================================================================
+        // Mesh Shader Pipeline (uses Pipeline State Stream API)
+        // =====================================================================
+        if (desc.IsMeshShaderPipeline()) {
+            MeshShaderPipelineStateStream stream{};
+
+            // Root signature
+            stream.rootSig.inner = layoutData->rootSignature.Get();
+
+            // Shaders
+            stream.ampShader.inner = getShaderBytecode(desc.taskShader);
+            stream.meshShader.inner = getShaderBytecode(desc.meshShader);
+            stream.pixelShader.inner = getShaderBytecode(desc.fragmentShader);
+
+            // Blend state
+            stream.blend.inner.AlphaToCoverageEnable = FALSE;
+            stream.blend.inner.IndependentBlendEnable = (desc.colorBlends.size() > 1) ? TRUE : FALSE;
+            for (size_t i = 0; i < desc.colorBlends.size() && i < 8; ++i) {
+                auto& cb = desc.colorBlends[i];
+                auto& rt = stream.blend.inner.RenderTarget[i];
+                rt.BlendEnable = cb.blendEnable ? TRUE : FALSE;
+                rt.SrcBlend = ToD3D12Blend(cb.srcColor);
+                rt.DestBlend = ToD3D12Blend(cb.dstColor);
+                rt.BlendOp = ToD3D12BlendOp(cb.colorOp);
+                rt.SrcBlendAlpha = ToD3D12Blend(cb.srcAlpha);
+                rt.DestBlendAlpha = ToD3D12Blend(cb.dstAlpha);
+                rt.BlendOpAlpha = ToD3D12BlendOp(cb.alphaOp);
+                rt.RenderTargetWriteMask = static_cast<UINT8>(cb.writeMask);
+                rt.LogicOpEnable = FALSE;
+            }
+
+            // Rasterizer
+            stream.rasterizer.inner.FillMode = ToD3D12FillMode(desc.polygonMode);
+            stream.rasterizer.inner.CullMode = ToD3D12CullMode(desc.cullMode);
+            stream.rasterizer.inner.FrontCounterClockwise
+                = (desc.frontFace == FrontFace::CounterClockwise) ? TRUE : FALSE;
+            stream.rasterizer.inner.DepthBias = 0;
+            stream.rasterizer.inner.DepthBiasClamp = 0.0f;
+            stream.rasterizer.inner.SlopeScaledDepthBias = 0.0f;
+            stream.rasterizer.inner.DepthClipEnable = desc.depthClampEnable ? FALSE : TRUE;
+            stream.rasterizer.inner.MultisampleEnable = (desc.sampleCount > 1) ? TRUE : FALSE;
+            stream.rasterizer.inner.AntialiasedLineEnable = FALSE;
+            stream.rasterizer.inner.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+            // Depth/stencil
+            stream.depthStencil.inner.DepthEnable = desc.depthTestEnable ? TRUE : FALSE;
+            stream.depthStencil.inner.DepthWriteMask
+                = desc.depthWriteEnable ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
+            stream.depthStencil.inner.DepthFunc = ToD3D12ComparisonFunc(desc.depthCompareOp);
+            stream.depthStencil.inner.StencilEnable = desc.stencilTestEnable ? TRUE : FALSE;
+            stream.depthStencil.inner.StencilReadMask = desc.stencilFront.compareMask;
+            stream.depthStencil.inner.StencilWriteMask = desc.stencilFront.writeMask;
+            stream.depthStencil.inner.FrontFace = ToD3D12DepthStencilOpDesc(desc.stencilFront);
+            stream.depthStencil.inner.BackFace = ToD3D12DepthStencilOpDesc(desc.stencilBack);
+
+            // Render targets
+            stream.rtvFormats.inner.NumRenderTargets = static_cast<UINT>(desc.colorFormats.size());
+            for (size_t i = 0; i < desc.colorFormats.size() && i < 8; ++i) {
+                stream.rtvFormats.inner.RTFormats[i] = ToDxgiFormat(desc.colorFormats[i]);
+            }
+            stream.dsvFormat.inner = ToDxgiFormat(desc.depthFormat);
+
+            // MSAA
+            stream.sampleDesc.inner.Count = desc.sampleCount;
+            stream.sampleDesc.inner.Quality = 0;
+            stream.sampleMask.inner = UINT_MAX;
+
+            // Create PSO via Pipeline State Stream
+            D3D12_PIPELINE_STATE_STREAM_DESC streamDesc{};
+            streamDesc.SizeInBytes = sizeof(stream);
+            streamDesc.pPipelineStateSubobjectStream = &stream;
+
+            ComPtr<ID3D12PipelineState> pso;
+            HRESULT hr = device_->CreatePipelineState(&streamDesc, IID_PPV_ARGS(&pso));
+            if (FAILED(hr)) {
+                return std::unexpected(RhiError::PipelineCreationFailed);
+            }
+
+            auto [handle, data] = pipelines_.Allocate();
+            if (!data) {
+                return std::unexpected(RhiError::TooManyObjects);
+            }
+            data->pso = std::move(pso);
+            data->rootSignature = layoutData->rootSignature;
+            data->isCompute = false;
+            data->isMeshShader = true;
+            data->topology = desc.topology;
+            return handle;
+        }
+
+        // =====================================================================
+        // Traditional VS/PS Pipeline
+        // =====================================================================
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
         psoDesc.pRootSignature = layoutData->rootSignature.Get();
 
@@ -167,13 +307,7 @@ namespace miki::rhi {
             out.BytecodeLength = mod->bytecode.size();
         };
 
-        if (desc.IsMeshShaderPipeline()) {
-            // Mesh shader pipeline uses MS pipeline state stream (ID3D12Device2)
-            // For now, use the traditional path for VS/PS
-            setShader(desc.meshShader, psoDesc.VS);  // Placeholder — proper MS PSO requires stream API
-        } else {
-            setShader(desc.vertexShader, psoDesc.VS);
-        }
+        setShader(desc.vertexShader, psoDesc.VS);
         setShader(desc.fragmentShader, psoDesc.PS);
 
         // Blend state
@@ -271,7 +405,9 @@ namespace miki::rhi {
         }
         data->pso = std::move(pso);
         data->rootSignature = layoutData->rootSignature;
+        data->topology = desc.topology;
         data->isCompute = false;
+        data->isMeshShader = false;
         return handle;
     }
 

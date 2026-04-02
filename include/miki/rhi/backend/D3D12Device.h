@@ -105,7 +105,9 @@ namespace miki::rhi {
     struct D3D12PipelineData {
         ComPtr<ID3D12PipelineState> pso;
         ComPtr<ID3D12RootSignature> rootSignature;
+        PrimitiveTopology topology = PrimitiveTopology::TriangleList;
         bool isCompute = false;
+        bool isMeshShader = false;
     };
 
     struct D3D12PipelineLayoutData {
