@@ -382,12 +382,13 @@ namespace miki::rhi {
     auto WebGPUDevice::GetSurfaceCapabilitiesImpl([[maybe_unused]] const NativeWindowHandle& window) const
         -> RenderSurfaceCapabilities {
         RenderSurfaceCapabilities caps;
-        // Dawn/WebGPU preferred surface format is BGRA8Unorm
-        caps.supportedFormats = {Format::BGRA8_UNORM, Format::RGBA8_UNORM};
+        // Dawn supports both UNORM and SRGB surface formats.
+        // SRGB formats enable hardware linear→sRGB conversion on write.
+        caps.supportedFormats = {Format::BGRA8_UNORM, Format::BGRA8_SRGB, Format::RGBA8_UNORM, Format::RGBA8_SRGB};
         caps.supportedPresentModes = {PresentMode::Fifo, PresentMode::Mailbox};
         caps.supportedColorSpaces = {SurfaceColorSpace::SRGB};
-        caps.minExtent = {1, 1};
-        caps.maxExtent = {16384, 16384};
+        caps.minExtent = {.width = 1, .height = 1};
+        caps.maxExtent = {.width = 16384, .height = 16384};
         caps.minImageCount = 2;
         caps.maxImageCount = 3;
         return caps;
