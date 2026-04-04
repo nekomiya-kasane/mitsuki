@@ -47,6 +47,28 @@ namespace miki::rhi {
         }
     }
 
+    static auto FromWGPUTextureFormat(WGPUTextureFormat fmt) -> std::optional<Format> {
+        switch (fmt) {
+            case WGPUTextureFormat_BGRA8Unorm: return Format::BGRA8_UNORM;
+            case WGPUTextureFormat_BGRA8UnormSrgb: return Format::BGRA8_SRGB;
+            case WGPUTextureFormat_RGBA8Unorm: return Format::RGBA8_UNORM;
+            case WGPUTextureFormat_RGBA8UnormSrgb: return Format::RGBA8_SRGB;
+            case WGPUTextureFormat_RGBA16Float: return Format::RGBA16_FLOAT;
+            case WGPUTextureFormat_RGB10A2Unorm: return Format::RGB10A2_UNORM;
+            default: return std::nullopt;
+        }
+    }
+
+    static auto FromWGPUPresentMode(WGPUPresentMode mode) -> std::optional<PresentMode> {
+        switch (mode) {
+            case WGPUPresentMode_Immediate: return PresentMode::Immediate;
+            case WGPUPresentMode_Mailbox: return PresentMode::Mailbox;
+            case WGPUPresentMode_Fifo: return PresentMode::Fifo;
+            case WGPUPresentMode_FifoRelaxed: return PresentMode::FifoRelaxed;
+            default: return std::nullopt;
+        }
+    }
+
     /// Create a WGPUSurface from the NativeWindowHandle variant.
     static auto CreateWGPUSurface(WGPUInstance instance, const NativeWindowHandle& nativeHandle, const char* debugName)
         -> WGPUSurface {
@@ -379,18 +401,56 @@ namespace miki::rhi {
     // Surface capability query
     // =========================================================================
 
-    auto WebGPUDevice::GetSurfaceCapabilitiesImpl([[maybe_unused]] const NativeWindowHandle& window) const
-        -> RenderSurfaceCapabilities {
+    auto WebGPUDevice::GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities {
         RenderSurfaceCapabilities caps;
-        // Dawn supports both UNORM and SRGB surface formats.
-        // SRGB formats enable hardware linear→sRGB conversion on write.
-        caps.supportedFormats = {Format::BGRA8_UNORM, Format::BGRA8_SRGB, Format::RGBA8_UNORM, Format::RGBA8_SRGB};
-        caps.supportedPresentModes = {PresentMode::Fifo, PresentMode::Mailbox};
+
+        // Hardcoded fallbacks (used if real query fails)
+        caps.supportedFormats = {Format::BGRA8_UNORM};
+        caps.supportedPresentModes = {PresentMode::Fifo};
         caps.supportedColorSpaces = {SurfaceColorSpace::SRGB};
         caps.minExtent = {.width = 1, .height = 1};
         caps.maxExtent = {.width = 16384, .height = 16384};
         caps.minImageCount = 2;
         caps.maxImageCount = 3;
+
+        // Create a temporary WGPUSurface to query real adapter capabilities.
+        // Dawn requires (surface, adapter) pair for capability queries.
+        WGPUSurface tempSurface = CreateWGPUSurface(instance_, window, nullptr);
+        if (!tempSurface) {
+            return caps;
+        }
+
+        WGPUSurfaceCapabilities wgpuCaps = WGPU_SURFACE_CAPABILITIES_INIT;
+        WGPUStatus status = wgpuSurfaceGetCapabilities(tempSurface, adapter_, &wgpuCaps);
+        if (status != WGPUStatus_Success) {
+            wgpuSurfaceRelease(tempSurface);
+            return caps;
+        }
+
+        // Convert formats
+        caps.supportedFormats.clear();
+        for (size_t i = 0; i < wgpuCaps.formatCount; ++i) {
+            if (auto fmt = FromWGPUTextureFormat(wgpuCaps.formats[i])) {
+                caps.supportedFormats.push_back(*fmt);
+            }
+        }
+        if (caps.supportedFormats.empty()) {
+            caps.supportedFormats.push_back(Format::BGRA8_UNORM);
+        }
+
+        // Convert present modes
+        caps.supportedPresentModes.clear();
+        for (size_t i = 0; i < wgpuCaps.presentModeCount; ++i) {
+            if (auto pm = FromWGPUPresentMode(wgpuCaps.presentModes[i])) {
+                caps.supportedPresentModes.push_back(*pm);
+            }
+        }
+        if (caps.supportedPresentModes.empty()) {
+            caps.supportedPresentModes.push_back(PresentMode::Fifo);
+        }
+
+        wgpuSurfaceCapabilitiesFreeMembers(wgpuCaps);
+        wgpuSurfaceRelease(tempSurface);
         return caps;
     }
 
