@@ -531,18 +531,30 @@ namespace miki::rhi {
             return std::unexpected(RhiError::TooManyObjects);
         }
 
-        // Interpret code as WGSL text
-        std::string_view wgslSource(reinterpret_cast<const char*>(desc.code.data()), desc.code.size());
+        // Auto-detect SPIR-V vs WGSL: SPIR-V starts with magic 0x07230203
+        static constexpr uint32_t kSpirvMagic = 0x07230203;
+        bool isSpirvInput
+            = desc.code.size() >= 4 && std::memcmp(desc.code.data(), &kSpirvMagic, sizeof(kSpirvMagic)) == 0;
 
+        WGPUShaderSourceSPIRV spirvDesc{};
         WGPUShaderSourceWGSL wgslDesc{};
-        wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
-        wgslDesc.chain.next = nullptr;
-        wgslDesc.code = {.data = wgslSource.data(), .length = wgslSource.size()};
-
         WGPUShaderModuleDescriptor moduleDesc{};
-        moduleDesc.nextInChain = &wgslDesc.chain;
         moduleDesc.label = desc.debugName ? WGPUStringView{.data = desc.debugName, .length = WGPU_STRLEN}
                                           : WGPUStringView{.data = nullptr, .length = 0};
+
+        if (isSpirvInput) {
+            spirvDesc.chain.sType = WGPUSType_ShaderSourceSPIRV;
+            spirvDesc.chain.next = nullptr;
+            spirvDesc.codeSize = static_cast<uint32_t>(desc.code.size() / sizeof(uint32_t));
+            spirvDesc.code = reinterpret_cast<const uint32_t*>(desc.code.data());
+            moduleDesc.nextInChain = &spirvDesc.chain;
+        } else {
+            std::string_view wgslSource(reinterpret_cast<const char*>(desc.code.data()), desc.code.size());
+            wgslDesc.chain.sType = WGPUSType_ShaderSourceWGSL;
+            wgslDesc.chain.next = nullptr;
+            wgslDesc.code = {.data = wgslSource.data(), .length = wgslSource.size()};
+            moduleDesc.nextInChain = &wgslDesc.chain;
+        }
 
         data->module = wgpuDeviceCreateShaderModule(device_, &moduleDesc);
         if (!data->module) {
@@ -552,7 +564,9 @@ namespace miki::rhi {
 
         data->stage = desc.stage;
         data->entryPoint = desc.entryPoint ? desc.entryPoint : "main";
-        data->wgslSource = std::string(wgslSource);
+        if (!isSpirvInput) {
+            data->wgslSource = std::string(reinterpret_cast<const char*>(desc.code.data()), desc.code.size());
+        }
 
         return handle;
     }
