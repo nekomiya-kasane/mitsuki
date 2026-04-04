@@ -612,7 +612,8 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // Memory aliasing (T4 fallback: separate allocation — no true aliasing)
+    // Adaptation: §20b Feature::SparseBinding → Strategy::Unsupported
+    // OpenGL memory aliasing not supported on T4 — fallback: separate allocation.
     // =========================================================================
 
     auto OpenGLDevice::CreateMemoryHeapImpl(const MemoryHeapDesc&) -> RhiResult<DeviceMemoryHandle> {

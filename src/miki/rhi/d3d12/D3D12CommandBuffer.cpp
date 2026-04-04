@@ -508,14 +508,16 @@ namespace miki::rhi {
     void D3D12CommandBuffer::CmdBlitTextureImpl(
         TextureHandle /*src*/, TextureHandle /*dst*/, const TextureBlitRegion& /*region*/, Filter /*filter*/
     ) {
-        // D3D12 has no native blit — requires a fullscreen quad + shader or compute pass
-        // Deferred: production code uses a pre-built blit pipeline
+        // Adaptation: §20b Feature::CmdBlitTexture → Strategy::ShaderEmulation
+        // D3D12 has no native blit — requires a fullscreen quad + shader or compute pass.
+        // TODO: Deferred: production code uses a pre-built blit pipeline.
     }
 
     void D3D12CommandBuffer::
         CmdFillBufferImpl(BufferHandle /*buffer*/, uint64_t /*offset*/, uint64_t /*size*/, uint32_t /*value*/) {
-        // D3D12 has no CmdFillBuffer equivalent — requires compute shader or ClearUnorderedAccessViewUint
-        // Deferred: production code uses UAV clear
+        // Adaptation: §20b Feature::CmdFillBufferNonZero → Strategy::ShaderEmulation
+        // D3D12 has no CmdFillBuffer equivalent — requires compute shader or ClearUnorderedAccessViewUint.
+        // TODO: Deferred: production code uses UAV clear.
     }
 
     void D3D12CommandBuffer::

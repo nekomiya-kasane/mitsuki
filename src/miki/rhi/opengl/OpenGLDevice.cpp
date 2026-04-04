@@ -170,7 +170,9 @@ namespace miki::rhi {
             gl_->DebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
         }
 
-        // Create push constant emulation UBO (128 bytes at binding 0)
+        // Adaptation: §20b Feature::PushConstants → Strategy::UboEmulation
+        // OpenGL has no native push constants. Emulated via 128B UBO at binding 0.
+        // User UBO bindings shifted +1 to avoid collision.
         if (hasDSA_) {
             gl_->CreateBuffers(1, &pushConstantUBO_);
             gl_->NamedBufferStorage(pushConstantUBO_, 128, nullptr, GL_DYNAMIC_STORAGE_BIT | GL_MAP_WRITE_BIT);
@@ -743,7 +745,7 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // T4 unsupported features — sparse binding
+    // Adaptation: §20b Feature::SparseBinding → Strategy::Unsupported
     // =========================================================================
     auto OpenGLDevice::GetSparsePageSizeImpl() const -> SparsePageSize {
         assert(false && "Sparse binding not available on OpenGL");
@@ -757,7 +759,7 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // T4 unsupported features — acceleration structures
+    // Adaptation: §20b Feature::RayTracing → Strategy::Unsupported
     // =========================================================================
 
     auto OpenGLDevice::GetBLASBuildSizesImpl(const BLASDesc&) -> AccelStructBuildSizes {
