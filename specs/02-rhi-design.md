@@ -557,6 +557,32 @@ struct BufferDesc {
 | WebGPU  | None (single queue model)                  | N/A                                                     |
 | OpenGL  | None (single context model)                | N/A                                                     |
 
+**Why EXCLUSIVE over CONCURRENT**:
+
+miki's 3-queue streaming architecture (see `rendering-pipeline-architecture.md` §5.8.1) uses a **producer-consumer** pattern:
+
+```
+Transfer Queue: write cluster pages → release barrier (ownership to Graphics) → signal timeline semaphore
+Graphics Queue: wait semaphore → acquire barrier (ownership from Transfer) → read committed pages
+```
+
+This is **sequential access**, not simultaneous — the ideal scenario for `EXCLUSIVE` mode.
+
+| Mode         | Performance | Use Case                                                        |
+| ------------ | ----------- | --------------------------------------------------------------- |
+| `EXCLUSIVE`  | ✅ Optimal  | Resource accessed by one queue family at a time                 |
+| `CONCURRENT` | ❌ Overhead | Resource accessed by multiple queue families **simultaneously** |
+
+`CONCURRENT` mode incurs:
+
+- Extra cache coherency operations on every access
+- Potential placement in slower memory regions on some hardware
+- Loss of queue-specific driver optimizations
+
+Since miki never requires true simultaneous cross-queue access (Graphics only reads **committed** pages, never in-flight uploads), `EXCLUSIVE` + barrier ownership transfer is both correct and optimal.
+
+**Exception**: Swapchain images may use `CONCURRENT` when graphics and present queue families differ — this is handled internally by `CreateSwapchainImpl`.
+
 ```cpp
 // Device API
 auto CreateBuffer(const BufferDesc&) -> Result<BufferHandle>;
