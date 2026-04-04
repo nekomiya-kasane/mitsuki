@@ -170,15 +170,27 @@ namespace miki::rhi {
             usage |= WGPUBufferUsage_CopyDst;
         }
 
-        // CpuToGpu / GpuToCpu need map access
-        bool mappable = (desc.memory == MemoryLocation::CpuToGpu || desc.memory == MemoryLocation::GpuToCpu);
-        if (mappable) {
-            if (desc.memory == MemoryLocation::CpuToGpu) {
+        // Adaptation: §20b Feature::BufferMapWriteWithUsage → Strategy::ShadowBuffer
+        // WebGPU forbids MapWrite combined with Vertex/Index/Uniform/Storage.
+        // For CpuToGpu buffers with GPU usage, use shadow buffer pattern:
+        //   GPU buffer gets CopyDst (no MapWrite), CPU shadow vector holds writes,
+        //   Unmap flushes via wgpuQueueWriteBuffer.
+        bool needsShadow = false;
+        if (desc.memory == MemoryLocation::CpuToGpu) {
+            constexpr uint32_t kGpuUsageMask
+                = static_cast<uint32_t>(BufferUsage::Vertex) | static_cast<uint32_t>(BufferUsage::Index)
+                  | static_cast<uint32_t>(BufferUsage::Uniform) | static_cast<uint32_t>(BufferUsage::Storage);
+            bool hasGpuUsage = (static_cast<uint32_t>(desc.usage) & kGpuUsageMask) != 0;
+            if (hasGpuUsage) {
+                // ShadowBuffer: GPU buffer gets CopyDst instead of MapWrite
+                usage |= WGPUBufferUsage_CopyDst;
+                needsShadow = true;
+            } else {
+                // Pure upload buffer — MapWrite is fine
                 usage |= WGPUBufferUsage_MapWrite;
             }
-            if (desc.memory == MemoryLocation::GpuToCpu) {
-                usage |= WGPUBufferUsage_MapRead;
-            }
+        } else if (desc.memory == MemoryLocation::GpuToCpu) {
+            usage |= WGPUBufferUsage_MapRead;
         }
 
         WGPUBufferDescriptor bufDesc{};
@@ -198,6 +210,9 @@ namespace miki::rhi {
         data->usage = desc.usage;
         data->wgpuUsage = usage;
         data->mappedPtr = nullptr;
+        if (needsShadow) {
+            data->shadow.Activate(desc.size);
+        }
 
         totalAllocatedBytes_ += desc.size;
         ++totalAllocationCount_;
@@ -225,7 +240,15 @@ namespace miki::rhi {
             return std::unexpected(RhiError::InvalidHandle);
         }
 
-        // Synchronous map via callback
+        // Adaptation: ShadowBuffer path (§20b Feature::BufferMapWriteWithUsage)
+        // For CpuToGpu buffers with GPU usage, return pointer to CPU shadow data.
+        // No GPU map needed — data is flushed on Unmap via wgpuQueueWriteBuffer.
+        if (data->shadow.IsActive()) {
+            data->mappedPtr = data->shadow.Map();
+            return data->mappedPtr;
+        }
+
+        // Native MapAsync path (pure upload or readback buffers)
         struct MapData {
             WGPUMapAsyncStatus status = WGPUMapAsyncStatus_Error;
             bool done = false;
@@ -274,6 +297,17 @@ namespace miki::rhi {
         if (!data || !data->buffer) {
             return;
         }
+
+        // Adaptation: ShadowBuffer flush (§20b Feature::BufferMapWriteWithUsage)
+        // CPU shadow data → GPU buffer via wgpuQueueWriteBuffer. One extra memcpy per update.
+        if (data->shadow.IsActive()) {
+            auto shadowData = data->shadow.Data();
+            wgpuQueueWriteBuffer(queue_, data->buffer, 0, shadowData.data(), shadowData.size());
+            data->shadow.Unmap();
+            data->mappedPtr = nullptr;
+            return;
+        }
+
         wgpuBufferUnmap(data->buffer);
         data->mappedPtr = nullptr;
     }
@@ -535,7 +569,8 @@ namespace miki::rhi {
     }
 
     // =========================================================================
-    // Memory aliasing (not supported on T3 — fallback: separate allocation)
+    // Memory aliasing — Adaptation: §20b Feature::SparseBinding → Strategy::Unsupported
+    // WebGPU has no sparse resource / memory aliasing API.
     // =========================================================================
 
     auto WebGPUDevice::CreateMemoryHeapImpl([[maybe_unused]] const MemoryHeapDesc& desc)

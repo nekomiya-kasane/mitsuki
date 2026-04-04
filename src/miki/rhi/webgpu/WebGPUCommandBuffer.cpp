@@ -527,8 +527,25 @@ namespace miki::rhi {
                 depthStencilAtt.depthClearValue = desc.depthAttachment->clearValue.depthStencil.depth;
                 depthStencilAtt.depthReadOnly = false;
 
-                // Stencil load/store from the stencil attachment (or defaults)
-                if (desc.stencilAttachment) {
+                // Adaptation: §20b Feature::DepthOnlyStencilOps → Strategy::ParameterFixup
+                // For depth-only formats (D16, D32_FLOAT) that have no stencil aspect,
+                // WebGPU validation requires stencilLoadOp/stencilStoreOp = Undefined
+                // and stencilReadOnly = true. Zero overhead — pure parameter correction.
+                bool isDepthOnly = false;
+                auto* texData = device_->GetTexturePool().Lookup(viewData->parentTexture);
+                if (texData) {
+                    isDepthOnly
+                        = (texData->format == WGPUTextureFormat_Depth16Unorm
+                           || texData->format == WGPUTextureFormat_Depth32Float);
+                }
+
+                if (isDepthOnly) {
+                    // ParameterFixup: force stencil ops to Undefined for depth-only formats
+                    depthStencilAtt.stencilLoadOp = WGPULoadOp_Undefined;
+                    depthStencilAtt.stencilStoreOp = WGPUStoreOp_Undefined;
+                    depthStencilAtt.stencilClearValue = 0;
+                    depthStencilAtt.stencilReadOnly = true;
+                } else if (desc.stencilAttachment) {
                     depthStencilAtt.stencilLoadOp = ToWGPULoadOp(desc.stencilAttachment->loadOp);
                     depthStencilAtt.stencilStoreOp = ToWGPUStoreOp(desc.stencilAttachment->storeOp);
                     depthStencilAtt.stencilClearValue = desc.stencilAttachment->clearValue.depthStencil.stencil;
@@ -586,7 +603,8 @@ namespace miki::rhi {
     void WebGPUCommandBuffer::CmdSetDepthBiasImpl(
         [[maybe_unused]] float constantFactor, [[maybe_unused]] float clamp, [[maybe_unused]] float slopeFactor
     ) {
-        // WebGPU depth bias is set at pipeline creation time, not dynamically
+        // Adaptation: §20b Feature::DynamicDepthBias → Strategy::Unsupported
+        // WebGPU depth bias is set at pipeline creation time, not dynamically.
         MIKI_LOG_WARN(
             ::miki::debug::LogCategory::Rhi, "WebGPU T3: dynamic depth bias not supported (set at pipeline creation)"
         );
