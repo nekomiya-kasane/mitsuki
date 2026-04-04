@@ -2594,6 +2594,1218 @@ Chunked binding overhead: ~0.01ms per rebind (negligible). CPU pre-filter: spati
 
 ---
 
+## 20a. RHI Validation Layer
+
+### 20a.1 Motivation & Scope
+
+RHI backends have **divergent constraints** on resource creation, command recording, and render pass configuration. Without a structured validation layer, these constraints surface as:
+
+- Opaque backend error messages (Dawn validation errors, D3D12 debug layer, Vulkan validation layer)
+- Runtime failures that could be caught at resource creation time
+- Silent behavioral differences across backends (e.g., WebGPU shadow buffer vs Vulkan direct map)
+
+The RHI Validation Layer provides:
+
+1. **Structured capability rules** — constexpr tables declaring per-backend constraints
+2. **Early fail-fast validation** — catch illegal parameter combinations before calling backend APIs
+3. **Debug diagnostics** — rich error messages with cross-backend comparison hints
+4. **Compile-time opt-in** — zero binary size and zero runtime cost when disabled
+
+**Non-goals**: The validation layer does NOT replace backend-native validation (Vulkan Validation Layers, D3D12 Debug Layer, Dawn error callbacks). It complements them by catching RHI-level semantic errors earlier and with better diagnostics.
+
+### 20a.2 Architecture
+
+```
+User Code
+   │
+   ▼
+DeviceBase<Impl>::CreateBuffer(desc)
+   │
+   ├─ [MIKI_RHI_VALIDATION=1] ──► RhiValidator::ValidateBufferDesc(backend, desc)
+   │                                  │
+   │                                  ├─ Query BackendCapabilityTable[backend]
+   │                                  ├─ Check constraints (constexpr rule evaluation)
+   │                                  ├─ Return RhiResult<void> or RhiValidationError
+   │                                  │
+   │◄─────────────────────────────────┘
+   │
+   ▼
+Impl::CreateBufferImpl(desc)   ◄── Backend-specific adaptation (shadow buffer, heap type, etc.)
+```
+
+**Key design principle**: The validation layer is a **pure predicate** — it checks, warns, and optionally rejects. It never modifies the desc or performs adaptation. Backend adaptation (e.g., WebGPU shadow buffer) remains in the backend `*Impl` methods.
+
+### 20a.3 Compile-Time Opt-In
+
+```cpp
+// CMake: -DMIKI_RHI_VALIDATION=1 (default ON for Debug/RelWithDebInfo, OFF for Release)
+// Can also be toggled per-TU via #define before including Device.h
+
+#ifndef MIKI_RHI_VALIDATION
+#   if !defined(NDEBUG) || defined(MIKI_FORCE_RHI_VALIDATION)
+#       define MIKI_RHI_VALIDATION 1
+#   else
+#       define MIKI_RHI_VALIDATION 0
+#   endif
+#endif
+```
+
+When `MIKI_RHI_VALIDATION=0`:
+
+- All validation functions are `[[gnu::always_inline]] constexpr` no-ops returning success
+- The `BackendCapabilityTable` data is not instantiated (no static storage)
+- The compiler eliminates all validation branches via dead code elimination
+- **Zero binary size overhead, zero runtime overhead** — verified by checking `.text` section size delta
+
+When `MIKI_RHI_VALIDATION=1`:
+
+- Validation runs on resource creation, pipeline creation, and render pass begin
+- **Never** on per-draw/dispatch hot paths (CmdDraw, CmdDispatch, CmdBindPipeline)
+- Estimated overhead: <1μs per validated call (constexpr table lookup + bitwise checks)
+
+### 20a.4 BackendCapabilityTable
+
+The central data structure. Each backend declares its constraints as a constexpr struct:
+
+```cpp
+namespace miki::rhi::validation {
+
+/// Buffer memory constraints for a specific backend.
+struct BufferMemoryRule {
+    MemoryLocation memory;
+    BufferUsage forbiddenUsageCombination;  ///< Usage flags that CANNOT coexist with this memory location
+    BufferUsage requiredUsageAddition;      ///< Usage flags the backend will implicitly add
+    bool requiresStagingCopy;               ///< Backend uses staging buffer pattern internally
+    const char* rationale;                  ///< Human-readable reason for the constraint
+};
+
+/// Depth/stencil format constraints for a specific backend.
+struct DepthStencilRule {
+    Format format;
+    bool hasStencilAspect;
+    bool stencilOpsMustBeUndefined;  ///< stencilLoadOp/stencilStoreOp must be Undefined
+    bool stencilReadOnlyRequired;    ///< stencilReadOnly must be true
+};
+
+/// Texture creation constraints for a specific backend.
+struct TextureMemoryRule {
+    MemoryLocation memory;
+    TextureUsage forbiddenUsageCombination;
+    const char* rationale;
+};
+
+/// Complete capability table for one backend.
+/// Note: Uses std::span for rule arrays. Tables are declared `inline const` (not constexpr)
+/// at namespace scope because std::span stores a pointer to the constexpr rule arrays.
+/// The compiler will place these in .rodata and they are effectively immutable.
+struct BackendCapabilityTable {
+    BackendType backend;
+
+    // Buffer constraints
+    std::span<const BufferMemoryRule> bufferMemoryRules;
+
+    // Depth/stencil constraints
+    std::span<const DepthStencilRule> depthStencilRules;
+
+    // Texture constraints
+    std::span<const TextureMemoryRule> textureMemoryRules;
+
+    // Limits
+    uint32_t maxPushConstantSize;
+    uint32_t maxBindGroups;              ///< WebGPU: 4, Vulkan: 8+
+    uint32_t maxStorageBufferBindingSize;
+    uint32_t maxVertexBufferStride;
+    uint32_t maxComputeWorkgroupStorageSize;
+
+    // Feature gates
+    bool supportsMapWriteWithResourceUsage;  ///< Vulkan: true, WebGPU: false, D3D12: false
+    bool supportsPersistentMapping;          ///< Vulkan: true, D3D12: true (Upload), WebGPU: false
+    bool supportsSimultaneousMapAndGpuAccess; ///< Vulkan (coherent): true, others: false
+};
+
+}  // namespace miki::rhi::validation
+```
+
+### 20a.5 Per-Backend Rule Tables
+
+#### WebGPU (Tier 3)
+
+```cpp
+inline constexpr BufferMemoryRule kWebGPUBufferRules[] = {
+    {
+        .memory = MemoryLocation::CpuToGpu,
+        .forbiddenUsageCombination = BufferUsage::Vertex | BufferUsage::Index
+                                   | BufferUsage::Uniform | BufferUsage::Storage
+                                   | BufferUsage::Indirect,
+        // ↑ MapWrite cannot coexist with ANY of these in WebGPU
+        .requiredUsageAddition = BufferUsage::TransferDst,  // CopyDst added instead
+        .requiresStagingCopy = true,
+        .rationale = "WebGPU forbids MAP_WRITE combined with resource usage flags. "
+                     "Backend uses CPU shadow buffer + wgpuQueueWriteBuffer."
+    },
+    {
+        .memory = MemoryLocation::GpuToCpu,
+        .forbiddenUsageCombination = BufferUsage::Vertex | BufferUsage::Index
+                                   | BufferUsage::Uniform | BufferUsage::Storage,
+        .requiredUsageAddition = BufferUsage::TransferDst,
+        .requiresStagingCopy = false,
+        .rationale = "WebGPU MapRead buffers can only have MAP_READ | COPY_DST usage."
+    },
+};
+
+inline constexpr DepthStencilRule kWebGPUDepthStencilRules[] = {
+    {Format::D16_UNORM,        .hasStencilAspect = false, .stencilOpsMustBeUndefined = true, .stencilReadOnlyRequired = true},
+    {Format::D32_FLOAT,        .hasStencilAspect = false, .stencilOpsMustBeUndefined = true, .stencilReadOnlyRequired = true},
+    {Format::D24_UNORM_S8_UINT,.hasStencilAspect = true,  .stencilOpsMustBeUndefined = false,.stencilReadOnlyRequired = false},
+    {Format::D32_FLOAT_S8_UINT,.hasStencilAspect = true,  .stencilOpsMustBeUndefined = false,.stencilReadOnlyRequired = false},
+};
+
+inline const BackendCapabilityTable kWebGPUTable = {
+    .backend = BackendType::WebGPU,
+    .bufferMemoryRules = kWebGPUBufferRules,
+    .depthStencilRules = kWebGPUDepthStencilRules,
+    .textureMemoryRules = {},
+    .maxPushConstantSize = 256,   // Emulated via UBO
+    .maxBindGroups = 4,
+    .maxStorageBufferBindingSize = 256 * 1024 * 1024,  // 256MB typical
+    .maxVertexBufferStride = 2048,
+    .maxComputeWorkgroupStorageSize = 16384,
+    .supportsMapWriteWithResourceUsage = false,
+    .supportsPersistentMapping = false,
+    .supportsSimultaneousMapAndGpuAccess = false,
+};
+```
+
+#### Vulkan (Tier 1 / Tier 2)
+
+`VulkanCompat` (Tier 2) shares the same capability table as `Vulkan14` (Tier 1) for validation purposes — the mapping and buffer usage rules are identical. `GetCapabilityTable()` maps both `BackendType::Vulkan14` and `BackendType::VulkanCompat` to `kVulkanTable`.
+
+```cpp
+inline constexpr BufferMemoryRule kVulkanBufferRules[] = {
+    // Vulkan has no forbidden usage combinations for mapped buffers.
+    // HOST_VISIBLE memory can be used with any buffer usage.
+    // Empty rule set = no restrictions.
+};
+
+inline constexpr DepthStencilRule kVulkanDepthStencilRules[] = {
+    // Vulkan allows stencil ops on depth-only formats (they are simply ignored).
+    // No special rules needed — Vulkan validation layer handles edge cases.
+    {Format::D16_UNORM,        .hasStencilAspect = false, .stencilOpsMustBeUndefined = false, .stencilReadOnlyRequired = false},
+    {Format::D32_FLOAT,        .hasStencilAspect = false, .stencilOpsMustBeUndefined = false, .stencilReadOnlyRequired = false},
+    {Format::D24_UNORM_S8_UINT,.hasStencilAspect = true,  .stencilOpsMustBeUndefined = false, .stencilReadOnlyRequired = false},
+    {Format::D32_FLOAT_S8_UINT,.hasStencilAspect = true,  .stencilOpsMustBeUndefined = false, .stencilReadOnlyRequired = false},
+};
+
+inline const BackendCapabilityTable kVulkanTable = {
+    .backend = BackendType::Vulkan14,  // Also used for VulkanCompat
+    .bufferMemoryRules = kVulkanBufferRules,
+    .depthStencilRules = kVulkanDepthStencilRules,
+    .textureMemoryRules = {},
+    .maxPushConstantSize = 256,
+    .maxBindGroups = 8,             // maxBoundDescriptorSets
+    .maxStorageBufferBindingSize = UINT32_MAX,
+    .maxVertexBufferStride = 4096,
+    .maxComputeWorkgroupStorageSize = 32768,
+    .supportsMapWriteWithResourceUsage = true,
+    .supportsPersistentMapping = true,
+    .supportsSimultaneousMapAndGpuAccess = true,  // HOST_COHERENT
+};
+```
+
+#### D3D12 (Tier 1)
+
+```cpp
+inline constexpr BufferMemoryRule kD3D12BufferRules[] = {
+    {
+        .memory = MemoryLocation::CpuToGpu,
+        .forbiddenUsageCombination = BufferUsage{0},  // No forbidden combos at usage level
+        .requiredUsageAddition = BufferUsage{0},
+        .requiresStagingCopy = true,  // D3D12_HEAP_TYPE_UPLOAD -> must CopyBufferRegion to DEFAULT
+        .rationale = "D3D12 UPLOAD heap resources cannot be used directly as VB/IB/CBV on GPU. "
+                     "Backend copies to DEFAULT heap resource."
+    },
+};
+
+inline const BackendCapabilityTable kD3D12Table = {
+    .backend = BackendType::D3D12,
+    .bufferMemoryRules = kD3D12BufferRules,
+    .depthStencilRules = {},  // D3D12 handles depth-only stencil ops gracefully
+    .textureMemoryRules = {},
+    .maxPushConstantSize = 256,  // Root constants: 64 DWORDs
+    .maxBindGroups = 64,         // Root signature slots
+    .maxStorageBufferBindingSize = UINT32_MAX,
+    .maxVertexBufferStride = 2048,
+    .maxComputeWorkgroupStorageSize = 32768,
+    .supportsMapWriteWithResourceUsage = false,  // UPLOAD heap -> needs copy
+    .supportsPersistentMapping = true,
+    .supportsSimultaneousMapAndGpuAccess = false,
+};
+```
+
+#### OpenGL (Tier 4)
+
+```cpp
+inline const BackendCapabilityTable kOpenGLTable = {
+    .backend = BackendType::OpenGL43,
+    .bufferMemoryRules = {},      // GL driver handles everything
+    .depthStencilRules = {},      // GL is lenient with depth-only stencil ops
+    .textureMemoryRules = {},
+    .maxPushConstantSize = 128,   // Emulated via 128B UBO
+    .maxBindGroups = 4,           // Practical UBO binding limit
+    .maxStorageBufferBindingSize = 128 * 1024 * 1024,
+    .maxVertexBufferStride = 2048,
+    .maxComputeWorkgroupStorageSize = 32768,
+    .supportsMapWriteWithResourceUsage = true,   // glMapBuffer works with any target
+    .supportsPersistentMapping = true,            // GL_MAP_PERSISTENT_BIT
+    .supportsSimultaneousMapAndGpuAccess = true,  // GL_MAP_COHERENT_BIT
+};
+```
+
+### 20a.6 Validator API
+
+```cpp
+namespace miki::rhi::validation {
+
+/// Lookup the capability table for a given backend.
+/// Returns nullptr for Mock backend (no validation).
+constexpr auto GetCapabilityTable(BackendType backend) -> const BackendCapabilityTable*;
+
+/// Severity levels for validation messages.
+enum class Severity : uint8_t {
+    Error,    ///< Will fail on this backend. Block the call.
+    Warning,  ///< Will work but with hidden cost (e.g., staging copy). Log and continue.
+    Info,     ///< Informational hint (e.g., "consider GpuOnly for static geometry").
+};
+
+/// Validation diagnostic message.
+struct ValidationDiagnostic {
+    Severity severity;
+    const char* message;       ///< Static string (no heap allocation)
+    const char* rationale;     ///< Why this is a problem
+    BackendType backend;       ///< Which backend triggered this
+};
+
+/// Validation result: success or a list of diagnostics.
+/// Uses inline storage (SmallVector<4>) to avoid heap allocation in the common case.
+struct ValidationResult {
+    bool passed = true;
+    core::SmallVector<ValidationDiagnostic, 4> diagnostics;
+
+    explicit operator bool() const noexcept { return passed; }
+};
+
+/// The stateless validator. All methods are pure functions of (backend, desc).
+/// When MIKI_RHI_VALIDATION=0, all methods are constexpr no-ops.
+class RhiValidator {
+public:
+#if MIKI_RHI_VALIDATION
+    static auto ValidateBufferDesc(BackendType backend, const BufferDesc& desc) -> ValidationResult;
+    static auto ValidateTextureDesc(BackendType backend, const TextureDesc& desc) -> ValidationResult;
+    static auto ValidateRenderPassDesc(BackendType backend, const RenderingDesc& desc) -> ValidationResult;
+    static auto ValidateGraphicsPipelineDesc(BackendType backend, const GraphicsPipelineDesc& desc) -> ValidationResult;
+    static auto ValidateComputePipelineDesc(BackendType backend, const ComputePipelineDesc& desc) -> ValidationResult;
+    static auto ValidateDescriptorLayoutDesc(BackendType backend, const DescriptorLayoutDesc& desc) -> ValidationResult;
+    static auto ValidatePipelineLayoutDesc(BackendType backend, const PipelineLayoutDesc& desc) -> ValidationResult;
+#else
+    // Zero-cost no-ops when validation is disabled
+    static constexpr auto ValidateBufferDesc(BackendType, const BufferDesc&) -> ValidationResult { return {}; }
+    static constexpr auto ValidateTextureDesc(BackendType, const TextureDesc&) -> ValidationResult { return {}; }
+    static constexpr auto ValidateRenderPassDesc(BackendType, const RenderingDesc&) -> ValidationResult { return {}; }
+    static constexpr auto ValidateGraphicsPipelineDesc(BackendType, const GraphicsPipelineDesc&) -> ValidationResult { return {}; }
+    static constexpr auto ValidateComputePipelineDesc(BackendType, const ComputePipelineDesc&) -> ValidationResult { return {}; }
+    static constexpr auto ValidateDescriptorLayoutDesc(BackendType, const DescriptorLayoutDesc&) -> ValidationResult { return {}; }
+    static constexpr auto ValidatePipelineLayoutDesc(BackendType, const PipelineLayoutDesc&) -> ValidationResult { return {}; }
+#endif
+};
+
+}  // namespace miki::rhi::validation
+```
+
+### 20a.7 Integration Point: DeviceBase CRTP
+
+Validation is injected in `DeviceBase<Impl>` public methods, **before** delegating to `*Impl`:
+
+```cpp
+template <typename Impl>
+class DeviceBase {
+public:
+    [[nodiscard]] auto CreateBuffer(const BufferDesc& desc) -> RhiResult<BufferHandle> {
+#if MIKI_RHI_VALIDATION
+        if (auto vr = validation::RhiValidator::ValidateBufferDesc(Self().GetBackendType(), desc); !vr) {
+            for (auto& d : vr.diagnostics) {
+                if (d.severity == validation::Severity::Error) {
+                    MIKI_LOG_ERROR("[RHI Validation] {}: {}", d.message, d.rationale);
+                    return std::unexpected(RhiError::InvalidArgument);
+                }
+                MIKI_LOG_WARN("[RHI Validation] {}: {}", d.message, d.rationale);
+            }
+        }
+#endif
+        return Self().CreateBufferImpl(desc);
+    }
+    // ... same pattern for CreateTexture, CreateGraphicsPipeline, etc.
+};
+```
+
+**Properties**:
+
+- `#if MIKI_RHI_VALIDATION` ensures zero overhead in Release
+- Validation runs BEFORE backend call — fail-fast semantics
+- Warnings (e.g., "staging copy will be used") log but do not block
+- Errors (e.g., "push constant size exceeds backend limit") return `RhiError::InvalidArgument`
+
+### 20a.8 Validation Scope & Timing
+
+| Validation Point         | When              | Hot Path?            | Validated Properties                                         |
+| ------------------------ | ----------------- | -------------------- | ------------------------------------------------------------ |
+| `CreateBuffer`           | Resource creation | No                   | Usage + memory combination, size limits                      |
+| `CreateTexture`          | Resource creation | No                   | Usage + memory + format + dimension limits                   |
+| `CreateGraphicsPipeline` | Pipeline creation | No                   | Shader stage compatibility, vertex layout, attachment format |
+| `CreateComputePipeline`  | Pipeline creation | No                   | Workgroup size limits                                        |
+| `CreatePipelineLayout`   | Layout creation   | No                   | Push constant size, descriptor set count                     |
+| `CreateDescriptorLayout` | Layout creation   | No                   | Binding count, binding type support                          |
+| `CmdBeginRendering`      | Render pass begin | No (O(passes/frame)) | Depth/stencil format vs stencil ops, attachment count        |
+| `CmdDraw*`               | Per-draw          | **NEVER**            | —                                                            |
+| `CmdDispatch*`           | Per-dispatch      | **NEVER**            | —                                                            |
+| `CmdBind*`               | Per-bind          | **NEVER**            | —                                                            |
+
+### 20a.9 Cross-Backend Constraint Comparison
+
+Reference table for the validation rules. This is the **source of truth** for `BackendCapabilityTable` initialization.
+
+#### Buffer Memory × Usage Rules
+
+| MemoryLocation | Allowed Usage Combos                     | WebGPU              | Vulkan           | D3D12               | OpenGL           |
+| -------------- | ---------------------------------------- | ------------------- | ---------------- | ------------------- | ---------------- |
+| `GpuOnly`      | Any resource usage                       | `✓`                 | `✓`              | `✓ (DEFAULT heap)`  | `✓`              |
+| `CpuToGpu`     | `CopyDst + Vertex/Index/Uniform/Storage` | `✓ (shadow buffer)` | `✓ (direct map)` | `✓ (Upload→Copy)`   | `✓ (direct map)` |
+| `CpuToGpu`     | `MapWrite + CopySrc` (pure staging)      | `✓`                 | `✓`              | `✓`                 | `✓`              |
+| `CpuToGpu`     | `MapWrite + Vertex/Index`                | `✗ FORBIDDEN`       | `✓`              | `✗ (Upload heap)`   | `✓`              |
+| `GpuToCpu`     | `MapRead + CopyDst`                      | `✓`                 | `✓`              | `✓ (READBACK heap)` | `✓`              |
+| `GpuToCpu`     | `MapRead + Vertex/Index`                 | `✗ FORBIDDEN`       | `✓`              | `✗`                 | `✓`              |
+
+#### Depth/Stencil Format × Stencil Ops
+
+| Format              | Has Stencil | WebGPU stencil ops | Vulkan stencil ops | D3D12 stencil ops | OpenGL stencil ops |
+| ------------------- | ----------- | ------------------ | ------------------ | ----------------- | ------------------ |
+| `D16_UNORM`         | No          | Must be Undefined  | Ignored            | Ignored           | Ignored            |
+| `D32_FLOAT`         | No          | Must be Undefined  | Ignored            | Ignored           | Ignored            |
+| `D24_UNORM_S8_UINT` | Yes         | Required           | Required           | Required          | Required           |
+| `D32_FLOAT_S8_UINT` | Yes         | Required           | Required           | Required          | Required           |
+
+#### Mapping Semantics
+
+| Property                          | WebGPU         | Vulkan               | D3D12                 | OpenGL               |
+| --------------------------------- | -------------- | -------------------- | --------------------- | -------------------- |
+| Persistent mapping                | `✗`            | `✓ (VMA persistent)` | `✓ (Upload/Readback)` | `✓ (MAP_PERSISTENT)` |
+| Simultaneous CPU+GPU              | `✗`            | `✓ (HOST_COHERENT)`  | `✗`                   | `✓ (MAP_COHERENT)`   |
+| Async map                         | `✓ (mapAsync)` | `✗ (synchronous)`    | `✗ (synchronous)`     | `✗ (synchronous)`    |
+| Map requires unmap before GPU use | `✓`            | `✗ (coherent)`       | `✓`                   | `✗ (coherent)`       |
+
+### 20a.10 File Layout
+
+```
+include/miki/rhi/validation/
+├── RhiValidator.h             // RhiValidator class, ValidationResult, ValidationDiagnostic
+├── BackendCapabilityTable.h   // BackendCapabilityTable struct, rule structs
+├── BackendRules.h             // constexpr rule tables for all backends
+└── ValidationMacros.h         // MIKI_RHI_VALIDATION toggle, MIKI_VALIDATE_OR_RETURN macro
+
+src/miki/rhi/validation/
+└── RhiValidator.cpp           // ValidateBufferDesc, ValidateTextureDesc, etc.
+                               // (only compiled when MIKI_RHI_VALIDATION=1)
+```
+
+**Build integration** (`cmake/targets/miki_rhi.cmake`):
+
+```cmake
+# Default: ON for Debug/RelWithDebInfo, OFF for Release
+if(NOT DEFINED MIKI_RHI_VALIDATION)
+    if(CMAKE_BUILD_TYPE MATCHES "Debug|RelWithDebInfo")
+        set(MIKI_RHI_VALIDATION ON)
+    else()
+        set(MIKI_RHI_VALIDATION OFF)
+    endif()
+endif()
+
+if(MIKI_RHI_VALIDATION)
+    target_sources(miki_rhi PRIVATE src/miki/rhi/validation/RhiValidator.cpp)
+    target_compile_definitions(miki_rhi PUBLIC MIKI_RHI_VALIDATION=1)
+else()
+    target_compile_definitions(miki_rhi PUBLIC MIKI_RHI_VALIDATION=0)
+endif()
+```
+
+### 20a.11 Performance Analysis
+
+| Metric                     | MIKI_RHI_VALIDATION=0 | MIKI_RHI_VALIDATION=1                       |
+| -------------------------- | --------------------- | ------------------------------------------- |
+| Binary size overhead       | 0 bytes               | ~8 KB (.text) + ~4 KB (.rodata rule tables) |
+| Per-CreateBuffer cost      | 0 ns                  | ~200 ns (table lookup + bitmask check)      |
+| Per-CreatePipeline cost    | 0 ns                  | ~500 ns (multi-rule check)                  |
+| Per-CmdBeginRendering cost | 0 ns                  | ~100 ns (format + stencil check)            |
+| Per-CmdDraw cost           | 0 ns                  | 0 ns (**never validated**)                  |
+| Memory overhead            | 0 bytes               | ~2 KB static (constexpr tables, no heap)    |
+| Compile time impact        | None                  | +~0.2s (one additional TU)                  |
+
+### 20a.12 Design Decisions & Rationale
+
+| Decision                                              | Rationale                                                                        | Alternative Considered                                             |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| constexpr rule tables                                 | Zero-cost when disabled, cache-friendly when enabled                             | Runtime-registered rules (rejected: unnecessary heap allocation)   |
+| Stateless validator                                   | Thread-safe by design, no initialization order issues                            | Singleton validator (rejected: hidden global state)                |
+| Validation in DeviceBase, not DeviceHandle            | Catches errors even when using CRTP path directly, not only type-erased dispatch | DeviceHandle-only (rejected: misses CRTP callers)                  |
+| Warnings for staging copies, errors for hard failures | Allows portable code to work everywhere while informing about hidden costs       | Error-only (rejected: too strict for Vulkan-legal patterns)        |
+| Per-backend tables, not intersection/union            | Preserves backend-specific flexibility (Vulkan direct map is zero-cost)          | Strictest-backend-wins (rejected: degrades Vulkan to WebGPU level) |
+| Never validate hot paths                              | Per-draw validation would cost ~5% frame time at 10K draws                       | Sample-based validation (rejected: unpredictable overhead)         |
+
+### 20a.13 Roadmap Integration
+
+| Phase                        | Validation Content                                                            |
+| ---------------------------- | ----------------------------------------------------------------------------- |
+| Phase 2a (RHI Core)          | Buffer + Texture creation validation, basic limit checks                      |
+| Phase 2b (Command Recording) | RenderPass depth/stencil format validation                                    |
+| Phase 3 (Descriptors)        | Descriptor layout + pipeline layout limit validation                          |
+| Phase 4 (Pipelines)          | Graphics/compute pipeline validation (shader stage compat, attachment format) |
+| Phase 6a (Mesh Shader)       | Mesh/task shader workgroup size validation                                    |
+| Phase 10 (Sparse)            | Sparse binding page alignment validation                                      |
+
+---
+
+## 20b. Backend Adaptation Layer
+
+### 20b.1 Motivation
+
+§20a validates and rejects or warns. But many "unsupported" configurations are **adaptable** — the backend can transparently emulate the missing capability with a different strategy. Examples:
+
+- WebGPU: `MapWrite + Vertex` → shadow buffer + `wgpuQueueWriteBuffer`
+- D3D12: `CpuToGpu + Vertex` → UPLOAD heap + `CopyBufferRegion` to DEFAULT
+- WebGPU: push constants → 256B UBO at `@group(0) @binding(0)`
+- WebGPU: `CmdBlitTexture` → fullscreen quad shader
+- WebGPU: multi-draw indirect → loop over single draws
+
+Currently these adaptations are ad-hoc `if` branches scattered across `*Impl` methods. The Backend Adaptation Layer **structures and centralizes** this knowledge as constexpr data, enabling:
+
+1. **Compile-time query** — "does this backend need adaptation for this config?"
+2. **RenderGraph compiler integration** — auto-inject staging passes at graph compile time
+3. **Performance diagnostics** — report estimated overhead for each adaptation
+4. **Cross-backend portability audit** — enumerate all adaptations for a target backend
+
+### 20b.2 Design Principles
+
+| Principle                         | Detail                                                                                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **constexpr-first**               | All strategy enums, rule tables, and query functions are `constexpr`. The RenderGraph compiler and `if constexpr` branches can evaluate them at compile time.       |
+| **Data, not code**                | Adaptation rules are declarative tables, not imperative `if` chains. Adding a new backend or new adaptation requires adding data rows, not control flow.            |
+| **Pure query, no mutation**       | The adaptation layer is a pure function: `(BackendType, config) → AdaptationInfo`. It never modifies descriptors. Actual adaptation logic stays in `*Impl` methods. |
+| **Zero runtime cost when unused** | All tables are `constexpr` / `inline const`. Unused tables are DCE'd. Query functions inline to direct comparisons.                                                 |
+| **Composable with §20a**          | The validation layer (§20a) calls adaptation queries to decide severity: if adaptation exists → Warning; if no adaptation → Error.                                  |
+
+### 20b.3 AdaptationStrategy Enum
+
+```cpp
+namespace miki::rhi::adaptation {
+
+/// How a backend adapts an unsupported configuration.
+/// Ordered by typical performance impact (lower = cheaper).
+enum class Strategy : uint8_t {
+    Native,             ///< Natively supported, no adaptation. Cost factor = 1.0.
+    ParameterFixup,     ///< Silent parameter correction (e.g., stencil ops → Undefined). O(1), no extra work.
+    UboEmulation,       ///< Push constants emulated via UBO. One extra buffer bind per frame.
+    EphemeralMap,       ///< Per-access map/unmap cycle instead of persistent mapping.
+    CallbackEmulation,  ///< Sync primitive emulated via async callback (WebGPU fence).
+    ShadowBuffer,       ///< CPU shadow + queue write on unmap. Extra memcpy per update.
+    StagingCopy,        ///< Intermediate staging resource + GPU copy. Extra command + sync.
+    LoopUnroll,         ///< N API calls instead of 1 batched call. O(N) overhead.
+    ShaderEmulation,    ///< Missing fixed-function emulated by shader (extra render pass).
+    Unsupported,        ///< Cannot be adapted. Returns FeatureNotSupported.
+};
+
+/// Compile-time predicate: does this strategy introduce hidden GPU work?
+constexpr auto HasGpuOverhead(Strategy s) noexcept -> bool {
+    return s >= Strategy::StagingCopy;
+}
+
+/// Compile-time predicate: does this strategy introduce hidden CPU work?
+constexpr auto HasCpuOverhead(Strategy s) noexcept -> bool {
+    return s >= Strategy::ShadowBuffer;
+}
+
+/// Compile-time predicate: is this a transparent fixup with no measurable cost?
+constexpr auto IsTransparent(Strategy s) noexcept -> bool {
+    return s <= Strategy::CallbackEmulation;
+}
+
+}  // namespace miki::rhi::adaptation
+```
+
+### 20b.4 AdaptationRule Structure
+
+```cpp
+namespace miki::rhi::adaptation {
+
+/// Identifies which RHI feature is being adapted.
+enum class Feature : uint8_t {
+    BufferMapWriteWithUsage,   ///< MapWrite combined with Vertex/Index/Uniform/Storage
+    BufferPersistentMapping,   ///< Persistent (long-lived) buffer mapping
+    PushConstants,             ///< Native push constant path
+    CmdBlitTexture,            ///< Hardware blit
+    CmdFillBufferNonZero,      ///< Fill buffer with non-zero value
+    CmdClearTexture,           ///< Clear texture outside render pass
+    MultiDrawIndirect,         ///< Batched indirect draw (N draws in 1 call)
+    DepthOnlyStencilOps,       ///< Stencil ops on depth-only format
+    TimelineSemaphore,         ///< Timeline semaphore sync
+    SparseBinding,             ///< Sparse/virtual resource binding
+    DynamicDepthBias,          ///< Runtime depth bias change
+    ExecuteSecondary,          ///< Secondary command buffer / render bundles
+    MeshShader,                ///< Mesh/task shader pipeline
+    RayTracing,                ///< RT pipeline / acceleration structures
+};
+
+/// A single adaptation rule: for (backend, feature) → strategy + cost.
+/// All fields are constexpr-friendly (no pointers to runtime data except string literals).
+struct Rule {
+    Feature feature;
+    Strategy strategy;
+    float costFactor;           ///< 1.0 = native, 2.0 = ~2x slower. Compile-time constant.
+    const char* description;    ///< Static string literal. Human-readable.
+};
+
+/// Complete adaptation table for one backend.
+/// Declared as inline constexpr arrays + inline const table (same pattern as §20a).
+struct BackendAdaptationTable {
+    BackendType backend;
+    std::span<const Rule> rules;
+};
+
+}  // namespace miki::rhi::adaptation
+```
+
+### 20b.5 Per-Backend Adaptation Tables
+
+#### WebGPU (Tier 3) — Most Adaptations
+
+```cpp
+inline constexpr adaptation::Rule kWebGPUAdaptations[] = {
+    {
+        .feature = Feature::BufferMapWriteWithUsage,
+        .strategy = Strategy::ShadowBuffer,
+        .costFactor = 1.5f,
+        .description = "CPU shadow buffer + wgpuQueueWriteBuffer on unmap. "
+                       "Extra memcpy per buffer update."
+    },
+    {
+        .feature = Feature::BufferPersistentMapping,
+        .strategy = Strategy::EphemeralMap,
+        .costFactor = 1.1f,
+        .description = "mapAsync/unmap per access cycle. Non-blocking but not persistent."
+    },
+    {
+        .feature = Feature::PushConstants,
+        .strategy = Strategy::UboEmulation,
+        .costFactor = 1.05f,
+        .description = "256B UBO at @group(0) @binding(0). User bindings shift to group(N+1)."
+    },
+    {
+        .feature = Feature::CmdBlitTexture,
+        .strategy = Strategy::ShaderEmulation,
+        .costFactor = 2.0f,
+        .description = "Fullscreen quad shader blit. Requires extra render pass + pipeline."
+    },
+    {
+        .feature = Feature::CmdFillBufferNonZero,
+        .strategy = Strategy::ShaderEmulation,
+        .costFactor = 1.8f,
+        .description = "Compute shader fill. Extra dispatch + barrier."
+    },
+    {
+        .feature = Feature::CmdClearTexture,
+        .strategy = Strategy::ShaderEmulation,
+        .costFactor = 1.5f,
+        .description = "Clear via render pass loadOp. Requires begin/end render pass."
+    },
+    {
+        .feature = Feature::MultiDrawIndirect,
+        .strategy = Strategy::LoopUnroll,
+        .costFactor = 3.0f,
+        .description = "WebGPU: 1 draw per indirect call. N draws = N wgpuRenderPassEncoderDrawIndirect calls."
+    },
+    {
+        .feature = Feature::DepthOnlyStencilOps,
+        .strategy = Strategy::ParameterFixup,
+        .costFactor = 1.0f,
+        .description = "Stencil ops forced to Undefined, stencilReadOnly=true. Zero overhead."
+    },
+    {
+        .feature = Feature::TimelineSemaphore,
+        .strategy = Strategy::CallbackEmulation,
+        .costFactor = 1.0f,
+        .description = "onSubmittedWorkDone callback + monotonic serial. Semantically equivalent."
+    },
+    {
+        .feature = Feature::DynamicDepthBias,
+        .strategy = Strategy::Unsupported,
+        .costFactor = 0.0f,
+        .description = "WebGPU sets depth bias at pipeline creation. No dynamic override."
+    },
+    {
+        .feature = Feature::SparseBinding,
+        .strategy = Strategy::Unsupported,
+        .costFactor = 0.0f,
+        .description = "WebGPU has no sparse resource API."
+    },
+    {
+        .feature = Feature::MeshShader,
+        .strategy = Strategy::Unsupported,
+        .costFactor = 0.0f,
+        .description = "WebGPU has no mesh/task shader support."
+    },
+    {
+        .feature = Feature::RayTracing,
+        .strategy = Strategy::Unsupported,
+        .costFactor = 0.0f,
+        .description = "WebGPU has no ray tracing API."
+    },
+};
+
+inline const adaptation::BackendAdaptationTable kWebGPUAdaptationTable = {
+    .backend = BackendType::WebGPU,
+    .rules = kWebGPUAdaptations,
+};
+```
+
+#### D3D12 (Tier 1)
+
+```cpp
+inline constexpr adaptation::Rule kD3D12Adaptations[] = {
+    {
+        .feature = Feature::BufferMapWriteWithUsage,
+        .strategy = Strategy::StagingCopy,
+        .costFactor = 1.3f,
+        .description = "UPLOAD heap + CopyBufferRegion to DEFAULT. One extra copy command."
+    },
+    {
+        .feature = Feature::CmdBlitTexture,
+        .strategy = Strategy::ShaderEmulation,
+        .costFactor = 2.0f,
+        .description = "Fullscreen quad shader. D3D12 has no native blit."
+    },
+    {
+        .feature = Feature::CmdFillBufferNonZero,
+        .strategy = Strategy::ShaderEmulation,
+        .costFactor = 1.5f,
+        .description = "UAV clear or compute shader. No native non-zero fill."
+    },
+};
+
+inline const adaptation::BackendAdaptationTable kD3D12AdaptationTable = {
+    .backend = BackendType::D3D12,
+    .rules = kD3D12Adaptations,
+};
+```
+
+#### Vulkan (Tier 1 / Tier 2)
+
+```cpp
+inline constexpr adaptation::Rule kVulkanAdaptations[] = {
+    // Vulkan 1.4 supports all RHI features natively.
+    // Empty table = no adaptations needed.
+    // VulkanCompat (Tier 2) may need mesh shader / RT as Unsupported — added at runtime
+    // via GpuCapabilityProfile query, not static table.
+};
+
+inline const adaptation::BackendAdaptationTable kVulkanAdaptationTable = {
+    .backend = BackendType::Vulkan14,
+    .rules = kVulkanAdaptations,
+};
+```
+
+#### OpenGL (Tier 4)
+
+```cpp
+inline constexpr adaptation::Rule kOpenGLAdaptations[] = {
+    {
+        .feature = Feature::PushConstants,
+        .strategy = Strategy::UboEmulation,
+        .costFactor = 1.05f,
+        .description = "128B UBO at binding 0. User UBO bindings shifted +1."
+    },
+    {
+        .feature = Feature::MeshShader,
+        .strategy = Strategy::Unsupported,
+        .costFactor = 0.0f,
+        .description = "OpenGL 4.3 has no mesh shader extension."
+    },
+    {
+        .feature = Feature::RayTracing,
+        .strategy = Strategy::Unsupported,
+        .costFactor = 0.0f,
+        .description = "OpenGL has no ray tracing API."
+    },
+    {
+        .feature = Feature::SparseBinding,
+        .strategy = Strategy::Unsupported,
+        .costFactor = 0.0f,
+        .description = "OpenGL sparse texture exists but not wired in T4."
+    },
+};
+
+inline const adaptation::BackendAdaptationTable kOpenGLAdaptationTable = {
+    .backend = BackendType::OpenGL43,
+    .rules = kOpenGLAdaptations,
+};
+```
+
+### 20b.6 Constexpr Query API
+
+The core API: all functions are `constexpr` (evaluable at compile time when inputs are known).
+
+```cpp
+namespace miki::rhi::adaptation {
+
+/// Lookup the adaptation table for a backend.
+/// Returns nullptr for Mock backend.
+constexpr auto GetAdaptationTable(BackendType backend) -> const BackendAdaptationTable*;
+
+/// Query the adaptation strategy for a specific feature on a backend.
+/// Returns Strategy::Native if no adaptation rule exists (feature natively supported).
+/// This is the primary query function — O(N) linear scan over rules, N ≤ 15.
+constexpr auto QueryStrategy(BackendType backend, Feature feature) -> Strategy {
+    auto* table = GetAdaptationTable(backend);
+    if (!table) return Strategy::Native;
+    for (auto& rule : table->rules) {
+        if (rule.feature == feature) return rule.strategy;
+    }
+    return Strategy::Native;  // Not in table → natively supported
+}
+
+/// Query the full rule (strategy + cost + description) for a feature.
+/// Returns nullptr if natively supported.
+constexpr auto QueryRule(BackendType backend, Feature feature) -> const Rule* {
+    auto* table = GetAdaptationTable(backend);
+    if (!table) return nullptr;
+    for (auto& rule : table->rules) {
+        if (rule.feature == feature) return &rule;
+    }
+    return nullptr;
+}
+
+/// Query the cost factor for a feature. Returns 1.0f if native.
+constexpr auto QueryCostFactor(BackendType backend, Feature feature) -> float {
+    auto* rule = QueryRule(backend, feature);
+    return rule ? rule->costFactor : 1.0f;
+}
+
+/// Check if a feature is supported (native or adapted, but not Unsupported).
+constexpr auto IsFeatureAvailable(BackendType backend, Feature feature) -> bool {
+    return QueryStrategy(backend, feature) != Strategy::Unsupported;
+}
+
+/// Check if a feature requires hidden GPU work on this backend.
+constexpr auto RequiresHiddenGpuWork(BackendType backend, Feature feature) -> bool {
+    return HasGpuOverhead(QueryStrategy(backend, feature));
+}
+
+}  // namespace miki::rhi::adaptation
+```
+
+**Compile-time usage example** (in template code or `if constexpr`):
+
+```cpp
+// At RenderGraph compile time, check if staging passes are needed
+if constexpr (adaptation::QueryStrategy(BackendType::WebGPU,
+              adaptation::Feature::BufferMapWriteWithUsage) == adaptation::Strategy::ShadowBuffer) {
+    // Compiler knows at compile time: WebGPU needs shadow buffer pattern
+    // Can auto-insert a staging copy pass in the render graph
+}
+```
+
+**Runtime usage example** (when backend is not known at compile time):
+
+```cpp
+auto strategy = adaptation::QueryStrategy(device.GetBackendType(),
+                                          adaptation::Feature::MultiDrawIndirect);
+if (strategy == adaptation::Strategy::LoopUnroll) {
+    MIKI_LOG_WARN("[Adaptation] Multi-draw indirect will loop {} draws on {}",
+                  drawCount, device.GetBackendName());
+}
+```
+
+### 20b.7 Integration with §20a Validation Layer
+
+The validation layer (§20a) composes with the adaptation layer (§20b) to determine diagnostic severity:
+
+```cpp
+// Inside RhiValidator::ValidateBufferDesc (§20a)
+auto strategy = adaptation::QueryStrategy(backend, adaptation::Feature::BufferMapWriteWithUsage);
+
+switch (strategy) {
+    case adaptation::Strategy::Native:
+        // No diagnostic — natively supported
+        break;
+    case adaptation::Strategy::Unsupported:
+        result.passed = false;
+        result.diagnostics.push_back({
+            .severity = Severity::Error,
+            .message = "MapWrite + resource usage",
+            .rationale = "Not supported and cannot be adapted",
+            .backend = backend,
+            .strategy = strategy,
+        });
+        break;
+    default:
+        // Adapted — emit warning with cost info
+        auto* rule = adaptation::QueryRule(backend, feature);
+        result.diagnostics.push_back({
+            .severity = Severity::Warning,
+            .message = rule->description,
+            .rationale = "Adapted via hidden mechanism",
+            .backend = backend,
+            .strategy = strategy,
+            .costFactor = rule->costFactor,
+        });
+        break;
+}
+```
+
+Updated `ValidationDiagnostic` struct (§20a.6 amendment):
+
+```cpp
+struct ValidationDiagnostic {
+    Severity severity;
+    const char* message;
+    const char* rationale;
+    BackendType backend;
+    adaptation::Strategy strategy = adaptation::Strategy::Native;  ///< §20b integration
+    float costFactor = 1.0f;                                       ///< §20b integration
+};
+```
+
+### 20b.8 RenderGraph Compiler Integration
+
+The RenderGraph compiler (T3a.1.2) can use the adaptation layer at **graph compile time** to automatically inject auxiliary passes when the target backend requires adaptation.
+
+```
+RenderGraphBuilder (user declares passes)
+    │
+    ▼
+RenderGraphCompiler::Compile(builder, backendType)
+    │
+    ├─ [1] Kahn sort + dead pass culling (existing §T3a.1.2)
+    │
+    ├─ [2] Adaptation pass injection (NEW — §20b)    ◄── uses constexpr QueryStrategy
+    │       │
+    │       ├─ For each buffer resource with CpuToGpu + resource usage:
+    │       │   if QueryStrategy(backend, BufferMapWriteWithUsage) == StagingCopy:
+    │       │       → inject Transfer pass: staging buffer → resource buffer
+    │       │       → rewrite original pass to read from device-local buffer
+    │       │
+    │       ├─ For each CmdBlitTexture in a pass:
+    │       │   if QueryStrategy(backend, CmdBlitTexture) == ShaderEmulation:
+    │       │       → inject Graphics pass: fullscreen quad blit shader
+    │       │       → update dependency edges
+    │       │
+    │       └─ For each resource requiring ParameterFixup:
+    │           → modify CompiledPass metadata (no new pass needed)
+    │
+    ├─ [3] Barrier insertion (existing §T3a.1.2, operates on expanded pass list)
+    │
+    ├─ [4] Transient aliasing / lifetime analysis (existing)
+    │
+    └─ [5] Emit AdaptationReport (§20b.9)
+```
+
+**Key property**: The compiler sees the full graph and can make globally optimal decisions. For example:
+
+- If multiple passes write to the same `CpuToGpu` buffer, a single staging copy pass can serve all of them
+- If a `StagingCopy` adaptation creates a new temporary buffer, the transient aliasing system can alias it with other temporaries
+- If `ShaderEmulation` is needed, the compiler can batch multiple blit operations into one pass
+
+### 20b.9 AdaptationReport
+
+The compiler produces an `AdaptationReport` alongside the `CompiledGraph`:
+
+```cpp
+namespace miki::rhi::adaptation {
+
+/// One adaptation action taken by the compiler.
+struct AdaptationAction {
+    Feature feature;
+    Strategy strategy;
+    float costFactor;
+    const char* description;
+    uint32_t affectedPassIndex;    ///< Index in CompiledGraph.passes
+    uint32_t injectedPassCount;    ///< Number of passes injected (0 for ParameterFixup)
+};
+
+/// Summary of all adaptations applied during graph compilation.
+struct AdaptationReport {
+    BackendType backend;
+    std::vector<AdaptationAction> actions;
+    float totalEstimatedOverhead;  ///< Product of all costFactors (multiplicative)
+
+    /// Human-readable summary for debug overlay / profiling.
+    [[nodiscard]] auto Summary() const -> std::string;
+
+    /// Check if any adaptation has GPU overhead.
+    [[nodiscard]] auto HasGpuOverhead() const noexcept -> bool {
+        return std::ranges::any_of(actions, [](auto& a) {
+            return adaptation::HasGpuOverhead(a.strategy);
+        });
+    }
+
+    /// Count adaptations by strategy type.
+    [[nodiscard]] auto CountByStrategy(Strategy s) const noexcept -> uint32_t {
+        return static_cast<uint32_t>(std::ranges::count_if(actions, [s](auto& a) {
+            return a.strategy == s;
+        }));
+    }
+};
+
+}  // namespace miki::rhi::adaptation
+```
+
+**Usage in debug overlay**:
+
+```
+[Adaptation Report — WebGPU]
+  3 ShadowBuffer adaptations (cost: 1.5x each)
+  1 ShaderEmulation adaptation (CmdBlitTexture, cost: 2.0x)
+  2 ParameterFixup adaptations (zero cost)
+  1 LoopUnroll adaptation (MultiDrawIndirect, cost: 3.0x)
+  Total estimated overhead: ~9.0x over native Vulkan path
+  Injected passes: 2 (1 staging copy, 1 blit shader)
+```
+
+### 20b.10 Constexpr Adaptation Matrix
+
+Complete cross-backend feature × strategy matrix. This table is the **single source of truth** for all adaptation tables.
+
+| Feature                   | Vulkan T1 | VulkanCompat T2 | D3D12 T1               | WebGPU T3                | OpenGL T4            |
+| ------------------------- | --------- | --------------- | ---------------------- | ------------------------ | -------------------- |
+| `BufferMapWriteWithUsage` | Native    | Native          | StagingCopy (1.3x)     | ShadowBuffer (1.5x)      | Native               |
+| `BufferPersistentMapping` | Native    | Native          | Native                 | EphemeralMap (1.1x)      | Native               |
+| `PushConstants`           | Native    | Native          | Native                 | UboEmulation (1.05x)     | UboEmulation (1.05x) |
+| `CmdBlitTexture`          | Native    | Native          | ShaderEmulation (2.0x) | ShaderEmulation (2.0x)   | Native               |
+| `CmdFillBufferNonZero`    | Native    | Native          | ShaderEmulation (1.5x) | ShaderEmulation (1.8x)   | Native               |
+| `CmdClearTexture`         | Native    | Native          | Native                 | ShaderEmulation (1.5x)   | Native               |
+| `MultiDrawIndirect`       | Native    | Native          | Native                 | LoopUnroll (3.0x)        | Native               |
+| `DepthOnlyStencilOps`     | Native    | Native          | Native                 | ParameterFixup (1.0x)    | Native               |
+| `TimelineSemaphore`       | Native    | Native          | Native                 | CallbackEmulation (1.0x) | Native               |
+| `DynamicDepthBias`        | Native    | Native          | Native                 | Unsupported              | Native               |
+| `SparseBinding`           | Native    | Native          | Native                 | Unsupported              | Unsupported          |
+| `MeshShader`              | Native    | Unsupported     | Native                 | Unsupported              | Unsupported          |
+| `RayTracing`              | Native    | Unsupported     | Native                 | Unsupported              | Unsupported          |
+| `ExecuteSecondary`        | Native    | Native          | Native                 | Unsupported              | Native               |
+
+### 20b.11 Compile-Time Adaptation for if constexpr Paths
+
+When the backend is a template parameter (CRTP path through `DeviceBase<Impl>`), the adaptation query can be resolved entirely at compile time:
+
+```cpp
+template <typename Impl>
+class DeviceBase {
+    static constexpr BackendType kBackend = Impl::kBackendType;
+
+public:
+    [[nodiscard]] auto CreateBuffer(const BufferDesc& desc) -> RhiResult<BufferHandle> {
+        // §20a validation (compile-time conditional)
+#if MIKI_RHI_VALIDATION
+        if (auto vr = validation::RhiValidator::ValidateBufferDesc(kBackend, desc); !vr) {
+            // ... handle diagnostics
+        }
+#endif
+        // §20b adaptation query — resolved at compile time via if constexpr
+        if constexpr (adaptation::QueryStrategy(kBackend,
+                      adaptation::Feature::BufferMapWriteWithUsage) == adaptation::Strategy::ShadowBuffer) {
+            // Compiler statically knows: this backend uses shadow buffers
+            // The *Impl method handles the actual adaptation
+            // This branch is for diagnostic / metric purposes only
+        }
+
+        return Self().CreateBufferImpl(desc);
+    }
+};
+```
+
+**Requirement**: Each backend device class must declare a `static constexpr BackendType kBackendType`:
+
+```cpp
+class VulkanDevice : public DeviceBase<VulkanDevice> {
+public:
+    static constexpr BackendType kBackendType = BackendType::Vulkan14;
+    // ...
+};
+
+class WebGPUDevice : public DeviceBase<WebGPUDevice> {
+public:
+    static constexpr BackendType kBackendType = BackendType::WebGPU;
+    // ...
+};
+```
+
+This enables the compiler to eliminate dead adaptation branches entirely in Release builds.
+
+### 20b.12 Constexpr Correctness Guarantees
+
+All adaptation structures and query functions are designed for maximum compile-time evaluability:
+
+| Component                 | constexpr?                | Rationale                                                            |
+| ------------------------- | ------------------------- | -------------------------------------------------------------------- |
+| `Strategy` enum           | `constexpr` (scoped enum) | Enum values are ICE (integral constant expressions)                  |
+| `Feature` enum            | `constexpr` (scoped enum) | Same                                                                 |
+| `Rule` struct             | `constexpr` constructible | All fields are literals or `const char*` (pointer to string literal) |
+| `HasGpuOverhead()`        | `constexpr`               | Must be callable from both constexpr and runtime contexts            |
+| `HasCpuOverhead()`        | `constexpr`               | Same                                                                 |
+| `IsTransparent()`         | `constexpr`               | Same                                                                 |
+| `QueryStrategy()`         | `constexpr`               | Evaluable at compile time when `backend` is constexpr                |
+| `QueryRule()`             | `constexpr`               | Same (returns pointer into constexpr array)                          |
+| `QueryCostFactor()`       | `constexpr`               | Same                                                                 |
+| `IsFeatureAvailable()`    | `constexpr`               | Same                                                                 |
+| `RequiresHiddenGpuWork()` | `constexpr`               | Same                                                                 |
+| `kWebGPUAdaptations[]`    | `constexpr` array         | All elements are literal types                                       |
+| `BackendAdaptationTable`  | `inline const`            | Contains `std::span` (non-constexpr pointer member)                  |
+| `GetAdaptationTable()`    | `constexpr`               | Switch on BackendType, returns address of `inline const` table       |
+
+**Note on `std::span` and constexpr**: The `BackendAdaptationTable` struct contains `std::span<const Rule>` which stores a pointer. In C++23, `constexpr` variables cannot hold pointers to non-constexpr objects. The tables are therefore `inline const` (not `constexpr`). However, `QueryStrategy()` is still `constexpr`-evaluable when the compiler can prove the table pointer is a constant expression (e.g., when `backend` is a template parameter and the function is inlined). In practice, GCC/Clang/MSVC all optimize this to a direct table lookup. For guaranteed `consteval` paths, use `QueryStrategyConsteval()`:
+
+```cpp
+/// Guaranteed compile-time evaluation. Uses switch-case instead of table lookup.
+/// This bypasses BackendAdaptationTable entirely — hardcoded per-backend.
+consteval auto QueryStrategyConsteval(BackendType backend, Feature feature) -> Strategy {
+    if (backend == BackendType::WebGPU) {
+        switch (feature) {
+            case Feature::BufferMapWriteWithUsage: return Strategy::ShadowBuffer;
+            case Feature::BufferPersistentMapping:  return Strategy::EphemeralMap;
+            case Feature::PushConstants:            return Strategy::UboEmulation;
+            case Feature::CmdBlitTexture:           return Strategy::ShaderEmulation;
+            case Feature::CmdFillBufferNonZero:     return Strategy::ShaderEmulation;
+            case Feature::CmdClearTexture:          return Strategy::ShaderEmulation;
+            case Feature::MultiDrawIndirect:        return Strategy::LoopUnroll;
+            case Feature::DepthOnlyStencilOps:      return Strategy::ParameterFixup;
+            case Feature::TimelineSemaphore:        return Strategy::CallbackEmulation;
+            case Feature::DynamicDepthBias:         return Strategy::Unsupported;
+            case Feature::SparseBinding:            return Strategy::Unsupported;
+            case Feature::MeshShader:               return Strategy::Unsupported;
+            case Feature::RayTracing:               return Strategy::Unsupported;
+            case Feature::ExecuteSecondary:         return Strategy::Unsupported;
+            default: return Strategy::Native;
+        }
+    }
+    if (backend == BackendType::D3D12) {
+        switch (feature) {
+            case Feature::BufferMapWriteWithUsage: return Strategy::StagingCopy;
+            case Feature::CmdBlitTexture:          return Strategy::ShaderEmulation;
+            case Feature::CmdFillBufferNonZero:    return Strategy::ShaderEmulation;
+            default: return Strategy::Native;
+        }
+    }
+    if (backend == BackendType::OpenGL43) {
+        switch (feature) {
+            case Feature::PushConstants: return Strategy::UboEmulation;
+            case Feature::MeshShader:    return Strategy::Unsupported;
+            case Feature::RayTracing:    return Strategy::Unsupported;
+            case Feature::SparseBinding: return Strategy::Unsupported;
+            default: return Strategy::Native;
+        }
+    }
+    // Vulkan14, VulkanCompat — all native except VulkanCompat mesh/RT
+    return Strategy::Native;
+}
+```
+
+This dual-path design (`constexpr` table-based for runtime + `consteval` switch-based for compile-time) ensures:
+
+- **Runtime path**: data-driven, extensible, no code changes to add rules
+- **Compile-time path**: guaranteed ICE evaluation, enables `if constexpr` and `static_assert`
+
+### 20b.13 RenderGraph Compile-Time Resource Fixup
+
+When the RenderGraph compiler knows the target backend at compile time (template parameter), it can use `consteval` queries to **statically transform** the graph:
+
+```cpp
+template <BackendType Backend>
+class RenderGraphCompiler {
+public:
+    static auto Compile(RenderGraphBuilder&& builder) -> expected<CompiledGraph, ErrorCode> {
+        // Phase 1: existing Kahn sort + culling
+        auto sorted = KahnSort(builder);
+
+        // Phase 2: constexpr adaptation pass injection
+        if constexpr (adaptation::QueryStrategyConsteval(Backend,
+                      adaptation::Feature::BufferMapWriteWithUsage) != adaptation::Strategy::Native) {
+            InjectStagingPasses(sorted, builder);  // compile-time decision, runtime execution
+        }
+
+        if constexpr (adaptation::QueryStrategyConsteval(Backend,
+                      adaptation::Feature::CmdBlitTexture) == adaptation::Strategy::ShaderEmulation) {
+            RewriteBlitToShaderPass(sorted, builder);
+        }
+
+        // Phase 3: barrier insertion (on expanded graph)
+        InsertBarriers(sorted);
+
+        // Phase 4: lifetime analysis
+        ComputeLifetimes(sorted);
+
+        return CompiledGraph{std::move(sorted)};
+    }
+};
+```
+
+**Key benefit**: When compiling a RenderGraph for Vulkan, the `if constexpr` branches for ShadowBuffer, ShaderEmulation blit, etc. are **completely eliminated**. The Vulkan compilation path has zero adaptation overhead — not even a branch instruction.
+
+### 20b.14 File Layout
+
+```
+include/miki/rhi/adaptation/
+├── AdaptationTypes.h           // Strategy enum, Feature enum, Rule struct, predicates
+├── BackendAdaptationTable.h    // BackendAdaptationTable struct
+├── BackendAdaptations.h        // Per-backend constexpr rule tables
+├── AdaptationQuery.h           // QueryStrategy, QueryRule, constexpr + consteval APIs
+└── AdaptationReport.h          // AdaptationReport, AdaptationAction (runtime only)
+
+src/miki/rhi/adaptation/
+└── AdaptationQuery.cpp         // GetAdaptationTable() implementation
+                                // (trivial switch — could be header-only)
+```
+
+**Build integration**: The adaptation module has no separate build toggle — it is always available as constexpr data. The `AdaptationReport` (§20b.9) is runtime-only and guarded by `MIKI_RHI_VALIDATION`.
+
+### 20b.15 Performance Analysis
+
+| Metric                        | Compile-time path            | Runtime path                             |
+| ----------------------------- | ---------------------------- | ---------------------------------------- |
+| Query cost                    | 0 ns (ICE / `consteval`)     | ~50 ns (linear scan, N ≤ 15)             |
+| Binary size                   | 0 bytes (eliminated by DCE)  | ~6 KB (.rodata tables + query functions) |
+| RenderGraph compiler overhead | 0 (dead branches eliminated) | ~100 ns per resource (adaptation check)  |
+| AdaptationReport generation   | N/A                          | ~500 ns (small vector + string format)   |
+| Memory overhead               | 0 bytes                      | ~1 KB static (constexpr arrays)          |
+
+### 20b.16 Design Decisions & Rationale
+
+| Decision                                          | Rationale                                                      | Alternative Considered                                        |
+| ------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------- |
+| Dual-path: `constexpr` table + `consteval` switch | Table for extensibility, switch for guaranteed ICE             | Table-only (rejected: `std::span` prevents `consteval`)       |
+| `Feature` enum instead of string tags             | Type-safe, `switch`-friendly, constexpr-compatible             | `const char*` tags (rejected: no compile-time matching)       |
+| `costFactor` as `float`                           | Intuitive multiplier, composable (multiply for chain)          | Microsecond estimate (rejected: hardware-dependent)           |
+| Adaptation layer separate from validation layer   | SRP: validation checks legality, adaptation describes strategy | Merged layer (rejected: conflates "is it legal?" with "how?") |
+| `inline const` tables, not `constexpr`            | `std::span` member prevents constexpr aggregate                | Raw arrays + size (rejected: loses span ergonomics)           |
+| RenderGraph integration at compiler, not executor | Compiler sees full graph → globally optimal decisions          | Per-pass runtime check (rejected: local, cannot batch)        |
+
+### 20b.17 Roadmap Integration
+
+| Phase                        | Adaptation Content                                                                              |
+| ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| Phase 2a (RHI Core)          | `AdaptationTypes.h`, `BackendAdaptations.h`, `AdaptationQuery.h` — constexpr tables and queries |
+| Phase 2b (Command Recording) | `DepthOnlyStencilOps` adaptation wired in `CmdBeginRendering`                                   |
+| Phase 3a (RenderGraph)       | RenderGraph compiler integration: staging pass injection, blit rewrite                          |
+| Phase 3a (RenderGraph)       | `AdaptationReport` generation at compile time                                                   |
+| Phase 4 (Pipelines)          | `PushConstants` UBO emulation adaptation tracking                                               |
+| Phase 5 (Advanced Rendering) | `CmdBlitTexture`, `CmdClearTexture` shader emulation adaptation                                 |
+
+---
+
 ## 21. Non-Pipeline Data Contracts
 
 This section documents the **GPU-side data contracts** for application-layer systems. These systems are NOT part of the rendering pipeline -- they produce data that the pipeline consumes via UBOs/SSBOs/push constants.
