@@ -539,7 +539,25 @@ struct BufferDesc {
     bool             transient = false;  // RenderGraph transient: eligible for memory aliasing
     const char*      debugName = nullptr;
 };
+```
 
+**Design decisions**:
+
+| Aspect                   | Decision                                 | Rationale                                                                                                                                                                                                                                                                   |
+| ------------------------ | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SharingMode**          | Not exposed in `BufferDesc`              | Vulkan's `VkSharingMode` has no equivalent in D3D12/WebGPU/OpenGL. Queue family selection is internal to the device (§7.4). Vulkan backend always uses `EXCLUSIVE` mode; cross-queue access is synchronized via barriers (`CmdPipelineBarrier` with `srcQueue`/`dstQueue`). |
+| **Implicit TransferDst** | Smart addition based on `MemoryLocation` | `GpuOnly`/`Auto` buffers require staging upload → `TransferDst` added implicitly. `CpuToGpu`/`GpuToCpu` can be directly mapped → `TransferDst` only if user explicitly specifies. This follows G4 "thin abstraction" while avoiding common pitfalls.                        |
+
+**Backend mapping for SharingMode**:
+
+| Backend | Concept                                    | miki Behavior                                           |
+| ------- | ------------------------------------------ | ------------------------------------------------------- |
+| Vulkan  | `VkSharingMode` (EXCLUSIVE/CONCURRENT)     | Always EXCLUSIVE; queue ownership transfer via barriers |
+| D3D12   | None (resources accessible from any queue) | N/A — barriers handle synchronization                   |
+| WebGPU  | None (single queue model)                  | N/A                                                     |
+| OpenGL  | None (single context model)                | N/A                                                     |
+
+```cpp
 // Device API
 auto CreateBuffer(const BufferDesc&) -> Result<BufferHandle>;
 void DestroyBuffer(BufferHandle);

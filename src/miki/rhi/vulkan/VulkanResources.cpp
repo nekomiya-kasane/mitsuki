@@ -289,8 +289,15 @@ namespace miki::rhi {
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = desc.size;
         bufferInfo.usage = ToVkBufferUsage(desc.usage);
-        // Always add transfer dst for initial uploads unless explicitly transfer-only
-        bufferInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        // GpuOnly buffers require staging upload → implicitly add TransferDst.
+        // CpuToGpu/GpuToCpu can be directly mapped → only add if user explicitly requests.
+        if (desc.memory == MemoryLocation::GpuOnly || desc.memory == MemoryLocation::Auto) {
+            bufferInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        }
+        // SharingMode: always EXCLUSIVE. Queue family ownership transfers are handled
+        // via barriers (CmdPipelineBarrier with srcQueue/dstQueue). This avoids the
+        // performance overhead of CONCURRENT mode while keeping the API thin (no
+        // SharingMode in BufferDesc — D3D12/WebGPU/OpenGL have no equivalent concept).
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
         VmaAllocationCreateInfo allocInfo{};
