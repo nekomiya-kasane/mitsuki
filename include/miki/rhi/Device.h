@@ -25,6 +25,7 @@
 #include "miki/rhi/RhiEnums.h"
 #include "miki/rhi/RhiError.h"
 #include "miki/rhi/RhiTypes.h"
+#include "miki/rhi/validation/RhiValidation.h"
 #include "miki/rhi/Shader.h"
 #include "miki/rhi/Swapchain.h"
 #include "miki/rhi/Sync.h"
@@ -68,11 +69,26 @@ namespace miki::rhi {
     // DeviceBase — CRTP base for all backend devices
     // =========================================================================
 
+    /// Concept: does Impl expose a static constexpr kBackendType?
+    template <typename T>
+    concept HasStaticBackendType = requires {
+        { T::kBackendType } -> std::convertible_to<BackendType>;
+    };
+
     template <typename Impl>
     class DeviceBase {
        public:
         // --- Resource creation ---
         [[nodiscard]] auto CreateBuffer(const BufferDesc& desc) -> RhiResult<BufferHandle> {
+            if constexpr (HasStaticBackendType<Impl>) {
+                if (!validation::ValidateBufferDesc(Impl::kBackendType, desc)) {
+                    return std::unexpected(RhiError::InvalidParameter);
+                }
+            } else {
+                if (!validation::ValidateBufferDesc(Self().GetBackendTypeImpl(), desc)) {
+                    return std::unexpected(RhiError::InvalidParameter);
+                }
+            }
             return Self().CreateBufferImpl(desc);
         }
         void DestroyBuffer(BufferHandle h) { Self().DestroyBufferImpl(h); }
@@ -94,6 +110,15 @@ namespace miki::rhi {
         }
 
         [[nodiscard]] auto CreateTexture(const TextureDesc& desc) -> RhiResult<TextureHandle> {
+            if constexpr (HasStaticBackendType<Impl>) {
+                if (!validation::ValidateTextureDesc(Impl::kBackendType, desc)) {
+                    return std::unexpected(RhiError::InvalidParameter);
+                }
+            } else {
+                if (!validation::ValidateTextureDesc(Self().GetBackendTypeImpl(), desc)) {
+                    return std::unexpected(RhiError::InvalidParameter);
+                }
+            }
             return Self().CreateTextureImpl(desc);
         }
         [[nodiscard]] auto CreateTextureView(const TextureViewDesc& desc) -> RhiResult<TextureViewHandle> {
