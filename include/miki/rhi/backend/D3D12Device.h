@@ -249,19 +249,22 @@ namespace miki::rhi {
         [[nodiscard]] auto GetGraphicsQueue() const noexcept -> ID3D12CommandQueue* { return queues_.graphics.Get(); }
         [[nodiscard]] auto GetDXGIFactory() const noexcept -> IDXGIFactory6* { return factory_.Get(); }
 
+        // -- Compile-time backend identity (for if constexpr adaptation paths) --
+        static constexpr BackendType kBackendType = BackendType::D3D12;
+
         // -- Capability --
-        auto GetBackendTypeImpl() const -> BackendType { return BackendType::D3D12; }
-        auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
-        auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
+        [[nodiscard]] auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
+        [[nodiscard]] auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
+        [[nodiscard]] auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
 
         // -- Swapchain (D3D12Swapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
         void DestroySwapchainImpl(SwapchainHandle h);
         auto ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void>;
         auto AcquireNextImageImpl(SwapchainHandle h, SemaphoreHandle signal, FenceHandle fence) -> RhiResult<uint32_t>;
-        auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
-        auto GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle;
-        auto GetSwapchainImageCountImpl(SwapchainHandle h) -> uint32_t;
+        [[nodiscard]] auto GetSwapchainTextureImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureHandle;
+        [[nodiscard]] auto GetSwapchainTextureViewImpl(SwapchainHandle h, uint32_t imageIndex) -> TextureViewHandle;
+        [[nodiscard]] auto GetSwapchainImageCountImpl(SwapchainHandle h) -> uint32_t;
         void PresentImpl(SwapchainHandle h, std::span<const SemaphoreHandle> waitSemaphores);
 
         // -- Sync (D3D12Device.cpp) --

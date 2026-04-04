@@ -527,8 +527,11 @@ namespace miki::rhi {
         [[nodiscard]] auto GetContext() const noexcept -> const GLContext& { return renderCtx_; }
         [[nodiscard]] auto HasSpirvSupport() const noexcept -> bool { return ext_.HasSpirvSupport(); }
 
+        // -- Compile-time backend identity (for if constexpr adaptation paths) --
+        static constexpr BackendType kBackendType = BackendType::OpenGL43;
+
         // -- Capability --
-        auto GetBackendTypeImpl() const -> BackendType { return BackendType::OpenGL43; }
+        auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
         auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
 

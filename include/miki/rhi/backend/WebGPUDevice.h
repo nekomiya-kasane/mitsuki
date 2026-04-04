@@ -14,6 +14,7 @@
 #pragma once
 
 #include "miki/rhi/backend/BackendStub.h"
+#include "miki/rhi/adaptation/ShadowBuffer.h"
 
 #include <dawn/webgpu.h>
 
@@ -33,6 +34,11 @@ namespace miki::rhi {
         void* mappedPtr = nullptr;
         BufferUsage usage{};
         WGPUBufferUsage wgpuUsage = 0;
+        // Adaptation: ShadowBuffer strategy (§20b Feature::BufferMapWriteWithUsage)
+        // When CpuToGpu buffer has Vertex/Index/Uniform/Storage usage, WebGPU forbids
+        // MapWrite combined with those usages. Instead we create a CopyDst GPU buffer +
+        // CPU shadow. Map returns shadow ptr; Unmap flushes via wgpuQueueWriteBuffer.
+        adaptation::ShadowBuffer shadow;
     };
 
     struct WGPUTextureData {
@@ -198,8 +204,11 @@ namespace miki::rhi {
         [[nodiscard]] auto GetWGPUQueue() const noexcept -> WGPUQueue { return queue_; }
         [[nodiscard]] auto GetWGPUInstance() const noexcept -> WGPUInstance { return instance_; }
 
+        // -- Compile-time backend identity (for if constexpr adaptation paths) --
+        static constexpr BackendType kBackendType = BackendType::WebGPU;
+
         // -- Capability --
-        auto GetBackendTypeImpl() const -> BackendType { return BackendType::WebGPU; }
+        auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
         auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
 

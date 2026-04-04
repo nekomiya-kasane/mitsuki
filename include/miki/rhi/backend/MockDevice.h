@@ -73,15 +73,18 @@ namespace miki::rhi {
         auto AcquireNextImageImpl(SwapchainHandle, SemaphoreHandle, FenceHandle) -> RhiResult<uint32_t> {
             return std::unexpected(RhiError::NotImplemented);
         }
-        auto GetSwapchainTextureImpl(SwapchainHandle, uint32_t) -> TextureHandle { return {}; }
-        auto GetSwapchainTextureViewImpl(SwapchainHandle, uint32_t) -> TextureViewHandle { return {}; }
-        auto GetSwapchainImageCountImpl(SwapchainHandle) -> uint32_t { return 0; }
+        [[nodiscard]] auto GetSwapchainTextureImpl(SwapchainHandle, uint32_t) -> TextureHandle { return {}; }
+        [[nodiscard]] auto GetSwapchainTextureViewImpl(SwapchainHandle, uint32_t) -> TextureViewHandle { return {}; }
+        [[nodiscard]] auto GetSwapchainImageCountImpl(SwapchainHandle) -> uint32_t { return 0; }
         void PresentImpl(SwapchainHandle, std::span<const SemaphoreHandle>) {}
 
+        // --- Compile-time backend identity ---
+        static constexpr BackendType kBackendType = BackendType::Mock;
+
         // --- Capability ---
-        auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return caps_; }
-        auto GetBackendTypeImpl() const -> BackendType { return BackendType::Mock; }
-        auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
+        [[nodiscard]] auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return caps_; }
+        [[nodiscard]] auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
+        [[nodiscard]] auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
 
        private:
         GpuCapabilityProfile caps_;
