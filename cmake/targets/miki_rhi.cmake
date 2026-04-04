@@ -18,6 +18,7 @@ set(MIKI_RHI_SOURCES
     src/miki/rhi/MainPipelineFactory.cpp
     src/miki/rhi/CompatPipelineFactory.cpp
     src/miki/rhi/DeviceFactory.cpp
+    src/miki/rhi/RhiValidation.cpp
     src/miki/rhi/mock/MockRenderSurface.cpp
     src/miki/frame/FrameManager.cpp
     src/miki/frame/CommandPoolAllocator.cpp
@@ -33,6 +34,18 @@ set(MIKI_RHI_SOURCES
 add_library(miki_rhi OBJECT ${MIKI_RHI_SOURCES})
 target_link_libraries(miki_rhi PUBLIC miki_core)
 miki_setup_library(miki_rhi)
+
+# RHI validation layer toggle.
+# -DMIKI_RHI_VALIDATION_OVERRIDE=ON  -> force enable
+# -DMIKI_RHI_VALIDATION_OVERRIDE=OFF -> force disable
+# Not set -> header default applies (Debug=1, Release=0 via #ifndef).
+if(DEFINED MIKI_RHI_VALIDATION_OVERRIDE)
+    if(MIKI_RHI_VALIDATION_OVERRIDE)
+        target_compile_definitions(miki_rhi PUBLIC MIKI_RHI_VALIDATION=1)
+    else()
+        target_compile_definitions(miki_rhi PUBLIC MIKI_RHI_VALIDATION=0)
+    endif()
+endif()
 
 # Propagate backend selection as PUBLIC compile definitions so that
 # Device.h / AllBackends.h can use #if MIKI_BUILD_VULKAN etc.
