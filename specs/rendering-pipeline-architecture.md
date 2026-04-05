@@ -179,36 +179,18 @@ The RHI abstracts four distinct descriptor binding strategies behind a unified `
 
 ### 2.1 Architecture
 
-All GPU work is expressed as **RenderGraph passes** -- nodes in a DAG.
+> **Full specification**: See `04-render-graph.md` for the complete RenderGraph design (10-stage compilation pipeline, split barrier model, transient aliasing, graph caching, render pass merging, conditional execution, PSO miss handling, plugin extension system, and debugging/profiling tools).
 
-```
-RenderGraphBuilder  ->  RenderGraphCompiler  ->  RenderGraphExecutor
-(declare passes,       (Kahn sort, cycle       (allocate transients,
- resources, deps)       detect, barriers,       emit barriers, wrap
-                        aliasing, lifetime)     BeginRendering/EndRendering)
-                            |
-                     RenderGraphCache
-                     (hash structure; skip
-                      recompile on static scene)
-```
-
-**Key properties**:
-
-- **Declarative**: passes declare read/write resources, not explicit barriers
-- **Auto-barrier**: compiler inserts VkPipelineBarrier / D3D12 ResourceBarrier / glMemoryBarrier / WebGPU transitions
-- **Transient aliasing**: non-overlapping transients aliased to same memory (30-50% RT VRAM savings)
-- **Conditional passes**: enabled/disabled per feature (RTAO only when RT HW, VRS only Tier1, DoF only Realistic)
-- **Static cache**: skip recompilation if graph structure unchanged
-- **Per-layer graphs**: each LayerStack layer owns its own RenderGraph instance
+All GPU work is expressed as **RenderGraph passes** — nodes in a DAG. The Builder→Compiler→Executor pipeline automatically handles barrier insertion, transient resource aliasing (30-50% RT VRAM savings), conditional pass culling (zero-cost DCE), structural hash caching, and render pass merging (subpass consolidation for tile-based GPUs). Each LayerStack layer owns its own RenderGraph instance.
 
 ### 2.2 Backend-Specific Execution
 
-| Backend | Render Pass Model                            | Barrier Model         | Async Compute                          |
-| ------- | -------------------------------------------- | --------------------- | -------------------------------------- |
-| Vulkan  | Dynamic rendering (VK_KHR_dynamic_rendering) | vkCmdPipelineBarrier2 | Timeline semaphore                     |
-| D3D12   | BeginRenderPass/EndRenderPass                | ResourceBarrier       | ID3D12Fence (timeline) + compute queue |
-| OpenGL  | FBO bind/unbind                              | glMemoryBarrier       | N/A (single queue)                     |
-| WebGPU  | Render pass encoder                          | Implicit (Dawn)       | N/A (single queue)                     |
+| Backend | Render Pass Model                            | Barrier Model                               | Async Compute                          |
+| ------- | -------------------------------------------- | ------------------------------------------- | -------------------------------------- |
+| Vulkan  | Dynamic rendering (VK_KHR_dynamic_rendering) | vkCmdPipelineBarrier2                       | Timeline semaphore                     |
+| D3D12   | BeginRenderPass/EndRenderPass                | Enhanced Barriers + Fence Barriers (1.719+) | ID3D12Fence (timeline) + compute queue |
+| OpenGL  | FBO bind/unbind                              | glMemoryBarrier                             | N/A (single queue)                     |
+| WebGPU  | Render pass encoder                          | Implicit (Dawn)                             | N/A (single queue)                     |
 
 ### 2.3 Resource Lifetime
 
@@ -2506,35 +2488,82 @@ Adaptive quality: monitor bandwidth -> adjust resolution, frame rate, encode qua
 ### 20.1 Per-Frame-In-Flight
 
 ```
-kMaxFramesInFlight = 2
+kMaxFramesInFlight = 2 (configurable, default for all tiers)
+```
 
-Frame N:
-  imageAvailableSemaphores_[N%2]  -- swapchain -> render
-  renderFinishedSemaphores_[N%2]  -- render -> present
-  inFlightFences_[N%2]            -- CPU wait before reuse
+**Tier1 (Timeline Semaphore Model)** — see `03-sync.md` §3-§5 for full specification:
 
-Acquire -> GetSubmitSyncInfo -> Submit(cmd, sync) -> Present
+| Resource (per queue)        | Count | Purpose                                                   |
+| --------------------------- | ----- | --------------------------------------------------------- |
+| Graphics timeline semaphore | 1     | CPU wait (BeginFrame) + cross-queue sync + frame ordering |
+| Compute timeline semaphore  | 1     | Async compute completion tracking                         |
+| Transfer timeline semaphore | 1     | Staging upload completion                                 |
+| Binary semaphore (acquire)  | 2     | Swapchain image acquisition (per slot)                    |
+| Binary semaphore (present)  | N     | Render-done signal for present (per swapchain image)      |
+
+CPU waits on `G.timeline >= slot[oldest].lastSignaledValue` at `BeginFrame` — no `VkFence` needed. Timeline values are globally allocated by `SyncScheduler::AllocateSignal()`, enabling multi-window interleaving without value conflicts. Split-submit (§5.3 of `03-sync.md`) allows partial timeline signals within a frame for early async compute start.
+
+**Tier2 (Fence Model)**:
+
+| Resource         | Count | Purpose                           |
+| ---------------- | ----- | --------------------------------- |
+| `VkFence`        | 2     | CPU wait per slot (BeginFrame)    |
+| Binary semaphore | 2     | Swapchain acquire (per slot)      |
+| Binary semaphore | N     | Render-done (per swapchain image) |
+
+Single queue, single submit per frame. No async compute, no split-submit.
+
+**Tier3/Tier4**: Implicit sync — `requestAnimationFrame()` (WebGPU) or `glfwSwapBuffers()` (OpenGL) provides frame pacing. No explicit semaphores or fences.
+
+**Frame lifecycle** (all tiers, managed by `FrameManager`):
+
+```
+BeginFrame: wait for oldest slot → reset CommandPoolAllocator (§19 of 03-sync.md)
+            → drain DeferredDestructor bin → acquire swapchain image
+Record:     RenderGraph compile + execute → command buffers recorded
+EndFrame:   submit command buffers + sync primitives → present
 ```
 
 ### 20.2 GPU-GPU Synchronization
 
-| Mechanism                  | Usage                                                |
-| -------------------------- | ---------------------------------------------------- |
-| Pipeline barrier           | Pass-to-pass resource transitions (same queue)       |
-| Timeline semaphore (Tier1) | Graphics <-> async compute overlap                   |
-| Fence                      | Per-frame CPU-GPU sync, command buffer reuse guard   |
-| Event                      | Fine-grained intra-queue dependency (split barriers) |
+| Mechanism                  | Usage                                                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pipeline barrier           | Pass-to-pass resource transitions (same queue)                                                                                                |
+| Timeline semaphore (Tier1) | Graphics <-> async compute overlap                                                                                                            |
+| Fence                      | Per-frame CPU-GPU sync, command buffer reuse guard                                                                                            |
+| Event                      | Fine-grained intra-queue dependency (split barriers)                                                                                          |
+| D3D12 Fence Barriers       | Command-list-level SignalBarrier/WaitBarrier (Agility SDK 1.719+); Tier-2 adds cross-queue WaitBarrier (see `04-render-graph.md` §5.4, §16.8) |
+
+**Per-tier sync primitive availability** (see `02-rhi-design.md` §9, `03-sync.md` §2.2):
+
+| Primitive                       | T1 Vulkan                 | T1 D3D12                                        | T2 Compat                | T3 WebGPU | T4 OpenGL         |
+| ------------------------------- | ------------------------- | ----------------------------------------------- | ------------------------ | --------- | ----------------- |
+| Timeline semaphore              | Native (core 1.2)         | Emulated via `ID3D12Fence`                      | Extension (if present)   | N/A       | N/A               |
+| Binary semaphore                | Swapchain acquire/present | N/A (fence-based present)                       | Swapchain only           | N/A       | N/A               |
+| Fence (CPU-GPU)                 | `VkFence`                 | `ID3D12Fence` + event                           | `VkFence`                | Implicit  | `glFinish`        |
+| Pipeline barrier                | `vkCmdPipelineBarrier2`   | Enhanced Barriers / Legacy                      | `vkCmdPipelineBarrier`   | Implicit  | `glMemoryBarrier` |
+| Split barrier                   | Separate release/acquire  | Enhanced `SYNC_SPLIT` / `BEGIN_ONLY`+`END_ONLY` | Separate release/acquire | N/A       | N/A               |
+| Fence barrier (D3D12)           | N/A                       | `SignalBarrier`/`WaitBarrier`                   | N/A                      | N/A       | N/A               |
+| QFOT (queue ownership transfer) | Required (EXCLUSIVE mode) | N/A (implicit cross-queue)                      | Required                 | N/A       | N/A               |
+| Async compute queue             | Dedicated queue family    | `COMPUTE` type command queue                    | Fallback to graphics     | N/A       | N/A               |
+| Transfer queue                  | Dedicated DMA queue       | `COPY` type command queue                       | Fallback to graphics     | N/A       | N/A               |
 
 ### 20.3 RenderGraph Barrier Strategy
 
-```
-Pass A writes Texture T (color attachment)
-    | barrier: COLOR_ATTACHMENT_OUTPUT -> FRAGMENT_SHADER
-Pass B reads Texture T (sampled)
+> **Full specification**: See `04-render-graph.md` §5.4 (split barrier model), §5.6 (per-backend aliasing barriers with Vulkan/D3D12/OpenGL/WebGPU details), §5.6.4 (barrier batching), and §5.7 (render pass merging / subpass consolidation).
 
-Transient aliasing: non-overlapping lifetimes -> same VkDeviceMemory / ID3D12Heap
-Aliasing barriers at transition points.
-```
+Summary: The RenderGraph compiler synthesizes split barriers (release after last writer, acquire before first reader) to maximize GPU overlap. Transient resources with non-overlapping lifetimes are aliased to the same `VkDeviceMemory` / `ID3D12Heap`. Consecutive graphics passes sharing attachments are merged into subpasses on supporting backends (Vulkan `VK_KHR_dynamic_rendering_local_read`, D3D12 Render Pass Tier 2).
+
+**Barrier optimization pipeline** (see `04-render-graph.md` §5 for full detail):
+
+| Stage                                 | Optimization                                       | Effect                                     |
+| ------------------------------------- | -------------------------------------------------- | ------------------------------------------ |
+| 1. Barrier-aware reordering (§5.3.1)  | Topological reorder to minimize layout transitions | Fewer barriers emitted                     |
+| 2. Split barrier placement (§5.4)     | Release at writer, acquire at reader with gap      | GPU overlap during resolution              |
+| 3. Aliasing barrier batching (§5.6.4) | Co-locate aliasing + acquire barriers per-pass     | Fewer API calls                            |
+| 4. Render pass merging (§5.7)         | Merge consecutive passes into subpasses            | Replace barriers with subpass dependencies |
+
+**Access flag translation**: Passes declare `ResourceAccess` (render-graph layer); the compiler converts to `(PipelineStage, AccessFlags)` (RHI layer) via the mapping table in `04-render-graph.md` §3.2. This two-layer design keeps pass code barrier-free while generating optimal per-backend barrier commands.
 
 ### 20.4 VRAM Budget Strategy
 
@@ -3483,7 +3512,7 @@ struct ValidationDiagnostic {
 
 ### 20b.8 RenderGraph Compiler Integration
 
-The RenderGraph compiler (T3a.1.2) can use the adaptation layer at **graph compile time** to automatically inject auxiliary passes when the target backend requires adaptation.
+The RenderGraph compiler (see `04-render-graph.md` §5.1 Stage 9) can use the adaptation layer at **graph compile time** to automatically inject auxiliary passes when the target backend requires adaptation.
 
 ```
 RenderGraphBuilder (user declares passes)
@@ -3491,7 +3520,7 @@ RenderGraphBuilder (user declares passes)
     ▼
 RenderGraphCompiler::Compile(builder, backendType)
     │
-    ├─ [1] Kahn sort + dead pass culling (existing §T3a.1.2)
+    ├─ [1] Kahn sort + dead pass culling (see `04-render-graph.md` §5.1 Stages 1-3)
     │
     ├─ [2] Adaptation pass injection (NEW — §20b)    ◄── uses constexpr QueryStrategy
     │       │
@@ -3508,7 +3537,7 @@ RenderGraphCompiler::Compile(builder, backendType)
     │       └─ For each resource requiring ParameterFixup:
     │           → modify CompiledPass metadata (no new pass needed)
     │
-    ├─ [3] Barrier insertion (existing §T3a.1.2, operates on expanded pass list)
+    ├─ [3] Barrier insertion (see `04-render-graph.md` §5.4, operates on expanded pass list)
     │
     ├─ [4] Transient aliasing / lifetime analysis (existing)
     │
