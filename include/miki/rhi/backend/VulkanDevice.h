@@ -55,6 +55,7 @@ namespace miki::rhi {
         uint64_t size = 0;
         uint64_t deviceAddress = 0;
         BufferUsage usage{};
+        bool isPersistentlyMapped = false;  // True if created with VMA_ALLOCATION_CREATE_MAPPED_BIT
     };
 
     struct VulkanTextureData {

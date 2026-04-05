@@ -9,147 +9,20 @@
 
 #include "miki/rhi/backend/VulkanCommandBuffer.h"
 
+#include "VulkanConvert.h"
+
 #include <cassert>
 
 namespace miki::rhi {
+
+    using vulkan::ToVkAccessFlags2;
+    using vulkan::ToVkPipelineStageFlags2;
 
     // =========================================================================
     // Conversion helpers
     // =========================================================================
 
     namespace {
-        auto ToVkPipelineStageFlags2(PipelineStage stage) -> VkPipelineStageFlags2 {
-            VkPipelineStageFlags2 flags = 0;
-            auto has = [stage](PipelineStage bit) {
-                return (static_cast<uint32_t>(stage) & static_cast<uint32_t>(bit)) != 0;
-            };
-            if (has(PipelineStage::TopOfPipe)) {
-                flags |= VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            }
-            if (has(PipelineStage::DrawIndirect)) {
-                flags |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-            }
-            if (has(PipelineStage::VertexInput)) {
-                flags |= VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-            }
-            if (has(PipelineStage::VertexShader)) {
-                flags |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-            }
-            if (has(PipelineStage::TaskShader)) {
-                flags |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT;
-            }
-            if (has(PipelineStage::MeshShader)) {
-                flags |= VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
-            }
-            if (has(PipelineStage::FragmentShader)) {
-                flags |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            }
-            if (has(PipelineStage::EarlyFragmentTests)) {
-                flags |= VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
-            }
-            if (has(PipelineStage::LateFragmentTests)) {
-                flags |= VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            }
-            if (has(PipelineStage::ColorAttachmentOutput)) {
-                flags |= VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-            }
-            if (has(PipelineStage::ComputeShader)) {
-                flags |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            }
-            if (has(PipelineStage::Transfer)) {
-                flags |= VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            }
-            if (has(PipelineStage::BottomOfPipe)) {
-                flags |= VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-            }
-            if (has(PipelineStage::Host)) {
-                flags |= VK_PIPELINE_STAGE_2_HOST_BIT;
-            }
-            if (has(PipelineStage::AllGraphics)) {
-                flags |= VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-            }
-            if (has(PipelineStage::AllCommands)) {
-                flags |= VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            }
-            if (has(PipelineStage::AccelStructBuild)) {
-                flags |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-            }
-            if (has(PipelineStage::RayTracingShader)) {
-                flags |= VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-            }
-            if (has(PipelineStage::ShadingRateImage)) {
-                flags |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
-            }
-            return flags;
-        }
-
-        auto ToVkAccessFlags2(AccessFlags access) -> VkAccessFlags2 {
-            VkAccessFlags2 flags = 0;
-            auto has = [access](AccessFlags bit) {
-                return (static_cast<uint32_t>(access) & static_cast<uint32_t>(bit)) != 0;
-            };
-            if (has(AccessFlags::IndirectCommandRead)) {
-                flags |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-            }
-            if (has(AccessFlags::IndexRead)) {
-                flags |= VK_ACCESS_2_INDEX_READ_BIT;
-            }
-            if (has(AccessFlags::VertexAttributeRead)) {
-                flags |= VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-            }
-            if (has(AccessFlags::UniformRead)) {
-                flags |= VK_ACCESS_2_UNIFORM_READ_BIT;
-            }
-            if (has(AccessFlags::InputAttachmentRead)) {
-                flags |= VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
-            }
-            if (has(AccessFlags::ShaderRead)) {
-                flags |= VK_ACCESS_2_SHADER_READ_BIT;
-            }
-            if (has(AccessFlags::ShaderWrite)) {
-                flags |= VK_ACCESS_2_SHADER_WRITE_BIT;
-            }
-            if (has(AccessFlags::ColorAttachmentRead)) {
-                flags |= VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
-            }
-            if (has(AccessFlags::ColorAttachmentWrite)) {
-                flags |= VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            }
-            if (has(AccessFlags::DepthStencilRead)) {
-                flags |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-            }
-            if (has(AccessFlags::DepthStencilWrite)) {
-                flags |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            }
-            if (has(AccessFlags::TransferRead)) {
-                flags |= VK_ACCESS_2_TRANSFER_READ_BIT;
-            }
-            if (has(AccessFlags::TransferWrite)) {
-                flags |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            }
-            if (has(AccessFlags::HostRead)) {
-                flags |= VK_ACCESS_2_HOST_READ_BIT;
-            }
-            if (has(AccessFlags::HostWrite)) {
-                flags |= VK_ACCESS_2_HOST_WRITE_BIT;
-            }
-            if (has(AccessFlags::MemoryRead)) {
-                flags |= VK_ACCESS_2_MEMORY_READ_BIT;
-            }
-            if (has(AccessFlags::MemoryWrite)) {
-                flags |= VK_ACCESS_2_MEMORY_WRITE_BIT;
-            }
-            if (has(AccessFlags::AccelStructRead)) {
-                flags |= VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-            }
-            if (has(AccessFlags::AccelStructWrite)) {
-                flags |= VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-            }
-            if (has(AccessFlags::ShadingRateImageRead)) {
-                flags |= VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
-            }
-            return flags;
-        }
 
         auto ToVkImageLayout(TextureLayout layout) -> VkImageLayout {
             switch (layout) {

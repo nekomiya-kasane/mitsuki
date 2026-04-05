@@ -29,7 +29,7 @@
 #endif
 
 #include <cassert>
-#include <print>
+#include "miki/debug/StructuredLogger.h"
 
 namespace miki::rhi {
 
@@ -74,7 +74,8 @@ namespace miki::rhi {
         }
 
         void LogBufferCreation(const BufferDesc& desc, const BufferLocationInfo& locInfo, uint64_t deviceAddress) {
-            std::println(
+            MIKI_LOG_INFO(
+                ::miki::debug::LogCategory::Rhi,
                 "[vulkan] Buffer created: name='{}', size={} bytes, location={}, "
                 "deviceLocal={}, hostVisible={}, hostCoherent={}, hostCached={}, BDA=0x{:016X}",
                 desc.debugName ? desc.debugName : "<unnamed>", desc.size, locInfo.location, locInfo.isDeviceLocal,
@@ -383,6 +384,7 @@ namespace miki::rhi {
         data->mappedPtr = vmaAllocInfo.pMappedData;
         data->size = desc.size;
         data->usage = desc.usage;
+        data->isPersistentlyMapped = (vmaAllocInfo.pMappedData != nullptr);
 
         // 5. query BDA if requested
         if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(BufferUsage::ShaderDeviceAddress)) != 0) {
@@ -453,6 +455,11 @@ namespace miki::rhi {
     void VulkanDevice::UnmapBufferImpl(BufferHandle h) {
         auto* data = buffers_.Lookup(h);
         if (!data || !data->mappedPtr) {
+            return;
+        }
+        // Persistently mapped buffers (created with VMA_ALLOCATION_CREATE_MAPPED_BIT) should not be unmapped - they
+        // remain mapped for the lifetime of the buffer.
+        if (data->isPersistentlyMapped) {
             return;
         }
         vmaUnmapMemory(allocator_, data->allocation);

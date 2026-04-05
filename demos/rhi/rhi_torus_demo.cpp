@@ -206,8 +206,12 @@ struct TorusRenderer {
         (void)cmdAcq.listHandle.Dispatch([&](auto& cmd) {
             cmd.Begin();
 
+            // Swapchain image layout transition: Undefined → ColorAttachment
+            // srcStage = None because synchronization with vkAcquireNextImageKHR is handled
+            // by the binary semaphore wait in SubmitDesc, not by the barrier.
+            // Using TopOfPipe here causes WRITE_AFTER_READ hazard (Vulkan validation error).
             TextureBarrierDesc toRender{};
-            toRender.srcStage = PipelineStage::TopOfPipe;
+            toRender.srcStage = PipelineStage::None;
             toRender.dstStage = PipelineStage::ColorAttachmentOutput;
             toRender.srcAccess = AccessFlags::None;
             toRender.dstAccess = AccessFlags::ColorAttachmentWrite;
