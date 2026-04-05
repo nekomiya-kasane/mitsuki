@@ -29,8 +29,59 @@
 #endif
 
 #include <cassert>
+#include <print>
 
 namespace miki::rhi {
+
+    // =========================================================================
+    // Buffer memory location detection helper
+    // =========================================================================
+
+    namespace {
+        struct BufferLocationInfo {
+            const char* location;  // "ReBAR VRAM", "System RAM", "Local VRAM"
+            bool isDeviceLocal;    // VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+            bool isHostVisible;    // VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+            bool isHostCoherent;   // VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+            bool isHostCached;     // VK_MEMORY_PROPERTY_HOST_CACHED_BIT
+        };
+
+        auto DetectBufferLocation(VmaAllocator allocator, VmaAllocation allocation) -> BufferLocationInfo {
+            VmaAllocationInfo allocInfo{};
+            vmaGetAllocationInfo(allocator, allocation, &allocInfo);
+
+            VkMemoryPropertyFlags memFlags{};
+            vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &memFlags);
+
+            BufferLocationInfo info{};
+            info.isDeviceLocal = (memFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+            info.isHostVisible = (memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+            info.isHostCoherent = (memFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+            info.isHostCached = (memFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0;
+
+            // Determine location based on memory property flags
+            if (info.isDeviceLocal && info.isHostVisible) {
+                info.location = "ReBAR VRAM";  // CPU-visible VRAM (Resizable BAR)
+            } else if (info.isDeviceLocal && !info.isHostVisible) {
+                info.location = "Local VRAM";  // GPU-only VRAM
+            } else if (!info.isDeviceLocal && info.isHostVisible) {
+                info.location = "System RAM";  // CPU RAM (staging)
+            } else {
+                info.location = "Unknown";
+            }
+
+            return info;
+        }
+
+        void LogBufferCreation(const BufferDesc& desc, const BufferLocationInfo& locInfo, uint64_t deviceAddress) {
+            std::println(
+                "[vulkan] Buffer created: name='{}', size={} bytes, location={}, "
+                "deviceLocal={}, hostVisible={}, hostCoherent={}, hostCached={}, BDA=0x{:016X}",
+                desc.debugName ? desc.debugName : "<unnamed>", desc.size, locInfo.location, locInfo.isDeviceLocal,
+                locInfo.isHostVisible, locInfo.isHostCoherent, locInfo.isHostCached, deviceAddress
+            );
+        }
+    }  // namespace
 
     // =========================================================================
     // Format conversion: miki::rhi::Format -> VkFormat
@@ -285,6 +336,7 @@ namespace miki::rhi {
     // =========================================================================
 
     auto VulkanDevice::CreateBufferImpl(const BufferDesc& desc) -> RhiResult<BufferHandle> {
+        // 1. fill buffer info
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = desc.size;
@@ -300,6 +352,7 @@ namespace miki::rhi {
         // SharingMode in BufferDesc — D3D12/WebGPU/OpenGL have no equivalent concept).
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
+        // 2. fill alloc info
         VmaAllocationCreateInfo allocInfo{};
         allocInfo.usage = ToVmaMemoryUsage(desc.memory);
         if (desc.transient) {
@@ -309,6 +362,8 @@ namespace miki::rhi {
             allocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
         }
 
+        // 3. apply for the buffer via VMA (implicitly mapped), VMA will automatically choose ReBAR or RAM staging
+        // buffer to use.
         VkBuffer vkBuffer = VK_NULL_HANDLE;
         VmaAllocation allocation = nullptr;
         VmaAllocationInfo vmaAllocInfo{};
@@ -317,6 +372,7 @@ namespace miki::rhi {
             return std::unexpected(RhiError::OutOfDeviceMemory);
         }
 
+        // 4. apply for a buffer handle from the pool
         auto [handle, data] = buffers_.Allocate();
         if (!data) {
             vmaDestroyBuffer(allocator_, vkBuffer, allocation);
@@ -328,7 +384,7 @@ namespace miki::rhi {
         data->size = desc.size;
         data->usage = desc.usage;
 
-        // Query BDA if requested
+        // 5. query BDA if requested
         if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(BufferUsage::ShaderDeviceAddress)) != 0) {
             VkBufferDeviceAddressInfo addrInfo{};
             addrInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
@@ -336,6 +392,7 @@ namespace miki::rhi {
             data->deviceAddress = vkGetBufferDeviceAddress(device_, &addrInfo);
         }
 
+        // 6. set debug name if provided
         if (desc.debugName && vkSetDebugUtilsObjectNameEXT) {
             VkDebugUtilsObjectNameInfoEXT nameInfo{};
             nameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
@@ -344,6 +401,23 @@ namespace miki::rhi {
             nameInfo.pObjectName = desc.debugName;
             vkSetDebugUtilsObjectNameEXT(device_, &nameInfo);
         }
+
+        // 7. log buffer creation info (memory location detection)
+        auto locInfo = DetectBufferLocation(allocator_, allocation);
+        LogBufferCreation(desc, locInfo, data->deviceAddress);
+
+        // TODO (nekomiya): Consider automatic cache management in Map/Unmap
+        // Current VMA defaults to HOST_COHERENT memory for CpuToGpu/GpuToCpu,
+        // so explicit Flush/Invalidate is not needed. If we need to support
+        // non-coherent memory (e.g., mobile GPUs), implement automatic
+        // cache management in MapBuffer/UnmapBuffer based on memory properties.
+        //
+        // What is HOST_COHERENT memory:
+        // - Host (CPU) writes are immediately visible to device (GPU)
+        // - Device writes are immediately visible to host
+        // - No need for explicit vkFlushMappedMemoryRanges/vkInvalidateMappedMemoryRanges
+        // - Performance: slightly slower than non-coherent due to automatic cache maintenance
+        // - Trade-off: simplicity vs fine-grained cache control
 
         return handle;
     }
