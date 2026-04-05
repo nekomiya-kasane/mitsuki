@@ -219,9 +219,78 @@ MIKI_DEFINE_ENUM_BITOPS(ResourceAccess)
 [[nodiscard]] constexpr auto IsReadOnly(ResourceAccess a) noexcept -> bool {
     return (static_cast<uint32_t>(a) & static_cast<uint32_t>(ResourceAccess::AllWrites)) == 0;
 }
+
+// (C1) Compile-time mapping: ResourceAccess -> (PipelineStage, AccessFlags).
+// This is a constexpr lookup — the compiler resolves it at compile time for
+// any constexpr ResourceAccess value, and at runtime via a flat array for
+// dynamic values. Zero branch, zero hash-map overhead.
+struct BarrierMapping {
+    rhi::PipelineStage stage;
+    rhi::AccessFlags   access;
+};
+
+inline constexpr auto kAccessToBarrier = [] {
+    std::array<BarrierMapping, 22> table{};
+    // Reads (bits 0-11)
+    table[0]  = {rhi::PipelineStage::VertexInput,       rhi::AccessFlags::VertexAttributeRead};
+    table[1]  = {rhi::PipelineStage::VertexInput,       rhi::AccessFlags::IndexRead};
+    table[2]  = {rhi::PipelineStage::AllShaders,         rhi::AccessFlags::UniformRead};
+    table[3]  = {rhi::PipelineStage::AllShaders,         rhi::AccessFlags::ShaderRead};
+    table[4]  = {rhi::PipelineStage::DrawIndirect,       rhi::AccessFlags::IndirectCommandRead};
+    table[5]  = {rhi::PipelineStage::Transfer,           rhi::AccessFlags::TransferRead};
+    table[6]  = {rhi::PipelineStage::EarlyLateFragTests, rhi::AccessFlags::DepthStencilRead};
+    table[7]  = {rhi::PipelineStage::ColorAttachOutput,  rhi::AccessFlags::ColorAttachmentRead};
+    table[8]  = {rhi::PipelineStage::RayTracing,         rhi::AccessFlags::AccelStructRead};
+    table[9]  = {rhi::PipelineStage::BottomOfPipe,       rhi::AccessFlags::None};
+    table[10] = {rhi::PipelineStage::Host,               rhi::AccessFlags::HostRead};
+    table[11] = {rhi::PipelineStage::ShadingRateImage,   rhi::AccessFlags::ShadingRateImageRead};
+    // Writes (bits 16-21)
+    table[16] = {rhi::PipelineStage::ComputeOrFragment,  rhi::AccessFlags::ShaderWrite};
+    table[17] = {rhi::PipelineStage::ColorAttachOutput,  rhi::AccessFlags::ColorAttachmentWrite};
+    table[18] = {rhi::PipelineStage::EarlyLateFragTests, rhi::AccessFlags::DepthStencilWrite};
+    table[19] = {rhi::PipelineStage::Transfer,           rhi::AccessFlags::TransferWrite};
+    table[20] = {rhi::PipelineStage::RayTracing,         rhi::AccessFlags::AccelStructWrite};
+    table[21] = {rhi::PipelineStage::Host,               rhi::AccessFlags::HostWrite};
+    return table;
+}();
+
+// Resolve combined ResourceAccess -> merged (PipelineStage, AccessFlags) at compile time
+// when the access mask is constexpr, or at runtime via bit-scan loop (~3ns for typical masks).
+[[nodiscard]] constexpr auto ResolveBarrier(ResourceAccess access) noexcept -> BarrierMapping {
+    auto result = BarrierMapping{};
+    auto bits = static_cast<uint32_t>(access);
+    while (bits) {
+        auto idx = std::countr_zero(bits);  // C++20 <bit>, constexpr
+        result.stage  |= kAccessToBarrier[idx].stage;
+        result.access |= kAccessToBarrier[idx].access;
+        bits &= bits - 1;  // clear lowest set bit
+    }
+    return result;
+}
+
+// (C2) Compile-time access validation: detect illegal access combinations at static_assert time.
+// Transfer passes must not declare color/depth attachment access.
+// Graphics passes must not declare TransferSrc/TransferDst without explicit Transfer flag.
+inline constexpr ResourceAccess kTransferOnlyAccess =
+    ResourceAccess::TransferSrc | ResourceAccess::TransferDst;
+inline constexpr ResourceAccess kGraphicsOnlyAccess =
+    ResourceAccess::ColorAttachWrite | ResourceAccess::ColorAttachRead |
+    ResourceAccess::DepthStencilWrite | ResourceAccess::DepthStencilRead |
+    ResourceAccess::ShadingRateRead;
+
+[[nodiscard]] constexpr auto IsAccessValidForPassType(RGPassFlags flags, ResourceAccess access) noexcept -> bool {
+    if (HasFlag(flags, RGPassFlags::Transfer) && !HasFlag(flags, RGPassFlags::Graphics)) {
+        if (static_cast<uint32_t>(access) & static_cast<uint32_t>(kGraphicsOnlyAccess)) return false;
+    }
+    return true;
+}
 ```
 
-**Mapping to RHI barrier primitives** (`02-rhi-design.md` §9.3, Appendix B): The compiler's barrier synthesis stage (§5.4) converts `ResourceAccess` to `(PipelineStage, AccessFlags)` pairs for `CmdBufferBarrier` / `CmdTextureBarrier`:
+The `ResolveBarrier()` function is the **single implementation** of the mapping table — when invoked with a compile-time-known `ResourceAccess` value, the entire resolution collapses to a constant. At runtime (dynamic masks), it executes a branchless bit-scan loop averaging ~3ns for a typical 2-3 bit mask.
+
+**Compile-time queue constraint validation** (C3): `AddGraphicsPass` / `AddTransferPass` / `AddComputePass` template wrappers invoke `static_assert(IsAccessValidForPassType(...))` when the setup lambda's access declarations are constexpr-evaluable. For runtime-determined accesses, the validation layer checks at `Build()` time and asserts in debug builds.
+
+**Mapping to RHI barrier primitives** (`02-rhi-design.md` §9.3, Appendix B): The compiler's barrier synthesis stage (§5.4) converts `ResourceAccess` to `(PipelineStage, AccessFlags)` pairs via the `constexpr ResolveBarrier()` function above. The table below is the human-readable reference:
 
 | ResourceAccess      | PipelineStage                                     | AccessFlags            |
 | ------------------- | ------------------------------------------------- | ---------------------- |
@@ -337,10 +406,10 @@ private:
         const char*                    name;
         RGPassFlags                    flags;
         RGQueueType                    preferredQueue;
-        std::function<bool()>          condition;
-        std::vector<RGResourceAccess>  reads;
-        std::vector<RGResourceAccess>  writes;
-        std::vector<RGResourceAccess>  creates;
+        std::move_only_function<bool() const> condition; // (M2) no heap alloc for captures <= 3 pointers
+        core::Span<RGResourceAccess>   reads;   // (M1) arena-backed, see buildArena_
+        core::Span<RGResourceAccess>   writes;
+        core::Span<RGResourceAccess>   creates;
         std::move_only_function<void(RenderPassContext&)> execute;
         bool                           hasSideEffects = false;
     };
@@ -361,8 +430,51 @@ private:
 
     std::vector<PassNode>     passes_;
     std::vector<ResourceNode> resources_;
+    core::LinearAllocator     buildArena_; // (M1) frame-scoped arena for all per-pass Span<> storage
 };
 ```
+
+#### 4.1.1 Thread Ownership Model
+
+**`RenderGraphBuilder` is single-threaded** — all `AddPass`, `CreateTexture`, `EnableIf` calls must originate from a single thread (the "build thread", typically the render thread). No internal synchronization is provided.
+
+Rationale: Build phase is fast (<5us for 88 passes) and inherently sequential (pass ordering matters). Multi-threaded building would add lock contention exceeding the build time itself. This matches AMD RPS (single-threaded `rpsCmdCallback` graph construction) and UE5 RDG (single `FRDGBuilder` per render thread).
+
+For multi-viewport/multi-window scenarios, each viewport owns its own `RenderGraphBuilder` instance — no sharing, no locking. Cross-viewport resource sharing is modeled via `ImportTexture`/`ImportBuffer` with explicit generation counters (§10.3).
+
+#### 4.1.2 Memory Allocation Strategy
+
+All per-pass storage (resource access lists, debug names) is allocated from a **frame-scoped `LinearAllocator`** (`buildArena_`) that is reset at `BeginFrame`. This eliminates per-vector heap allocation during graph building:
+
+```
+Allocation strategy:
+  PassNode.reads / writes / creates  ->  core::Span<T> backed by buildArena_
+  PassNode.condition                 ->  std::move_only_function (SBO, no heap for <= 24B)
+  PassNode.execute                   ->  std::move_only_function (SBO, no heap for <= 48B)
+  PassNode.name                      ->  const char* (string literal, zero-copy)
+
+Arena sizing: 88 passes * ~5 accesses * sizeof(RGResourceAccess) ~= 88 * 5 * 24 = ~10 KB
+             + overhead = ~16 KB per graph build. Single 32KB arena page suffices.
+
+Reset: buildArena_.Reset() at Build() completion — all Spans invalidated,
+       PassNodes moved into CompiledRenderGraph which copies needed data.
+```
+
+#### 4.1.3 Lambda Size Constraint
+
+Setup and execute lambdas must fit within `std::move_only_function`'s SBO (small buffer optimization) to avoid heap allocation in the hot path. The validation layer in debug builds asserts:
+
+```cpp
+// Compile-time constraint for setup/execute lambdas:
+// std::move_only_function SBO is typically 3 pointers (24B) on most implementations.
+// Lambdas capturing more should use a pointer-to-context pattern instead.
+static_assert(sizeof(SetupFn) <= kMaxSetupLambdaSize,   // kMaxSetupLambdaSize = 48
+    "Setup lambda too large for SBO — capture a pointer to your context struct instead");
+static_assert(sizeof(ExecuteFn) <= kMaxExecuteLambdaSize, // kMaxExecuteLambdaSize = 64
+    "Execute lambda too large for SBO — capture a pointer to your context struct instead");
+```
+
+Note: `std::move_only_function` SBO size is implementation-defined. miki pins it via a custom `InlineFunction<Sig, Capacity>` wrapper that `static_assert`s the capacity at compile time (see `00-infra.md` foundation types).
 
 ### 4.2 PassBuilder -- Per-Pass Resource Binding
 
@@ -550,6 +662,34 @@ Stage 10: Command Batch Formation
     +-- Output: executable command batches with sync metadata
 ```
 
+#### 5.1.1 Compilation Pipeline Parallelization
+
+Although the full 10-stage pipeline is <60us for 88 passes, stages 6 and 7 have **no data dependency** on each other — barrier synthesis (Stage 6) operates on the DAG edge structure, while transient aliasing (Stage 7) operates on resource lifetime intervals. Both depend on the output of stages 1-5 but not on each other:
+
+```
+Dependency graph of compilation stages:
+
+  [1-5: sequential] ──┬── Stage 6: Barrier Synthesis (O(P×R), ~20us)
+                       │
+                       └── Stage 7: Transient Aliasing  (O(R log R), ~10us)
+                              ↓
+                       ┌── Stage 8: Render Pass Merging (needs barriers from 6)
+                       │
+                       └── Stage 9: Backend Adaptation  (needs aliasing from 7)
+                              ↓
+                       Stage 10: Batch Formation (needs 8+9)
+
+Parallelizable pairs:
+  - Stage 6 ∥ Stage 7:  save ~10us (shorter of the two)
+  - Stage 8 ∥ Stage 9:  save ~2us  (marginal)
+
+Total savings: ~12us → full recompile drops from ~60us to ~48us (~20% improvement)
+```
+
+**Implementation**: Use `std::async` or the engine's `TaskGraph` to fork stages 6 and 7 after stage 5 completes, then join before stage 8. The fork/join overhead is ~1us (thread wake + cache sync), so net savings are ~9us. This is worthwhile only on recompile frames (cache miss); on cache hit frames the entire pipeline is skipped.
+
+**Thread safety**: Stages 6 and 7 read from the shared immutable `DAG` + `ResourceLifetimes` structures and write to disjoint output buffers (`BarrierCommands[]` vs `AliasingLayout`). No synchronization needed beyond the fork/join point.
+
 ### 5.2 Dependency Edge Classification
 
 | Hazard                        | Abbr | Barrier Required               | Example                                                      |
@@ -667,6 +807,134 @@ With split barriers:
 | OpenGL 4.3              | `glMemoryBarrier()` -- no split; single call before consumer.                                                                                                                                                                                                                                                                                            |
 | WebGPU                  | Implicit (Dawn/wgpu handle transitions). No explicit API calls.                                                                                                                                                                                                                                                                                          |
 
+**Hazard-specific barrier generation rules** (Stage 6 implementation detail):
+
+| Hazard                                  | Barrier Content                                                          | Rationale                                                                                                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **RAW**                                 | Execution dependency + memory dependency (cache flush + invalidate)      | Writer's caches must be flushed and reader's caches invalidated to see new data                                                                                |
+| **WAW**                                 | Execution dependency + memory dependency (cache flush)                   | Second writer must not overwrite before first writer completes; caches must be coherent                                                                        |
+| **WAR**                                 | Execution dependency **only** (`srcAccessMask = 0`, `dstAccessMask = 0`) | Reader does not modify caches; writer only needs to wait for reader to finish. No cache flush/invalidate needed — this is a pure execution ordering constraint |
+| **RAR** (same queue)                    | None                                                                     | No hazard between concurrent readers                                                                                                                           |
+| **RAR** (cross-queue, Vulkan EXCLUSIVE) | QFOT acquire (execution + layout transition)                             | Queue family ownership must be transferred                                                                                                                     |
+
+The compiler **must not** generate a memory dependency for WAR edges. Emitting `srcAccessMask = SHADER_WRITE` on a WAR barrier is a common implementation bug that causes unnecessary cache flushes — on discrete GPUs this can cost ~50-200ns per spurious flush, adding up to ~5-10us/frame for a 88-pass pipeline with ~50 WAR edges.
+
+**Vulkan WAR barrier example** (correct):
+
+```cpp
+// Pass A reads texture T (ShaderReadOnly), Pass B writes texture T (ShaderWrite)
+// This is a WAR hazard — B must not start writing until A finishes reading.
+VkMemoryBarrier2 warBarrier {
+    .sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+    .srcStageMask  = resolvedSrcStage,  // stage where A reads (e.g., FRAGMENT_SHADER)
+    .srcAccessMask = VK_ACCESS_2_NONE,  // NO cache flush — A only read, caches are clean
+    .dstStageMask  = resolvedDstStage,  // stage where B writes (e.g., COMPUTE_SHADER)
+    .dstAccessMask = VK_ACCESS_2_NONE,  // NO cache invalidate — B will overwrite anyway
+};
+// If layout transition is needed, use VkImageMemoryBarrier2 with the same zero-access pattern
+// but with oldLayout/newLayout set. The layout transition itself is the only "work" done.
+```
+
+#### 5.4.1 Per-Subresource Barrier Tracking
+
+The `RGResourceAccess` struct (§3.4) carries `mipLevel` and `arrayLayer` fields, enabling the compiler to track resource state at **subresource granularity** — individual mip levels and array layers can be in different layouts and access states simultaneously.
+
+**Why this matters**: Several critical passes require per-mip transitions:
+
+| Pass                   | Subresource Pattern                          | Without Per-Mip Tracking                                              | With Per-Mip Tracking                                                                              |
+| ---------------------- | -------------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| HiZ mip generation     | Write mip N, then read mip N + write mip N+1 | Full-texture barrier between each mip level (12 barriers for 12 mips) | Per-mip barrier: only transition the single mip being read (12 barriers but each is minimal scope) |
+| Bloom downsample chain | Sequential mip-to-mip downsample             | Full-texture barrier per step                                         | Per-mip: previous mip → ShaderReadOnly, current mip → ColorAttachWrite                             |
+| Shadow cascade atlas   | Each cascade writes a different array layer  | Full-array barrier between cascades (over-sync)                       | Per-layer: only barrier the layer being written                                                    |
+| Cube map generation    | 6 faces rendered independently               | Full-array barrier per face                                           | Per-layer: independent face transitions                                                            |
+
+**State tracking data structure**:
+
+```cpp
+// Per-resource state tracked by the compiler during Stage 6 (Barrier Synthesis):
+struct ResourceStateTracker {
+    struct SubresourceState {
+        ResourceAccess     lastAccess = ResourceAccess::None;
+        rhi::TextureLayout layout     = rhi::TextureLayout::Undefined;
+        uint32_t           lastWriter = UINT32_MAX;  // pass index of last writer
+        uint32_t           lastReader = UINT32_MAX;  // pass index of last reader
+    };
+
+    // For textures with per-subresource tracking:
+    // Indexed as [mipLevel * arrayLayers + arrayLayer]
+    std::vector<SubresourceState> subresourceStates;
+
+    // For textures with uniform access (kAllMips / kAllLayers):
+    // Single state entry, avoids per-subresource overhead for simple cases
+    SubresourceState              wholeResourceState;
+
+    bool usePerSubresource = false;  // true if ANY access specifies non-kAll mip/layer
+};
+```
+
+**Tracking mode selection** (automatic, per-resource):
+
+```
+For each resource R:
+  if ALL accesses to R use mipLevel == kAllMips AND arrayLayer == kAllLayers:
+    -> whole-resource tracking (single state, minimal overhead)
+  else:
+    -> per-subresource tracking (state array of mipLevels * arrayLayers entries)
+
+Typical 88-pass pipeline:
+  ~15 resources need per-subresource tracking (HiZ, bloom chain, shadow atlas,
+   cube maps, VRS mip chain)
+  ~185 resources use whole-resource tracking (GBuffer MRTs, AO, HDR, etc.)
+```
+
+**Barrier emission with subresource ranges**:
+
+```cpp
+// Vulkan: per-mip barrier for HiZ mip generation (mip 3 read, mip 4 write)
+VkImageMemoryBarrier2 mipBarrier {
+    .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+    .srcStageMask     = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    .srcAccessMask    = VK_ACCESS_2_SHADER_WRITE_BIT,
+    .dstStageMask     = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    .dstAccessMask    = VK_ACCESS_2_SHADER_READ_BIT,
+    .oldLayout        = VK_IMAGE_LAYOUT_GENERAL,
+    .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    .image            = hiZImage,
+    .subresourceRange = {
+        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel   = 3,       // only mip 3
+        .levelCount     = 1,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+    },
+};
+
+// D3D12 Enhanced Barriers: per-mip transition
+D3D12_TEXTURE_BARRIER mipBarrier_d3d12 {
+    .SyncBefore   = D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+    .SyncAfter    = D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+    .AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+    .AccessAfter  = D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+    .LayoutBefore = D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS,
+    .LayoutAfter  = D3D12_BARRIER_LAYOUT_SHADER_RESOURCE,
+    .pResource    = hiZResource,
+    .Subresources = {
+        .IndexOrFirstMipLevel = 3,
+        .NumMipLevels         = 1,
+        .FirstArraySlice      = 0,
+        .NumArraySlices        = 1,
+        .FirstPlane           = 0,
+        .NumPlanes            = 1,
+    },
+};
+```
+
+**Interaction with aliasing (§5.6)**: Per-subresource tracking does NOT affect transient aliasing — aliasing operates at whole-resource granularity (a resource is either fully alive or fully dead). Per-subresource tracking only affects barrier synthesis within a resource's lifetime.
+
+**Interaction with split barriers (§5.4)**: Split barriers are compatible with subresource ranges. The release half specifies the subresource range of the writer; the acquire half specifies the range of the reader. When a full-resource write follows a per-mip read chain, the acquire barrier can use `fullRange()` to transition all mips simultaneously.
+
+**Performance impact**: Per-subresource tracking adds ~2KB memory (15 resources × ~8 mips × 16B per state entry) and ~1us compilation time for the expanded state tracking. Runtime barrier emission cost is unchanged — the same `vkCmdPipelineBarrier2` call, just with a narrower `subresourceRange`.
+
 ### 5.5 Cross-Queue Synchronization Synthesis
 
 For each edge crossing queue boundaries:
@@ -714,7 +982,7 @@ Output: Memory heap assignment (resource -> slot)
 1. Sort resources by size (largest first)
 2. For each resource r:
    a. Find existing heap slot s where:
-      - s.size >= r.size (within 10% overshoot tolerance)
+      - s.size >= r.size (within 10% overshoot tolerance; refined by §5.6.6 alignment-aware packing)
       - s.lifetime does not overlap r.lifetime
       - s.memoryType compatible with r.memoryType
    b. If found: assign r to s, extend s.lifetime
@@ -833,6 +1101,156 @@ Per-pass barrier emission order:
 ```
 
 Typical 88-pass pipeline: ~30-50 aliasing barriers per frame, batched into ~15-20 API calls (multiple aliasing barriers sharing the same first-consumer pass are merged).
+
+#### 5.6.5 Heap Pool Cross-Frame Reuse
+
+On graph cache hit (§10.1), the compiled aliasing layout (slot assignments, heap sizes, resource-to-slot mapping) is **identical** to the previous frame. Re-running `vkBindImageMemory2` / `CreatePlacedResource` every frame for the same layout is wasteful. The transient memory system maintains a **Heap Pool** that persists across frames:
+
+```
+HeapPool design:
+
+1. After first compilation: allocate VkDeviceMemory / ID3D12Heap per aliasing group.
+   Store as HeapPoolEntry { heapHandle, size, heapGroupType, layoutHash }.
+
+2. On cache hit (same structural hash):
+   - Match each aliasing group to its HeapPoolEntry by layoutHash.
+   - If match: reuse heap directly. Skip vkBindImageMemory2 / CreatePlacedResource.
+     Only re-create VkImage/ID3D12Resource objects (lightweight, no memory alloc).
+   - Cost: ~200ns per resource (object creation) vs ~2us (memory bind).
+
+3. On cache miss or partial recompilation (descHash changed):
+   - Compare new aliasing layout against pool entries.
+   - Reuse heaps whose size >= required (within 20% overshoot).
+   - Release oversized heaps exceeding 2x required (prevent VRAM waste).
+   - Allocate new heaps for unmatched groups.
+
+4. Pool eviction: LRU with 3-frame grace period. Heaps unused for 3 consecutive
+   frames are released. Prevents VRAM leak from stale graph configurations.
+```
+
+**Steady-state cost** (cache hit, no resize): zero memory allocation, zero memory bind. Only `VkImage` / `ID3D12Resource` object re-creation (~200ns per transient resource, ~50 resources = ~10us total). This matches the §12 performance budget: `Transient alloc (cached) ~500ns total, pool reuse`.
+
+**D3D12 specifics**: `ID3D12Heap` is reusable across frames without recreation. Placed resources must be re-created (`CreatePlacedResource`) because they reference a specific heap offset — but this is a CPU-only operation with no GPU cost. `ID3D12Resource` objects from the previous frame are deferred-destroyed via `DeferredDestructor` (§6 of `03-sync.md`).
+
+**Vulkan specifics**: `VkDeviceMemory` persists. `VkImage` objects are re-created and re-bound via `vkBindImageMemory2`. Image creation + bind is ~100ns per image on Mesa/RADV, ~200ns on NVIDIA proprietary.
+
+#### 5.6.6 Alignment-Aware Offset Packing
+
+The interval graph coloring algorithm (§5.6) assigns resources to heap slots by size. However, placed resources have backend-specific alignment requirements that create internal fragmentation if ignored:
+
+| Resource Type              | Vulkan Alignment                                | D3D12 Alignment                                       |
+| -------------------------- | ----------------------------------------------- | ----------------------------------------------------- |
+| Color/depth render targets | `memoryRequirements.alignment` (typically 64KB) | 64KB (D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT)     |
+| MSAA render targets        | 64KB-256KB (driver-dependent)                   | 4MB (D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT) |
+| Non-RT textures (SRV-only) | 64KB (typical)                                  | 64KB                                                  |
+| Buffers                    | 256B (typical)                                  | 64KB (placed) or 256B (suballocated)                  |
+| Small buffers (<64KB)      | 256B                                            | 64KB (placed) — wasteful                              |
+
+**Alignment-aware first-fit-decreasing algorithm**:
+
+```
+Modified step 2a of §5.6 algorithm:
+
+For each resource r (sorted by size, largest first):
+  alignment = QueryAlignment(r)  // vkGetImageMemoryRequirements or D3D12 rules
+  For each existing heap slot s:
+    alignedOffset = AlignUp(s.currentOffset, alignment)
+    padding = alignedOffset - s.currentOffset
+    if (alignedOffset + r.size <= s.heapSize)
+       AND (s.lifetime does not overlap r.lifetime)
+       AND (s.memoryType compatible):
+      assign r at alignedOffset within s
+      s.currentOffset = alignedOffset + r.size
+      s.internalFragmentation += padding
+      break
+  If no slot found: allocate new slot with size = AlignUp(r.size, alignment)
+```
+
+**Fragmentation reduction**: Without alignment awareness, naive packing wastes ~8-15% of heap space on typical 88-pass pipelines (4K). With alignment-aware packing, fragmentation drops to ~2-4%. For a 220MB transient pool, this saves ~10-25MB VRAM.
+
+**MSAA special case**: 4MB-aligned MSAA resources are packed into their own sub-group within the RT/DS heap to avoid 4MB alignment gaps fragmenting the 64KB-aligned resources.
+
+#### 5.6.7 Transient Buffer Suballocation
+
+Transient buffers (indirect draw args, sort scratch, culling output, histogram bins) are typically small (4KB-2MB) and have relaxed alignment (256B). Placing each as an independent `ID3D12Resource` / `VkBuffer` on a 64KB-aligned heap slot wastes 90%+ space for small buffers. Instead, transient buffers use a **frame-scoped linear suballocator** within the buffer-only heap:
+
+```
+TransientBufferAllocator design:
+
+1. One large VkBuffer / ID3D12Resource spans the entire buffer-only heap.
+   - Vulkan: single VkBuffer bound to the buffer heap's VkDeviceMemory at offset 0.
+   - D3D12: single placed buffer resource covering the full BUFFER heap.
+
+2. Per-frame allocation (after aliasing layout computed):
+   offset = 0
+   For each transient buffer b (in lifetime order):
+     b.offset = AlignUp(offset, max(b.alignment, 256))
+     b.parentBuffer = heapBuffer
+     offset = b.offset + b.size
+
+3. Pass execution: GetBuffer(handle) returns {heapBuffer, offset, size} tuple.
+   Shader binds heapBuffer at dynamic offset — single descriptor, multiple uses.
+
+4. Reset: offset = 0 at BeginFrame (no deallocation, no fragmentation).
+```
+
+**Memory savings** (88-pass pipeline, 4K):
+
+| Buffer Category     | Placed (64KB each) | Suballocated | Savings |
+| ------------------- | ------------------ | ------------ | ------- |
+| Indirect args (×8)  | 512KB              | 32KB         | 94%     |
+| Sort scratch (×2)   | 128KB              | 64KB         | 50%     |
+| Histogram bins (×3) | 192KB              | 12KB         | 94%     |
+| Culling output (×2) | 4MB                | 4MB          | 0%      |
+| **Total**           | **~5MB**           | **~4.1MB**   | **18%** |
+
+The absolute savings are modest (~1MB) but the **allocation overhead reduction** is significant: 15 `CreatePlacedResource` calls → 1, eliminating per-buffer creation latency.
+
+**Interaction with §5.6.5 (Heap Pool)**: The buffer-only heap and its parent buffer object are pooled identically to texture heaps. On cache hit, the suballocator only recomputes offsets (pure arithmetic, <100ns).
+
+#### 5.6.8 Heap Defragmentation for Long-Running Sessions
+
+The Heap Pool (§5.6.5) uses LRU eviction with a 3-frame grace period, which suffices for interactive sessions with stable graph structures. However, long-running applications (CAD/CAE editors, server-side rendering) can accumulate **heap pool fragmentation** over hours of operation as graph structures change (viewport resize, pass enable/disable cycles, LOD switches). Fragmentation manifests as:
+
+1. **Over-provisioned heaps**: A heap allocated for 4K resolution persists when the viewport shrinks to 1080p. The 20% overshoot tolerance (§5.6.5 step 3) prevents immediate release, and the LRU grace period delays eviction.
+2. **Heap group proliferation**: Repeated resolution or format changes create multiple HeapPoolEntry objects for the same aliasing group, only one of which is active.
+3. **VRAM budget violation**: Accumulated stale heaps push total VRAM usage beyond the `MemoryBudget` reported by `VK_EXT_memory_budget` / `DXGI_QueryVideoMemoryInfo`.
+
+**Defragmentation strategy** (triggered periodically, not per-frame):
+
+```
+HeapPool::DefragmentIfNeeded():
+
+Trigger conditions (any one):
+  1. VRAM usage exceeds 90% of MemoryBudget for 30+ consecutive frames
+  2. Heap pool entry count exceeds 2x the active aliasing group count
+  3. Explicit user request (e.g., after scene transition)
+
+Algorithm:
+  1. Snapshot active aliasing layout from current CompiledRenderGraph.
+  2. For each aliasing group G:
+     a. Compute idealSize = AlignUp(G.requiredSize, heapPageSize)
+     b. Find matching HeapPoolEntry E where E.size == idealSize
+        -> If found: mark E as "right-sized", skip
+     c. If no exact match: find E where E.size > idealSize
+        -> Schedule E for replacement:
+           - Allocate new heap of idealSize
+           - On next frame's AllocateTransients: bind resources to new heap
+           - Defer-destroy old heap (DeferredDestructor, 03-sync.md §6)
+  3. Evict all HeapPoolEntries not matched to any active group.
+  4. Reset LRU counters for all surviving entries.
+
+Cost: O(heapCount) comparisons + O(replacedCount) heap allocations.
+      Typical: 3-5 heap replacements, ~50us total (amortized over 30+ frames).
+      Heap allocation is async-capable (D3D12 CreateHeap is non-blocking;
+      Vulkan vkAllocateMemory may block briefly on some drivers).
+```
+
+**VRAM savings**: In a 4-hour CAD editing session with ~200 graph structure changes, defragmentation prevents ~80-150MB of stale heap accumulation on a 4K viewport. Without defrag, worst-case VRAM waste can reach 30% of transient pool size.
+
+**Interaction with MemoryBudget feedback** (§7.2.1): The adaptive async threshold already monitors GPU memory pressure. When `VK_EXT_memory_budget` reports high utilization, the defrag trigger threshold drops from 90% to 80%, increasing defrag frequency proactively.
+
+**Tier applicability**: Tier1 only (Vulkan + D3D12). Tier2/3/4 do not pool heaps (§5.6.3) and thus have no defrag need.
 
 ### 5.7 Render Pass Merging (Subpass Consolidation)
 
@@ -978,7 +1396,68 @@ Strategy:
 Tier2/3/4: single-threaded recording (no secondary command buffers on GL/WebGPU).
 ```
 
-#### 6.2.1 Async Graph Execution (Render Thread Offloading)
+#### 6.2.1 Thread-Safety Invariants for Parallel Recording
+
+Parallel command recording introduces strict thread-affinity and isolation requirements. Violations cause undefined behavior in both Vulkan and D3D12 drivers.
+
+**Command Pool / Allocator Affinity** (T2 fix):
+
+```
+Vulkan:  VkCommandPool is NOT thread-safe. Each recording thread MUST own a
+         dedicated VkCommandPool from which it allocates secondary command buffers.
+         Pools are obtained from CommandPoolAllocator (03-sync.md §19) which
+         maintains a pool-per-thread-per-frame-slot ring:
+
+         CommandPoolAllocator::Acquire(threadIndex, frameSlot) -> VkCommandPool
+
+         On BeginFrame, the oldest frame slot's pools are reset in bulk
+         (vkResetCommandPool) — zero per-buffer reset overhead.
+
+D3D12:   ID3D12CommandAllocator is NOT thread-safe. Each recording thread owns
+         a dedicated allocator. Command lists created from different allocators
+         can be recorded in parallel. Allocators are reset per-frame-slot
+         identically to Vulkan pools.
+
+Invariant: No two threads ever share a VkCommandPool or ID3D12CommandAllocator.
+           This is enforced by the executor's thread-dispatch logic, not by
+           runtime locking — lock-free by construction.
+```
+
+**Per-Pass Context Isolation** (T3 fix):
+
+Each recording thread receives a **thread-local `RenderPassContext`** clone. The `CompiledRenderGraph` is immutable (shared read-only), but the per-pass physical handle lookup table (`RGResourceHandle -> rhi::TextureHandle`) is a **read-only flat array** indexed by resource handle — no mutation, no synchronization needed:
+
+```cpp
+// Thread-local context creation (per recording thread):
+auto CreateThreadContext(const CompiledRenderGraph& graph, uint32_t threadIndex) -> RenderPassContext {
+    return RenderPassContext {
+        .commandList   = threadCommandLists_[threadIndex],
+        .physicalTable = graph.physicalHandles,  // shared read-only pointer
+        .passIndex     = 0,  // set per-pass before execute lambda
+        .passName      = nullptr,
+    };
+}
+// GetTexture() / GetBuffer() are pure index lookups — thread-safe without locks.
+```
+
+**Recording Thread Dispatch** (AMD RPS-style batch partitioning):
+
+```
+Per submission batch:
+  1. Partition passes into N recording jobs (N = min(passesinBatch, workerThreadCount))
+  2. Each job = contiguous subrange of passes within the batch
+  3. Job i records passes[begin_i .. end_i] into secondaryCmdBuf_i (Vulkan)
+     or cmdList_i (D3D12) using threadPool_[i]'s command pool/allocator
+  4. Primary command buffer executes secondaries in index order:
+     Vulkan:  vkCmdExecuteCommands(primary, N, secondaries[])
+     D3D12:   ID3D12CommandQueue::ExecuteCommandLists(N, lists[])
+  5. Barrier commands (split acquire/release) are pre-recorded into the
+     PRIMARY command buffer BEFORE secondaries execute — barriers are NOT
+     recorded by worker threads. This eliminates cross-thread barrier ordering
+     hazards entirely.
+```
+
+#### 6.2.2 Async Graph Execution (Render Thread Offloading)
 
 Beyond parallel command recording within a single frame, the entire graph execution pipeline (transient allocation, barrier emission, command recording) can be offloaded from the render thread to async worker tasks. This reduces the render thread critical path by decoupling execution from submission:
 
@@ -1003,6 +1482,40 @@ Worker Thread(s):                             |
 - Worker signals completion via `std::binary_semaphore` or `AsyncTaskHandle`
 - Tier2/3/4: async execute disabled (single-threaded backends cannot record from worker threads)
 
+**Error Propagation** (T4 fix):
+
+Worker thread failures (GPU device lost, allocation failure, validation error) must be captured and propagated to the render thread without crashing the worker:
+
+```cpp
+struct AsyncExecuteResult {
+    core::Result<void>     status;        // Ok or error code
+    rhi::DeviceLostInfo    deviceLost;    // populated if GPU device lost during recording
+    uint32_t               lastPassIndex; // index of pass being recorded when error occurred
+};
+
+// Worker thread:
+auto result = AsyncExecuteResult{};
+try {
+    AllocateTransients(graph, device);
+    RecordPasses(graph, device);  // catches VK_ERROR_DEVICE_LOST / DXGI_ERROR_DEVICE_REMOVED
+    result.status = core::Ok();
+} catch (const rhi::DeviceLostException& e) {
+    result.status = core::Error(ErrorCode::DeviceLost);
+    result.deviceLost = e.info;
+    result.lastPassIndex = currentPassIndex_;
+}
+completionSemaphore_.release();
+
+// Render thread (at SubmitBatches):
+completionSemaphore_.acquire();
+if (result.status.IsError()) {
+    // Propagate to FrameManager for device recovery (see 03-sync.md §18)
+    return result.status;
+}
+```
+
+All worker exceptions are caught and marshaled into `AsyncExecuteResult`. The render thread checks the result at `SubmitBatches()` time and initiates device recovery if needed. No unhandled exceptions escape worker threads.
+
 **Interaction with graph caching (§10)**: On cache hit, the async execute reuses the cached compiled graph directly — worker thread only runs `AllocateTransients` + `RecordPasses`, skipping compilation entirely. Total render thread cost on cache hit: <1us (kick + wait).
 
 ### 6.3 RenderPassContext -- Pass Execution Interface
@@ -1024,8 +1537,54 @@ struct RenderPassContext {
 
     // Frame-scoped linear allocator for transient CPU data
     [[nodiscard]] auto GetFrameAllocator() const -> LinearAllocator&;
+
+    // (C4) CRTP zero-overhead command dispatch.
+    // Calls Dispatch() once per pass to obtain the concrete backend command list,
+    // then all subsequent draw/dispatch/barrier calls within the pass are direct
+    // function calls — no vtable, no type-erasure overhead.
+    template <typename Fn>
+    auto DispatchCommands(Fn&& fn) const -> void {
+        commandList.Dispatch([&]<typename Impl>(CommandBufferBase<Impl>& cmd) {
+            fn(cmd);  // fn receives concrete Impl — all calls devirtualized
+        });
+    }
 };
 ```
+
+#### 6.3.1 CRTP Dispatch Path — Zero-Overhead Pass Recording
+
+The `RenderPassContext::commandList` field is a `rhi::CommandListHandle` — a type-erased facade (see `02-rhi-design.md` §2). To achieve zero vtable cost within pass recording, the executor invokes `Dispatch()` **once per pass**, which resolves the concrete backend type via a single switch/jump:
+
+```cpp
+// Executor calls Dispatch() once per pass — O(1) type resolution:
+passContext.DispatchCommands([&](auto& cmd) {
+    // 'cmd' is CommandBufferBase<VulkanCommandBuffer> or
+    //        CommandBufferBase<D3D12CommandList> etc.
+    // All CmdDraw, CmdDispatch, CmdBindPipeline calls are direct,
+    // devirtualized by the compiler — zero vtable overhead per call.
+    executePassLambda(passContext, cmd);
+});
+
+// Cost model:
+//   Dispatch() overhead: 1 indirect jump (~2ns) per pass
+//   Per-draw overhead:   0ns (direct call via CRTP)
+//   For 88 passes, 5000+ draw calls: 88 * 2ns = 176ns total dispatch cost
+//   vs 5000 * ~3ns = 15us if every draw went through vtable
+```
+
+**Backend selection is compile-time** when miki is built for a single backend (e.g., Vulkan-only build). In this case, `Dispatch()` is a no-op and the compiler inlines everything:
+
+```cpp
+// Single-backend build (MIKI_SINGLE_BACKEND defined):
+// CommandListHandle::Dispatch degenerates to:
+template <typename Fn>
+auto Dispatch(Fn&& fn) -> void {
+    fn(static_cast<CommandBufferBase<ConcreteImpl>&>(*this));
+    // No switch, no indirect jump — fully inlined
+}
+```
+
+**Multi-backend build**: `Dispatch()` switches on a `BackendTag` enum (1 byte, stored in handle). The switch has at most 5 cases (Vulkan/D3D12/GL/WebGPU/Mock) and is predicted perfectly after the first pass of each frame. Branch predictor miss cost: ~5ns, amortized to <1ns/pass over 88 passes.
 
 ### 6.4 Backend-Specific Execution
 
@@ -1036,6 +1595,97 @@ struct RenderPassContext {
 | Vulkan Compat (T2) | `vkCmdBeginRendering` (Vulkan 1.3+)       | `vkCmdPipelineBarrier` (no split)                                       | VMA dedicated (no aliasing)      | Single cmd buf                      |
 | WebGPU (T3)        | `GPURenderPassEncoder`                    | Implicit (Dawn)                                                         | `createTexture` per resource     | Single encoder                      |
 | OpenGL (T4)        | FBO bind/unbind                           | `glMemoryBarrier`                                                       | `glGenTextures` / `glGenBuffers` | Single GL context                   |
+
+### 6.5 GPU→CPU Readback Path
+
+GPU→CPU readback (picking, occlusion query results, CAE data extraction, screenshot capture) requires special treatment because the CPU cannot read GPU-written data until the GPU has finished writing **and** the data has been copied to a host-visible buffer. The render graph models readback as a first-class resource flow with built-in latency hiding.
+
+#### 6.5.1 Readback Buffer as Graph Resource
+
+Readback buffers are declared via `ImportBuffer` with `MemoryLocation::CpuReadback`:
+
+```cpp
+// Readback ring: triple-buffered host-visible buffer for N+2 latency hiding
+auto readbackBuf = builder.ImportBuffer(frame.readbackRing.GetSlot(frame.index), "PickReadback");
+
+// Pass that writes picking data on GPU
+builder.AddComputePass("PickingResolve",
+    [&](PassBuilder& pb) {
+        pb.ReadTexture(visBuffer, ResourceAccess::ShaderReadOnly);
+        pb.ReadTexture(depthTarget, ResourceAccess::ShaderReadOnly);
+        pb.WriteBuffer(readbackBuf, ResourceAccess::TransferDst);
+        pb.SetSideEffects();  // never cull — readback is an observable side effect
+    },
+    [&](RenderPassContext& ctx) {
+        // Compute shader resolves pick coord -> entity ID + depth -> writes to readbackBuf
+    });
+```
+
+The compiler treats `TransferDst` on a `CpuReadback` buffer identically to any other write access — barrier synthesis inserts the correct `HOST_READ` acquire barrier for the CPU consumer.
+
+#### 6.5.2 Latency Hiding with ReadbackRing
+
+Direct GPU→CPU readback stalls the pipeline (CPU must wait for GPU to finish). The standard solution is a **triple-buffered ReadbackRing** that introduces N+2 frame latency:
+
+```
+Frame N:   GPU writes readback slot [N % 3]
+Frame N+1: GPU writes slot [(N+1) % 3], slot [N % 3] in-flight
+Frame N+2: CPU reads slot [N % 3] (guaranteed complete via timeline fence)
+           GPU writes slot [(N+2) % 3]
+
+ReadbackRing design:
+  struct ReadbackRing {
+      rhi::BufferHandle slots[3];          // host-visible, persistently mapped
+      void*             mappedPtrs[3];     // persistent map (VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+      uint64_t          fenceValues[3];    // timeline semaphore value when write completed
+
+      auto GetWriteSlot(uint64_t frameIndex) -> rhi::BufferHandle {
+          return slots[frameIndex % 3];
+      }
+      auto GetReadSlot(uint64_t frameIndex) -> ReadbackResult {
+          auto slot = (frameIndex - 2) % 3;  // read 2 frames ago
+          // Timeline fence guarantees completion — no CPU wait needed
+          return { .data = mappedPtrs[slot], .frameIndex = frameIndex - 2 };
+      }
+  };
+```
+
+**Barrier sequence** (compiler-generated):
+
+```
+Pass: PickingResolve (compute queue or graphics queue)
+  1. Acquire barrier: visBuffer ShaderReadOnly, depthTarget ShaderReadOnly
+  2. Execute: compute shader writes pick result to readbackBuf
+  3. Release barrier: readbackBuf TransferDst -> HostRead
+     Vulkan:  srcStage = COMPUTE_SHADER, srcAccess = SHADER_WRITE
+              dstStage = HOST, dstAccess = HOST_READ
+     D3D12:   StateBefore = UNORDERED_ACCESS, StateAfter = COPY_DEST
+              (host read implicit after fence signal)
+
+Submission: timeline semaphore signal after PickingResolve batch.
+  fenceValues[frameIndex % 3] = signalValue;
+
+CPU read (frame N+2): no wait — timeline value already exceeded.
+  vkInvalidateMappedMemoryRanges (if not HOST_COHERENT)
+  memcpy from mappedPtrs[slot]
+```
+
+**Interaction with conditional execution (§9)**: If the readback pass is conditionally disabled (e.g., no pick request this frame), the ReadbackRing slot is not written. The CPU read path checks `fenceValues[slot]` — if the value has not advanced, the read returns `std::nullopt` (no data available). No stale data is ever returned.
+
+**Interaction with async execute (§6.2.2)**: Readback passes are typically low-priority and can run on the transfer queue (if the source data is already in VRAM). The compiler can schedule `CmdCopyBufferToBuffer` (GPU-local → host-visible) on the transfer queue, overlapping with graphics work. Timeline semaphore ensures ordering.
+
+#### 6.5.3 Readback Use Cases in miki Pipeline
+
+| Use Case               | Source Resource        | Readback Size           | Latency Tolerance               | Queue               |
+| ---------------------- | ---------------------- | ----------------------- | ------------------------------- | ------------------- |
+| Object picking         | VisBuffer + Depth      | 16B (entity ID + depth) | 2 frames (acceptable for click) | Graphics or Compute |
+| Occlusion query        | Hardware query heap    | 8B × query count        | 2 frames                        | Graphics            |
+| CAE result extraction  | Simulation output SSBO | 1KB-1MB                 | 2-4 frames                      | Compute or Transfer |
+| Screenshot capture     | Final composited image | 33MB @4K RGBA8          | 3+ frames (user-initiated)      | Transfer            |
+| Histogram / exposure   | HDR luminance buffer   | 256B (histogram bins)   | 1-2 frames                      | Compute             |
+| GPU profiling readback | Timestamp query heap   | 8B × 88 passes          | 2 frames                        | Graphics            |
+
+For large readbacks (screenshot, CAE), the transfer queue is preferred to avoid stalling graphics work. For small readbacks (picking, histogram), inline compute is simpler and the latency is negligible.
 
 ---
 
@@ -1083,6 +1733,38 @@ AsyncComputeEligible(pass) =
 | `EstimatedGpuTime`   | Previous frame GPU timestamp (feedback loop) or static hint |
 | `CrossQueueSyncCost` | ~50-100us per queue switch (timeline sem + QFOT)            |
 | `OverlapBenefit`     | `min(asyncPassTime, overlappedGraphicsTime)`                |
+
+#### 7.2.1 Adaptive Async Threshold (Occupancy-Aware Feedback)
+
+The static `kMinAsyncBenefitUs = 200us` is a conservative default. Actual benefit depends on GPU occupancy — if the graphics queue already saturates all CUs, offloading compute to the async queue yields no overlap (both queues compete for the same CUs). The scheduler maintains a per-pass **async benefit estimator** updated every frame:
+
+```
+AdaptiveAsyncThreshold design:
+
+1. Instrumentation: GPU timestamp queries bracket each async-eligible pass.
+   Record: actualAsyncTime, overlappedGraphicsTime, totalFrameTime.
+
+2. Benefit metric (per pass, per frame):
+   measuredBenefit = overlappedGraphicsTime - crossQueueSyncCost
+   // positive = async helped, negative = async hurt (sync overhead > overlap)
+
+3. Exponential moving average (EMA) with alpha = 0.1:
+   pass.emaBenefit = alpha * measuredBenefit + (1 - alpha) * pass.emaBenefit
+
+4. Decision (replaces static threshold):
+   AsyncComputeEligible(pass) =
+     pass.flags contains AsyncCompute
+     AND device.ComputeQueueLevel >= C
+     AND pass.emaBenefit > kMinBenefitUs (default 50us, lower than static 200us)
+
+5. Cold start: first 8 frames use static 200us threshold while EMA stabilizes.
+   After warm-up, switch to adaptive path.
+
+6. Hysteresis: pass stays async for 4 frames after emaBenefit drops below threshold,
+   preventing oscillation between queues on borderline passes.
+```
+
+**GPU-specific behavior**: On NVIDIA (separate async compute engine), most compute passes benefit from async. On AMD RDNA (shared CUs, ACE), benefit depends on wave occupancy — bandwidth-bound passes (GTAO) benefit more than ALU-bound passes that would compete for CUs. The adaptive threshold automatically captures this difference without per-vendor tuning.
 
 **Decision table for miki pipeline**:
 
@@ -1393,6 +2075,36 @@ struct GraphStructuralHash {
 
 **Cache miss triggers**: Pass added/removed, condition result changed, resource descriptor changed (resolution, format), subgraph inserted/removed.
 
+#### 10.1.1 PSO Readiness Tracking & Hot-Reload Correctness
+
+PSO availability is intentionally **excluded** from the `GraphStructuralHash` — a PSO miss does not change graph topology, barrier layout, or aliasing assignments (§13.4). However, two scenarios require the caching system to be PSO-aware:
+
+**Scenario 1 — Shader hot-reload**: When `ShaderWatcher` (see `04-shader-pipeline.md` §5) detects a modified `.slang` source, the affected PSOs are invalidated and recompiled. The graph topology is unchanged, but passes using invalidated PSOs must re-enter the "PSO-deferred" state (§13.4 Tier A). The `CompiledRenderGraph` tracks this via a per-pass `psoGeneration` counter:
+
+```cpp
+struct CompiledPassInfo {
+    // ... existing fields ...
+    uint64_t psoGeneration;  // generation of the PSO at compilation time
+};
+
+// Per-frame check (O(P), ~100ns for 88 passes):
+auto CheckPsoStaleness(CompiledRenderGraph& graph, const PipelineCache& cache) -> void {
+    graph.psoReadyMask = 0;
+    for (auto& pass : graph.passes) {
+        if (pass.psoHandle.IsValid() && cache.GetGeneration(pass.psoHandle) == pass.psoGeneration) {
+            graph.psoReadyMask |= (1ull << pass.index);
+        }
+        // Stale PSO: pass will be deferred this frame, re-checked next frame
+    }
+}
+```
+
+This check runs **after** the structural hash comparison and **before** command recording. It does NOT trigger a graph recompilation — only the execution phase is affected (deferred passes produce no commands). Cost: one 64-bit comparison per pass, negligible.
+
+**Scenario 2 — PSO specialization constant change**: If a pass changes specialization constants (e.g., shadow quality level), the PSO key changes but the graph topology does not. The `descHash` component of the structural hash does NOT include PSO keys — only resource descriptors. PSO key changes are handled entirely by the `PipelineCache`: the old PSO is evicted, the new one is compiled async, and the pass is PSO-deferred until ready. No graph recompilation needed.
+
+**Design rationale**: Separating PSO lifecycle from graph caching ensures that shader iteration (hot-reload) never triggers the expensive O(P×R) full recompile path. The worst case for a hot-reload is: 1 frame of PSO-deferred rendering (simplified fallback or skip) + ~50-200ms async PSO compile on a background thread. Graph caching continues to provide <1us cache-hit performance throughout.
+
 ### 10.2 Incremental Recompilation
 
 On partial changes (e.g., resolution change affects descriptors but not topology):
@@ -1456,16 +2168,16 @@ Cross-graph dependencies modeled as imported resources:
 
 ### 11.1 Formal Invariants
 
-| #   | Invariant                                                                                  | Enforcement                                                                      |
-| --- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| S1  | **No data race**: every write ordered before subsequent read/write by barrier or semaphore | Compiler Stage 6 (barrier synthesis)                                             |
-| S2  | **No missing layout transition**: every texture access sees correct layout                 | Compiler tracks layout per-resource per-pass; transitions inserted automatically |
-| S3  | **No use-after-free**: transient resources valid for entire lifetime interval              | Aliasing scheduler guarantees non-overlapping lifetimes                          |
-| S4  | **No cross-queue race**: all cross-queue edges have timeline sem wait/signal               | Compiler Stage 5                                                                 |
-| S5  | **No deadlock**: cross-queue dependency graph is acyclic                                   | Validated in Stage 5; cycles resolved by demotion                                |
-| S6  | **No QFOT violation**: Vulkan exclusive-mode images have QFOT at every queue transition    | Compiler Stage 5 inserts QFOT barriers                                           |
-| S7  | **No aliasing conflict**: resources sharing memory have non-overlapping lifetimes          | Interval analysis in Stage 7                                                     |
-| S8  | **No stale swapchain access**: present waits on renderDone sem; acquire gates first use    | FrameManager integration (`03-sync.md`)                                          |
+| #   | Invariant                                                                                                                                  | Enforcement                                                                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| S1  | **No data race**: every write ordered before subsequent read/write by barrier or semaphore. WAR edges use execution-only dependency (§5.4) | Compiler Stage 6 (barrier synthesis)                                                       |
+| S2  | **No missing layout transition**: every texture access sees correct layout at subresource granularity (§5.4.1)                             | Compiler tracks layout per-resource (or per-mip/layer); transitions inserted automatically |
+| S3  | **No use-after-free**: transient resources valid for entire lifetime interval                                                              | Aliasing scheduler guarantees non-overlapping lifetimes                                    |
+| S4  | **No cross-queue race**: all cross-queue edges have timeline sem wait/signal                                                               | Compiler Stage 5                                                                           |
+| S5  | **No deadlock**: cross-queue dependency graph is acyclic                                                                                   | Validated in Stage 5; cycles resolved by demotion                                          |
+| S6  | **No QFOT violation**: Vulkan exclusive-mode images have QFOT at every queue transition                                                    | Compiler Stage 5 inserts QFOT barriers                                                     |
+| S7  | **No aliasing conflict**: resources sharing memory have non-overlapping lifetimes                                                          | Interval analysis in Stage 7                                                               |
+| S8  | **No stale swapchain access**: present waits on renderDone sem; acquire gates first use                                                    | FrameManager integration (`03-sync.md`)                                                    |
 
 ### 11.2 Validation Layer (Debug Builds)
 
@@ -1719,50 +2431,58 @@ struct PassPsoConfig {
 
 ### 14.1 Compilation Complexity
 
-| Stage                                 | Time Complexity  | Typical Time (88 passes) |
-| ------------------------------------- | ---------------- | ------------------------ |
-| 1. Pass Culling                       | O(P)             | <1us                     |
-| 2. DAG Construction                   | O(P + E)         | <5us                     |
-| 3. Topological Sort                   | O((P + E) log P) | <5us                     |
-| 3b. Barrier-Aware Reordering (§5.3.1) | O(P x W)         | <5us                     |
-| 4. Queue Assignment                   | O(P)             | <1us                     |
-| 5. Cross-Queue Sync                   | O(E)             | <2us                     |
-| 6. Barrier Synthesis                  | O(P x R)         | <20us                    |
-| 7. Transient Aliasing                 | O(R log R)       | <10us                    |
-| 8. Render Pass Merging (§5.7)         | O(P)             | <2us                     |
-| 9. Backend Adaptation (§20b)          | O(P + R)         | <3us                     |
-| 10. Batch Formation                   | O(P)             | <2us                     |
-| **Total full recompile**              | **O(P x R)**     | **<60us**                |
-| **Cached path (Stage 1 only)**        | **O(P)**         | **<1us**                 |
+| Stage                                 | Time Complexity  | Typical Time (88 passes) | Notes                          |
+| ------------------------------------- | ---------------- | ------------------------ | ------------------------------ |
+| 1. Pass Culling                       | O(P)             | <1us                     |                                |
+| 2. DAG Construction                   | O(P + E)         | <5us                     |                                |
+| 3. Topological Sort                   | O((P + E) log P) | <5us                     |                                |
+| 3b. Barrier-Aware Reordering (§5.3.1) | O(P x W)         | <5us                     |                                |
+| 4. Queue Assignment                   | O(P)             | <1us                     |                                |
+| 5. Cross-Queue Sync                   | O(E)             | <2us                     |                                |
+| 6. Barrier Synthesis                  | O(P x R x S)     | <21us                    | +§5.4.1 subresource; ∥ Stage 7 |
+| 7. Transient Aliasing                 | O(R log R)       | <10us                    | parallel with Stage 6 (§5.1.1) |
+| 8. Render Pass Merging (§5.7)         | O(P)             | <2us                     |                                |
+| 9. Backend Adaptation (§20b)          | O(P + R)         | <3us                     |                                |
+| 10. Batch Formation                   | O(P)             | <2us                     |                                |
+| **Total full recompile (serial)**     | **O(P x R)**     | **<60us**                |                                |
+| **Total full recompile (parallel)**   | **O(P x R)**     | **<48us**                | Stage 6 ∥ 7 saves ~12us        |
+| **Cached path (Stage 1 only)**        | **O(P)**         | **<1us**                 |                                |
 
-P = pass count, E = edge count, R = resource count. For 88 passes, ~200 resources, ~300 edges.
+P = pass count, E = edge count, R = resource count, S = max subresource count per resource (typically 1 for whole-resource, up to 12 for HiZ mip chain). For 88 passes, ~200 resources, ~300 edges. S averages ~1.1 across all resources (185 whole + 15 per-subresource).
 
 ### 14.2 Runtime Overhead Per Frame
 
-| Operation                | Cost         | Count/Frame      |
-| ------------------------ | ------------ | ---------------- |
-| Condition evaluation     | ~100ns each  | 88               |
-| Barrier emission         | ~50ns each   | <5 batched calls |
-| Timeline sem signal      | ~100ns each  | 2-4              |
-| Timeline sem wait        | ~200ns each  | 2-3              |
-| QFOT barrier             | ~100ns each  | 0-4              |
-| Transient alloc (cached) | ~500ns total | 1 (pool reuse)   |
-| Timestamp query          | ~2us each    | 88 (debug only)  |
-| **Total overhead**       | **<5us**     |                  |
+| Operation                     | Cost         | Count/Frame      | Notes                                            |
+| ----------------------------- | ------------ | ---------------- | ------------------------------------------------ |
+| Condition evaluation          | ~100ns each  | 88               |                                                  |
+| PSO staleness check (§10.1.1) | ~1ns each    | 88               | 64-bit generation comparison                     |
+| Barrier emission              | ~50ns each   | <5 batched calls |                                                  |
+| Barrier resolve (§3.2)        | ~3ns each    | ~300 accesses    | constexpr for static, bitscan dyn                |
+| Timeline sem signal           | ~100ns each  | 2-4              |                                                  |
+| Timeline sem wait             | ~200ns each  | 2-3              |                                                  |
+| QFOT barrier                  | ~100ns each  | 0-4              |                                                  |
+| Transient alloc (cached)      | ~500ns total | 1 (pool reuse)   |                                                  |
+| Heap defrag check (§5.6.8)    | ~50ns        | 1                | budget check only; defrag ~50us amortized/30+ fr |
+| Timestamp query               | ~2us each    | 88 (debug only)  |                                                  |
+| **Total overhead**            | **<6us**     |                  |                                                  |
 
 ### 14.3 Memory Overhead
 
-| Structure                      | Size (88 passes, 200 resources) |
-| ------------------------------ | ------------------------------- |
-| Pass nodes (graph description) | ~88 x 256B = ~22 KB             |
-| Resource nodes                 | ~200 x 128B = ~25 KB            |
-| Adjacency lists (edges)        | ~300 x 16B = ~5 KB              |
-| Compiled graph (cached)        | ~100 KB                         |
-| Barrier commands               | ~2 KB                           |
-| Sync point map                 | ~1 KB                           |
-| **Total CPU memory**           | **~155 KB**                     |
+| Structure                          | Size (88 passes, 200 resources) | Notes                                        |
+| ---------------------------------- | ------------------------------- | -------------------------------------------- |
+| Pass nodes (graph description)     | ~88 x 192B = ~17 KB             | Span<> + arena vs vector (was ~22 KB)        |
+| Resource nodes                     | ~200 x 128B = ~25 KB            |                                              |
+| Adjacency lists (edges)            | ~300 x 16B = ~5 KB              |                                              |
+| Build arena (§4.1.2)               | 32 KB (single page)             | Reused every frame, no heap alloc            |
+| Compiled graph (cached)            | ~100 KB                         |                                              |
+| Barrier commands                   | ~2 KB                           |                                              |
+| Sync point map                     | ~1 KB                           |                                              |
+| Barrier mapping table (§3.2)       | 22 x 16B = 352B                 | constexpr, in .rodata                        |
+| Subresource state tracker (§5.4.1) | ~15 x 8 x 16B = ~2 KB           | Only for resources with per-mip/layer access |
+| ReadbackRing slots (§6.5.2)        | 3 x bufferSize (external)       | Not counted — owned by FrameManager          |
+| **Total CPU memory**               | **~184 KB**                     | +2KB subresource tracking vs prior           |
 
-Negligible. The graph metadata fits entirely in L2 cache.
+Graph metadata fits entirely in L2 cache. The 32KB build arena is the only new allocation and is reset (not freed) every frame. Per-subresource tracking adds ~2KB for the 15 resources that require mip/layer-level barrier granularity.
 
 ---
 
@@ -1783,6 +2503,8 @@ Negligible. The graph metadata fits entirely in L2 cache.
 | **Plugin extensibility**  | `IRenderGraphExtension`                | Blueprint + C++ passes             | Engine-internal only | C/C++ callback nodes        | Custom passes       |
 | **Backend abstraction**   | 5 backends (Vk/D3D12/GL/WebGPU/Mock)   | D3D11/D3D12/Vulkan                 | D3D12/Vulkan/Mantle  | D3D12/Vulkan                | Vk/Metal/GL/WebGL   |
 | **Deterministic**         | Yes (golden-image CI)                  | Non-deterministic (async)          | No guarantee         | Deterministic (fixed seed)  | Non-deterministic   |
+| **Subresource barriers**  | Per-mip/layer tracking (§5.4.1)        | Per-mip (5.4+)                     | Not documented       | Per-subresource range       | Whole-resource      |
+| **Readback integration**  | First-class ReadbackRing (§6.5)        | ExtractReadback API                | Not documented       | Readback node (user)        | Manual              |
 | **Debug tooling**         | Graphviz DOT + audit log + diff report | RDG Insights (editor)              | Internal profiler    | RPS Visualizer              | Debug callback      |
 
 ### 15.1 Key Differentiators vs UE5 RDG
