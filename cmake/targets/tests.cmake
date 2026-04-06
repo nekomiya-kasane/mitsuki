@@ -104,3 +104,40 @@ if(TARGET test_command_pool_allocator)
     target_include_directories(test_command_pool_allocator PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
     set_tests_properties(test_command_pool_allocator PROPERTIES TIMEOUT 120)
 endif()
+
+# §13 SyncScheduler (pure CPU tests, no device needed)
+miki_add_test(test_sync_scheduler tests/frame/test_sync_scheduler.cpp)
+
+# §4.3 DeferredDestructor
+miki_add_test(test_deferred_destructor tests/frame/test_deferred_destructor.cpp)
+if(TARGET test_deferred_destructor)
+    target_include_directories(test_deferred_destructor PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_deferred_destructor PROPERTIES TIMEOUT 120)
+endif()
+
+# §5.6 AsyncTaskManager
+miki_add_test(test_async_task_manager tests/frame/test_async_task_manager.cpp)
+if(TARGET test_async_task_manager)
+    target_include_directories(test_async_task_manager PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_async_task_manager PROPERTIES TIMEOUT 300)
+endif()
+
+# §2.1 FrameOrchestrator
+miki_add_test(test_frame_orchestrator tests/frame/test_frame_orchestrator.cpp)
+if(TARGET test_frame_orchestrator)
+    target_include_directories(test_frame_orchestrator PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_frame_orchestrator PROPERTIES TIMEOUT 300)
+endif()
+
+# -- Resource tests (§7 StagingRing / ReadbackRing) --------------------------
+miki_add_test(test_staging_ring tests/resource/test_staging_ring.cpp)
+if(TARGET test_staging_ring)
+    target_include_directories(test_staging_ring PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_staging_ring PROPERTIES TIMEOUT 300)
+endif()
+
+miki_add_test(test_readback_ring tests/resource/test_readback_ring.cpp)
+if(TARGET test_readback_ring)
+    target_include_directories(test_readback_ring PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_readback_ring PROPERTIES TIMEOUT 300)
+endif()

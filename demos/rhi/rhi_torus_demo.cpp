@@ -199,7 +199,7 @@ struct TorusRenderer {
 
         float aspect = (h > 0) ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
         auto model = Mul4x4(MakeRotateX(rotX), MakeRotateY(rotY));
-        auto view = MakeLookAt({0, 0, distance}, {0, 0, 0}, {0, 1, 0});
+        auto view = MakeLookAt({.x = 0, .y = 0, .z = distance}, {.x = 0, .y = 0, .z = 0}, {.x = 0, .y = 1, .z = 0});
         auto proj = MakePerspective(std::numbers::pi_v<float> / 4.0f, aspect, 0.1f, 100.0f);
         PushConst pc{.mvp = Mul4x4(proj, Mul4x4(view, model)), .model = model};
 
@@ -220,14 +220,14 @@ struct TorusRenderer {
             cmd.CmdTextureBarrier(colorTex, toRender);
 
             ClearValue clearVal{};
-            clearVal.color = {0.06f, 0.06f, 0.09f, 1.0f};
+            clearVal.color = {.r = 0.06f, .g = 0.06f, .b = 0.09f, .a = 1.0f};
             RenderingAttachment colorAtt{};
             colorAtt.view = colorView;
             colorAtt.loadOp = AttachmentLoadOp::Clear;
             colorAtt.storeOp = AttachmentStoreOp::Store;
             colorAtt.clearValue = clearVal;
             RenderingDesc rd{
-                .renderArea = Rect2D{.offset = {0, 0}, .extent = {w, h}},
+                .renderArea = Rect2D{.offset = {.x = 0, .y = 0}, .extent = {.width = w, .height = h}},
                 .colorAttachments = {&colorAtt, 1},
             };
 

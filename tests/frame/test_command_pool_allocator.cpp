@@ -8,9 +8,12 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <latch>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -333,14 +336,118 @@ TEST_P(CPATest, BK04_OpenGLReset) {
 // §17.18.4 CPA-MT — Multi-Thread Extension (v1: single-threaded, stub tests)
 // ============================================================================
 
-// CPA-MT-01: recordingThreadCount not yet implemented — skip
-TEST_P(CPATest, MT01_MultiThreadPools) {
-    GTEST_SKIP() << "Multi-thread extension not yet implemented (Phase 4)";
+// CPA-MT-01: GIVEN CPA(4 threads) WHEN 4 threads Acquire concurrently THEN all succeed, no data race
+TEST_P(CPATest, MT01_ConcurrentAcquire) {
+    constexpr uint32_t kThreads = 4;
+    auto result = MakeCPA(2, false, false, 16, false, kThreads);
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    std::latch startGate(kThreads);
+    std::atomic<uint32_t> successCount{0};
+    std::vector<std::jthread> threads;
+    threads.reserve(kThreads);
+
+    for (uint32_t t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            startGate.arrive_and_wait();  // Ensure all threads start simultaneously
+            auto acq = cpa.Acquire(0, QueueType::Graphics, t);
+            if (acq.has_value()) {
+                successCount.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    threads.clear();  // join all
+
+    EXPECT_EQ(successCount.load(), kThreads);
 }
 
-// CPA-MT-02: Multi-thread ResetSlot — skip
-TEST_P(CPATest, MT02_MultiThreadReset) {
-    GTEST_SKIP() << "Multi-thread extension not yet implemented (Phase 4)";
+// CPA-MT-02: GIVEN CPA(4 threads) WHEN threads Acquire then main ResetSlot THEN no crash
+TEST_P(CPATest, MT02_AcquireThenReset) {
+    constexpr uint32_t kThreads = 4;
+    auto result = MakeCPA(2, false, false, 16, false, kThreads);
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    // Phase 1: all threads acquire on slot 0
+    {
+        std::vector<std::jthread> threads;
+        for (uint32_t t = 0; t < kThreads; ++t) {
+            threads.emplace_back([&, t] {
+                auto acq = cpa.Acquire(0, QueueType::Graphics, t);
+                EXPECT_TRUE(acq.has_value());
+            });
+        }
+    }  // join all
+
+    // Phase 2: main thread resets slot 0
+    cpa.ResetSlot(0);
+
+    // Phase 3: re-acquire should work
+    auto acq = cpa.Acquire(0, QueueType::Graphics, 0);
+    EXPECT_TRUE(acq.has_value());
+}
+
+// CPA-MT-04: GIVEN CPA(4 threads) WHEN 4 threads do 100 Acquire rounds THEN no race/crash
+TEST_P(CPATest, MT04_StressConcurrentAcquire) {
+    constexpr uint32_t kThreads = 4;
+    constexpr uint32_t kRounds = 100;
+    auto result = MakeCPA(2, false, false, 16, false, kThreads);
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    std::atomic<uint32_t> totalSuccess{0};
+    std::latch startGate(kThreads);
+    std::vector<std::jthread> threads;
+    threads.reserve(kThreads);
+
+    for (uint32_t t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            startGate.arrive_and_wait();
+            for (uint32_t r = 0; r < kRounds; ++r) {
+                uint32_t slot = r % 2;
+                auto acq = cpa.Acquire(slot, QueueType::Graphics, t);
+                if (acq.has_value()) {
+                    totalSuccess.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    threads.clear();
+
+    EXPECT_EQ(totalSuccess.load(), kThreads * kRounds);
+}
+
+// CPA-MT-05: GIVEN CPA(4 threads) WHEN threads use different QueueTypes THEN no interference
+TEST_P(CPATest, MT05_ConcurrentDifferentQueues) {
+    constexpr uint32_t kThreads = 2;
+    auto result = MakeCPA(2, true, true, 16, false, kThreads);  // async compute + transfer
+    ASSERT_TRUE(result.has_value());
+    auto& cpa = *result;
+
+    std::latch startGate(kThreads);
+    std::atomic<uint32_t> successCount{0};
+    std::vector<std::jthread> threads;
+
+    // Thread 0: Graphics queue
+    threads.emplace_back([&] {
+        startGate.arrive_and_wait();
+        auto acq = cpa.Acquire(0, QueueType::Graphics, 0);
+        if (acq.has_value()) {
+            successCount.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    // Thread 1: Compute queue
+    threads.emplace_back([&] {
+        startGate.arrive_and_wait();
+        auto acq = cpa.Acquire(0, QueueType::Compute, 1);
+        if (acq.has_value()) {
+            successCount.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    threads.clear();
+    EXPECT_EQ(successCount.load(), kThreads);
 }
 
 // CPA-MT-03: Single-thread mode (default) works correctly
