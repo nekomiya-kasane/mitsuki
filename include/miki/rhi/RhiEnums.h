@@ -53,26 +53,33 @@ namespace miki::rhi {
     // =========================================================================
 
     enum class PipelineStage : uint32_t {
-        None = 0,                            // VK_PIPELINE_STAGE_2_NONE
-        TopOfPipe = 0x00000001,              // VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
-        DrawIndirect = 0x00000002,           // VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
-        VertexInput = 0x00000004,            // VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT
-        VertexShader = 0x00000008,           // VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT
-        FragmentShader = 0x00000080,         // VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
-        EarlyFragmentTests = 0x00000100,     // VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
-        LateFragmentTests = 0x00000200,      // VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT
-        ColorAttachmentOutput = 0x00000400,  // VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
-        ComputeShader = 0x00000800,          // VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-        Transfer = 0x00001000,               // VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT
-        BottomOfPipe = 0x00002000,           // VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
-        Host = 0x00004000,                   // VK_PIPELINE_STAGE_2_HOST_BIT
-        AllGraphics = 0x00008000,            // VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT
-        AllCommands = 0x00010000,            // VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-        TaskShader = 0x00080000,             // VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT
-        MeshShader = 0x00100000,             // VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT
-        RayTracingShader = 0x00200000,       // VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
-        ShadingRateImage = 0x00400000,       // VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR
-        AccelStructBuild = 0x02000000,       // VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
+        None = 0,
+        TopOfPipe = 1u << 0,               // pseudo-stage before all commands
+        DrawIndirect = 1u << 1,            // indirect command parameter consumption
+        VertexInput = 1u << 2,             // vertex/index buffer consumption
+        VertexShader = 1u << 3,            // vertex shader execution
+        TessControlShader = 1u << 4,       // tessellation control shader — unused, all backends
+        TessEvalShader = 1u << 5,          // tessellation evaluation shader — unused, all backends
+        GeometryShader = 1u << 6,          // geometry shader — unused, all backends
+        FragmentShader = 1u << 7,          // fragment shader execution
+        EarlyFragmentTests = 1u << 8,      // early depth/stencil tests
+        LateFragmentTests = 1u << 9,       // late depth/stencil tests
+        ColorAttachmentOutput = 1u << 10,  // color attachment read/write
+        ComputeShader = 1u << 11,          // compute shader execution
+        Transfer = 1u << 12,               // all transfer operations (copy/blit/resolve/clear)
+        BottomOfPipe = 1u << 13,           // pseudo-stage after all commands
+        Host = 1u << 14,                   // host read/write of device memory
+        AllGraphics = 1u << 15,            // all graphics pipeline stages
+        AllCommands = 1u << 16,            // all commands on the queue
+        CommandPreprocess = 1u << 17,      // device-generated command preprocess — unused, all backends
+        ConditionalRendering = 1u << 18,   // conditional rendering predicate — unused, all backends
+        TaskShader = 1u << 19,             // task (amplification) shader
+        MeshShader = 1u << 20,             // mesh shader
+        RayTracingShader = 1u << 21,       // ray tracing shader execution
+        ShadingRateImage = 1u << 22,       // fragment shading rate attachment read
+        FragmentDensity = 1u << 23,        // fragment density map processing — unused, all backends
+        TransformFeedback = 1u << 24,      // transform feedback / stream-out — unused, all backends
+        AccelStructBuild = 1u << 25,       // acceleration structure build
     };
 
     MIKI_BITMASK_OPS(PipelineStage)
@@ -82,27 +89,31 @@ namespace miki::rhi {
     // =========================================================================
 
     enum class AccessFlags : uint32_t {
-        None = 0,                           // VK_ACCESS_2_NONE
-        IndirectCommandRead = 0x00000001,   // VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT
-        IndexRead = 0x00000002,             // VK_ACCESS_2_INDEX_READ_BIT
-        VertexAttributeRead = 0x00000004,   // VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT
-        UniformRead = 0x00000008,           // VK_ACCESS_2_UNIFORM_READ_BIT
-        InputAttachmentRead = 0x00000010,   // VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT
-        ShaderRead = 0x00000020,            // VK_ACCESS_2_SHADER_READ_BIT
-        ShaderWrite = 0x00000040,           // VK_ACCESS_2_SHADER_WRITE_BIT
-        ColorAttachmentRead = 0x00000080,   // VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT
-        ColorAttachmentWrite = 0x00000100,  // VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
-        DepthStencilRead = 0x00000200,      // VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT
-        DepthStencilWrite = 0x00000400,     // VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
-        TransferRead = 0x00000800,          // VK_ACCESS_2_TRANSFER_READ_BIT
-        TransferWrite = 0x00001000,         // VK_ACCESS_2_TRANSFER_WRITE_BIT
-        HostRead = 0x00002000,              // VK_ACCESS_2_HOST_READ_BIT
-        HostWrite = 0x00004000,             // VK_ACCESS_2_HOST_WRITE_BIT
-        MemoryRead = 0x00008000,            // VK_ACCESS_2_MEMORY_READ_BIT
-        MemoryWrite = 0x00010000,           // VK_ACCESS_2_MEMORY_WRITE_BIT
-        AccelStructRead = 0x00200000,       // VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR
-        AccelStructWrite = 0x00400000,      // VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR
-        ShadingRateImageRead = 0x00800000,  // VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR
+        None = 0,
+        IndirectCommandRead = 1u << 0,      // read indirect draw/dispatch parameters
+        IndexRead = 1u << 1,                // read index buffer
+        VertexAttributeRead = 1u << 2,      // read vertex buffer attributes
+        UniformRead = 1u << 3,              // read uniform/constant buffer
+        InputAttachmentRead = 1u << 4,      // read input attachment in fragment shader
+        ShaderRead = 1u << 5,               // generic shader resource read
+        ShaderWrite = 1u << 6,              // generic shader resource write (UAV/SSBO)
+        ColorAttachmentRead = 1u << 7,      // read color attachment (e.g. blending)
+        ColorAttachmentWrite = 1u << 8,     // write color attachment
+        DepthStencilRead = 1u << 9,         // read depth/stencil attachment
+        DepthStencilWrite = 1u << 10,       // write depth/stencil attachment
+        TransferRead = 1u << 11,            // read source of transfer operation
+        TransferWrite = 1u << 12,           // write destination of transfer operation
+        HostRead = 1u << 13,                // host-side memory read
+        HostWrite = 1u << 14,               // host-side memory write
+        MemoryRead = 1u << 15,              // catch-all memory read
+        MemoryWrite = 1u << 16,             // catch-all memory write
+        CommandPreprocessRead = 1u << 17,   // device-generated command read — unused, all backends
+        CommandPreprocessWrite = 1u << 18,  // device-generated command write — unused, all backends
+        // bit 19: unassigned in Vulkan spec
+        ConditionalRenderingRead = 1u << 20,  // conditional rendering predicate read — unused, all backends
+        AccelStructRead = 1u << 21,           // read acceleration structure (ray traversal/build input)
+        AccelStructWrite = 1u << 22,          // write acceleration structure (build output)
+        ShadingRateImageRead = 1u << 23,      // read fragment shading rate attachment
     };
 
     MIKI_BITMASK_OPS(AccessFlags)

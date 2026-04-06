@@ -5,7 +5,6 @@
 
 #include "miki/rhi/backend/VulkanDevice.h"
 #include "miki/rhi/backend/VulkanCommandBuffer.h"
-#include "VulkanConvert.h"
 
 #if defined(__clang__)
 #    pragma clang diagnostic push
@@ -1303,7 +1302,7 @@ namespace miki::rhi {
             info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
             info.semaphore = semData->semaphore;
             info.value = w.value;
-            info.stageMask = vulkan::ToVkPipelineStageFlags2(w.stageMask);
+            info.stageMask = static_cast<VkPipelineStageFlags2>(w.stageMask);
             waitInfos.push_back(info);
         }
 
@@ -1319,7 +1318,7 @@ namespace miki::rhi {
             info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
             info.semaphore = semData->semaphore;
             info.value = s.value;
-            info.stageMask = vulkan::ToVkPipelineStageFlags2(s.stageMask);
+            info.stageMask = static_cast<VkPipelineStageFlags2>(s.stageMask);
             signalInfos.push_back(info);
         }
 
