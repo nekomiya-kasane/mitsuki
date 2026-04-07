@@ -10,29 +10,41 @@
 namespace miki::rg {
 
     // =========================================================================
+    // Constructor
+    // =========================================================================
+
+    RenderGraphBuilder::RenderGraphBuilder(size_t arenaCapacity) : arena_(arenaCapacity) {}
+
+    // =========================================================================
     // Pass declaration
     // =========================================================================
 
-    auto RenderGraphBuilder::AddGraphicsPass(const char* name, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle {
+    auto RenderGraphBuilder::AddGraphicsPass(const char* name, PassSetupFn setup, PassExecuteFn execute)
+        -> RGPassHandle {
         return AddPass(name, RGPassFlags::Graphics, RGQueueType::Graphics, std::move(setup), std::move(execute));
     }
 
-    auto RenderGraphBuilder::AddComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle {
+    auto RenderGraphBuilder::AddComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute)
+        -> RGPassHandle {
         return AddPass(name, RGPassFlags::Compute, RGQueueType::Graphics, std::move(setup), std::move(execute));
     }
 
-    auto RenderGraphBuilder::AddAsyncComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle {
-        return AddPass(name, RGPassFlags::Compute | RGPassFlags::AsyncCompute, RGQueueType::AsyncCompute, std::move(setup), std::move(execute));
+    auto RenderGraphBuilder::AddAsyncComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute)
+        -> RGPassHandle {
+        return AddPass(
+            name, RGPassFlags::Compute | RGPassFlags::AsyncCompute, RGQueueType::AsyncCompute, std::move(setup),
+            std::move(execute)
+        );
     }
 
-    auto RenderGraphBuilder::AddTransferPass(const char* name, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle {
+    auto RenderGraphBuilder::AddTransferPass(const char* name, PassSetupFn setup, PassExecuteFn execute)
+        -> RGPassHandle {
         return AddPass(name, RGPassFlags::Transfer, RGQueueType::Transfer, std::move(setup), std::move(execute));
     }
 
     void RenderGraphBuilder::AddPresentPass(const char* name, RGResourceHandle backbuffer) {
         auto handle = AddPass(
-            name, RGPassFlags::Present | RGPassFlags::SideEffects | RGPassFlags::NeverCull,
-            RGQueueType::Graphics,
+            name, RGPassFlags::Present | RGPassFlags::SideEffects | RGPassFlags::NeverCull, RGQueueType::Graphics,
             [backbuffer](PassBuilder& pb) {
                 pb.ReadTexture(backbuffer, ResourceAccess::PresentSrc);
                 pb.SetSideEffects();
@@ -110,17 +122,26 @@ namespace miki::rg {
             resources_.push_back(std::move(res));
         }
 
-        // Move passes, adjusting resource handle indices
+        // Move passes, re-copying arena spans and adjusting resource handle indices
         for (auto& pass : subgraph.passes_) {
-            for (auto& r : pass.reads) {
-                r.handle = RGResourceHandle::Create(
-                    static_cast<uint16_t>(r.handle.GetIndex() + resourceOffset),
-                    r.handle.GetVersion());
+            // Re-copy reads/writes into this builder's arena (subgraph arena will be destroyed)
+            if (!pass.reads.empty()) {
+                auto newReads = arena_.CopyToArena(std::span<const RGResourceAccess>(pass.reads));
+                for (auto& r : newReads) {
+                    r.handle = RGResourceHandle::Create(
+                        static_cast<uint16_t>(r.handle.GetIndex() + resourceOffset), r.handle.GetVersion()
+                    );
+                }
+                pass.reads = newReads;
             }
-            for (auto& w : pass.writes) {
-                w.handle = RGResourceHandle::Create(
-                    static_cast<uint16_t>(w.handle.GetIndex() + resourceOffset),
-                    w.handle.GetVersion());
+            if (!pass.writes.empty()) {
+                auto newWrites = arena_.CopyToArena(std::span<const RGResourceAccess>(pass.writes));
+                for (auto& w : newWrites) {
+                    w.handle = RGResourceHandle::Create(
+                        static_cast<uint16_t>(w.handle.GetIndex() + resourceOffset), w.handle.GetVersion()
+                    );
+                }
+                pass.writes = newWrites;
             }
             passes_.push_back(std::move(pass));
         }
@@ -148,8 +169,9 @@ namespace miki::rg {
         return RGResourceHandle::Create(resourceIndex, node.currentVersion);
     }
 
-    auto RenderGraphBuilder::AddPass(const char* name, RGPassFlags flags, RGQueueType queue,
-                                     PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle {
+    auto RenderGraphBuilder::AddPass(
+        const char* name, RGPassFlags flags, RGQueueType queue, PassSetupFn setup, PassExecuteFn execute
+    ) -> RGPassHandle {
         assert(!built_ && "Cannot modify graph after Build()");
 
         uint32_t passIndex = static_cast<uint32_t>(passes_.size());
@@ -159,13 +181,27 @@ namespace miki::rg {
         pass.queue = queue;
         pass.executeFn = std::move(execute);
 
-        // Run setup lambda to record resource dependencies
+        // Run setup lambda — accesses go into staging buffers
         if (setup) {
+            stagingReads_.clear();
+            stagingWrites_.clear();
             PassBuilder pb(*this, passIndex);
             setup(pb);
+            CommitStagedAccesses(pass);
         }
 
         return RGPassHandle{passIndex};
+    }
+
+    void RenderGraphBuilder::CommitStagedAccesses(RGPassNode& pass) {
+        if (!stagingReads_.empty()) {
+            pass.reads = arena_.CopyToArena(std::span<const RGResourceAccess>(stagingReads_));
+            assert(!pass.reads.empty() && "Arena exhausted during read commit");
+        }
+        if (!stagingWrites_.empty()) {
+            pass.writes = arena_.CopyToArena(std::span<const RGResourceAccess>(stagingWrites_));
+            assert(!pass.writes.empty() && "Arena exhausted during write commit");
+        }
     }
 
     auto RenderGraphBuilder::AllocateResource(RGResourceKind kind, const char* name) -> uint16_t {

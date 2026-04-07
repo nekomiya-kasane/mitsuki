@@ -15,6 +15,7 @@ set(MIKI_RENDERGRAPH_SOURCES
     src/miki/rendergraph/RenderGraphBuilder.cpp
     src/miki/rendergraph/PassBuilder.cpp
     src/miki/rendergraph/RenderGraphCompiler.cpp
+    src/miki/rendergraph/RenderGraphExecutor.cpp
 )
 
 add_library(miki_rendergraph OBJECT ${MIKI_RENDERGRAPH_SOURCES})

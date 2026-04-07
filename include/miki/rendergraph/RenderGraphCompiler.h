@@ -20,6 +20,7 @@
 #include "miki/core/Result.h"
 #include "miki/rendergraph/RenderGraphBuilder.h"
 #include "miki/rendergraph/RenderGraphTypes.h"
+#include "miki/rhi/GpuCapabilityProfile.h"
 
 namespace miki::rg {
 
@@ -28,10 +29,13 @@ namespace miki::rg {
        public:
         struct Options {
             SchedulerStrategy strategy = SchedulerStrategy::Balanced;
-            bool enableSplitBarriers = true;      ///< Use split barriers when backend supports
-            bool enableAsyncCompute = true;       ///< Allow async compute queue scheduling
-            bool enableTransientAliasing = true;  ///< Enable transient resource memory aliasing
+            rhi::BackendType backendType = rhi::BackendType::Mock;    ///< Current backend for adaptation queries
+            const rhi::GpuCapabilityProfile* capabilities = nullptr;  ///< GPU caps for merge profitability (nullable)
+            bool enableSplitBarriers = true;                          ///< Use split barriers when backend supports
+            bool enableAsyncCompute = true;                           ///< Allow async compute queue scheduling
+            bool enableTransientAliasing = true;                      ///< Enable transient resource memory aliasing
             bool enableRenderPassMerging = true;  ///< Merge consecutive graphics passes into subpasses
+            bool enableAdaptation = true;         ///< Enable backend adaptation pass injection
             bool enableBarrierReordering = true;  ///< Enable barrier-aware global reordering pass
         };
 
@@ -64,6 +68,12 @@ namespace miki::rg {
             const std::vector<bool>& activeSet
         ) -> core::Result<std::vector<uint32_t>>;
 
+        // Stage 3b: Barrier-aware global reordering (optional second pass)
+        void ReorderPasses(
+            const RenderGraphBuilder& builder, const std::vector<DependencyEdge>& edges,
+            const std::vector<bool>& activeSet, std::vector<uint32_t>& order
+        );
+
         // Stage 4: Assign passes to queues
         void AssignQueues(
             const RenderGraphBuilder& builder, std::vector<uint32_t>& order, std::vector<RGQueueType>& queueAssignments
@@ -80,6 +90,51 @@ namespace miki::rg {
             const RenderGraphBuilder& builder, const std::vector<uint32_t>& order,
             const std::vector<DependencyEdge>& edges, const std::vector<RGQueueType>& queueAssignments,
             std::vector<CompiledPassInfo>& compiledPasses
+        );
+
+        // Stage 7: Transient resource aliasing (memory scheduling)
+        void ComputeLifetimes(
+            const RenderGraphBuilder& builder, const std::vector<uint32_t>& order, const std::vector<bool>& activeSet,
+            std::vector<CompiledRenderGraph::ResourceLifetime>& lifetimes
+        );
+
+        void TransientResourceAliasing(
+            const RenderGraphBuilder& builder, const std::vector<uint32_t>& order,
+            const std::vector<CompiledRenderGraph::ResourceLifetime>& lifetimes, AliasingLayout& aliasing,
+            std::vector<CompiledPassInfo>& compiledPasses
+        );
+
+        // Stage 7a: Compute aliasing slot assignments (pure computation, no pass mutation)
+        void ComputeAliasingSlots(
+            const RenderGraphBuilder& builder, const std::vector<uint32_t>& order,
+            const std::vector<CompiledRenderGraph::ResourceLifetime>& lifetimes, AliasingLayout& aliasing
+        );
+
+        // Stage 7b: Inject aliasing barriers into compiled passes (must run after Stage 6)
+        void InjectAliasingBarriers(
+            const RenderGraphBuilder& builder, const std::vector<uint32_t>& order,
+            const std::vector<CompiledRenderGraph::ResourceLifetime>& lifetimes, AliasingLayout& aliasing,
+            std::vector<CompiledPassInfo>& compiledPasses
+        );
+
+        // Stage 8: Render pass merging (subpass consolidation)
+        void MergeRenderPasses(
+            const RenderGraphBuilder& builder, const std::vector<uint32_t>& order, const AliasingLayout& aliasing,
+            const std::vector<CrossQueueSyncPoint>& syncPoints, std::vector<CompiledPassInfo>& compiledPasses,
+            std::vector<MergedRenderPassGroup>& mergedGroups
+        );
+
+        // Stage 9: Backend adaptation pass injection
+        void InjectAdaptationPasses(
+            const RenderGraphBuilder& builder, const std::vector<uint32_t>& order,
+            std::vector<CompiledPassInfo>& compiledPasses, std::vector<AdaptationPassInfo>& adaptationPasses
+        );
+
+        // Stage 10: Command batch formation
+        void FormCommandBatches(
+            const std::vector<uint32_t>& order, const std::vector<CompiledPassInfo>& compiledPasses,
+            const std::vector<CrossQueueSyncPoint>& syncPoints, const std::vector<MergedRenderPassGroup>& mergedGroups,
+            std::vector<CommandBatch>& batches
         );
 
         // Compute structural hash for caching

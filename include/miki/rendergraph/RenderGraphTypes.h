@@ -8,11 +8,13 @@
  */
 #pragma once
 
+#include <array>
+#include <cassert>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <span>
-#include <cassert>
+
+#include "miki/core/InlineFunction.h"
 
 #include "miki/core/Hash.h"
 #include "miki/core/TypeTraits.h"
@@ -21,6 +23,7 @@
 #include "miki/rhi/Resources.h"
 #include "miki/rhi/RhiEnums.h"
 #include "miki/rhi/RhiTypes.h"
+#include "miki/rhi/adaptation/AdaptationTypes.h"
 
 namespace miki::rg {
 
@@ -140,6 +143,54 @@ namespace miki::rg {
     /// @brief Check if a ResourceAccess value contains any read access.
     [[nodiscard]] constexpr auto IsReadAccess(ResourceAccess access) noexcept -> bool {
         return (static_cast<uint32_t>(access) & static_cast<uint32_t>(ResourceAccess::ReadMask)) != 0;
+    }
+
+    // =========================================================================
+    // Compile-time access validation per pass type (B-18)
+    // =========================================================================
+
+    /// @brief Accesses valid for transfer-only passes.
+    inline constexpr ResourceAccess kTransferPassAccessMask = ResourceAccess::TransferSrc | ResourceAccess::TransferDst;
+
+    /// @brief Accesses forbidden on compute-only passes (rasterization-specific).
+    inline constexpr ResourceAccess kGraphicsOnlyAccessMask
+        = ResourceAccess::ColorAttachWrite | ResourceAccess::DepthStencilWrite | ResourceAccess::DepthReadOnly
+          | ResourceAccess::InputAttachment | ResourceAccess::ShadingRateRead;
+
+    /// @brief Accesses valid for present passes.
+    inline constexpr ResourceAccess kPresentPassAccessMask = ResourceAccess::PresentSrc;
+
+    /// @brief Validate that a ResourceAccess is legal for the given pass flags.
+    /// Returns true if access is valid, false otherwise.
+    [[nodiscard]] constexpr auto IsAccessValidForPassType(ResourceAccess access, RGPassFlags passFlags) noexcept
+        -> bool {
+        auto bits = static_cast<uint32_t>(access);
+        if (bits == 0) {
+            return true;
+        }
+
+        // Present passes: only PresentSrc allowed
+        if ((static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Present)) != 0) {
+            return (bits & ~static_cast<uint32_t>(kPresentPassAccessMask)) == 0;
+        }
+
+        // Transfer-only passes: only TransferSrc/TransferDst allowed
+        bool isTransferOnly = (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Transfer)) != 0
+                              && (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Graphics)) == 0
+                              && (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Compute)) == 0;
+        if (isTransferOnly) {
+            return (bits & ~static_cast<uint32_t>(kTransferPassAccessMask)) == 0;
+        }
+
+        // Compute-only passes (including async): no graphics-only accesses
+        bool isComputeOnly = (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Compute)) != 0
+                             && (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Graphics)) == 0;
+        if (isComputeOnly) {
+            return (bits & static_cast<uint32_t>(kGraphicsOnlyAccessMask)) == 0;
+        }
+
+        // Graphics passes: all accesses valid
+        return true;
     }
 
     // =========================================================================
@@ -381,14 +432,16 @@ namespace miki::rg {
     };
 
     // =========================================================================
-    // Lambda type aliases
+    // Lambda type aliases — InlineFunction (SBO-only, no heap allocation)
     // =========================================================================
 
-    // Note: std::move_only_function is C++23 but not yet available in all libc++ versions.
-    // Fall back to std::function for now. This allows move-only captures via shared_ptr if needed.
-    using PassSetupFn = std::function<void(PassBuilder&)>;
-    using PassExecuteFn = std::function<void(RenderPassContext&)>;
-    using ConditionFn = std::function<bool()>;
+    /// @brief Default inline capacity for render-graph lambdas.
+    /// 64 bytes covers typical captures (4-8 pointers/handles).
+    inline constexpr size_t kPassFnCapacity = 64;
+
+    using PassSetupFn = core::InlineFunction<void(PassBuilder&), kPassFnCapacity>;
+    using PassExecuteFn = core::InlineFunction<void(RenderPassContext&), kPassFnCapacity>;
+    using ConditionFn = core::InlineFunction<bool(), kPassFnCapacity>;
 
     // =========================================================================
     // Pass node — internal storage for a declared pass
@@ -405,9 +458,9 @@ namespace miki::rg {
         PassExecuteFn executeFn;
         ConditionFn conditionFn;  ///< nullptr = always enabled
 
-        // Resource accesses recorded during setup phase
-        std::vector<RGResourceAccess> reads;
-        std::vector<RGResourceAccess> writes;
+        // Resource accesses — spans into LinearAllocator-owned memory
+        std::span<RGResourceAccess> reads;
+        std::span<RGResourceAccess> writes;
     };
 
     // =========================================================================
@@ -425,6 +478,7 @@ namespace miki::rg {
         bool isSplitRelease = false;  ///< true = release half of split barrier
         bool isSplitAcquire = false;  ///< true = acquire half of split barrier
         bool isCrossQueue = false;
+        bool isAliasingBarrier = false;  ///< true = aliasing barrier (UNDEFINED->initial, no src dependency)
         RGQueueType srcQueue = RGQueueType::Graphics;
         RGQueueType dstQueue = RGQueueType::Graphics;
     };
@@ -439,6 +493,149 @@ namespace miki::rg {
         uint32_t srcPassIndex = RGPassHandle::kInvalid;
         uint32_t dstPassIndex = RGPassHandle::kInvalid;
         uint64_t timelineValue = 0;  ///< Allocated at execution time
+    };
+
+    // =========================================================================
+    // Heap group classification for transient resource aliasing (§5.6.2)
+    // =========================================================================
+
+    enum class HeapGroupType : uint8_t {
+        RtDs,           ///< Render target / depth-stencil textures
+        NonRtDs,        ///< Shader-read-only textures (SRV, UAV without RT/DS)
+        Buffer,         ///< Transient buffers
+        MixedFallback,  ///< D3D12 Tier 1 fallback (all resource types)
+    };
+
+    inline constexpr size_t kHeapGroupCount = 4;
+
+    // =========================================================================
+    // Aliasing slot — a reusable memory region within a heap group
+    // =========================================================================
+
+    struct AliasingSlot {
+        uint32_t slotIndex = 0;
+        HeapGroupType heapGroup = HeapGroupType::RtDs;
+        uint64_t size = 0;           ///< Slot capacity in bytes
+        uint64_t alignment = 0;      ///< Maximum alignment of any resource in this slot
+        uint64_t heapOffset = 0;     ///< Byte offset within the heap group
+        uint32_t lifetimeStart = 0;  ///< Earliest firstPass (topo order position)
+        uint32_t lifetimeEnd = 0;    ///< Latest lastPass (topo order position)
+    };
+
+    // =========================================================================
+    // Aliasing layout — complete Stage 7 output
+    // =========================================================================
+
+    struct AliasingLayout {
+        std::vector<AliasingSlot> slots;       ///< All heap slots
+        std::vector<uint32_t> resourceToSlot;  ///< resource index -> slot index (kNotAliased if not aliased)
+        std::array<uint64_t, kHeapGroupCount> heapGroupSizes = {};  ///< Total heap size per HeapGroupType
+        std::vector<BarrierCommand> aliasingBarriers;               ///< Aliasing barriers to inject at pass start
+        std::vector<uint32_t> aliasingBarrierPassPos;  ///< Topo order position where each aliasing barrier goes
+
+        static constexpr uint32_t kNotAliased = std::numeric_limits<uint32_t>::max();
+    };
+
+    // =========================================================================
+    // Resource size/alignment estimation for aliasing (compile-time)
+    // =========================================================================
+
+    inline constexpr uint64_t kAlignmentTexture = 65536;               ///< 64 KB
+    inline constexpr uint64_t kAlignmentMsaa = 4ULL * 1024ULL * 1024;  ///< 4 MB for MSAA render targets
+    inline constexpr uint64_t kAlignmentBuffer = 256;                  ///< 256 B
+
+    [[nodiscard]] constexpr auto EstimateTextureSize(const RGTextureDesc& desc) noexcept -> uint64_t {
+        uint64_t bpp = rhi::FormatBytesPerPixel(desc.format);
+        if (bpp == 0) {
+            bpp = 4;
+        }
+        uint64_t total = 0;
+        uint32_t w = desc.width;
+        uint32_t h = desc.height;
+        for (uint32_t mip = 0; mip < desc.mipLevels; ++mip) {
+            total += static_cast<uint64_t>(w > 0 ? w : 1) * static_cast<uint64_t>(h > 0 ? h : 1) * desc.depth * bpp;
+            w >>= 1;
+            h >>= 1;
+        }
+        return total * desc.arrayLayers * (desc.sampleCount > 1 ? desc.sampleCount : 1);
+    }
+
+    [[nodiscard]] constexpr auto EstimateBufferSize(const RGBufferDesc& desc) noexcept -> uint64_t {
+        return desc.size;
+    }
+
+    [[nodiscard]] constexpr auto EstimateTextureAlignment(const RGTextureDesc& desc) noexcept -> uint64_t {
+        return (desc.sampleCount > 1) ? kAlignmentMsaa : kAlignmentTexture;
+    }
+
+    [[nodiscard]] constexpr auto EstimateBufferAlignment([[maybe_unused]] const RGBufferDesc& desc) noexcept
+        -> uint64_t {
+        return kAlignmentBuffer;
+    }
+
+    [[nodiscard]] constexpr auto ClassifyHeapGroup(RGResourceKind kind, ResourceAccess combinedAccess) noexcept
+        -> HeapGroupType {
+        if (kind == RGResourceKind::Buffer) {
+            return HeapGroupType::Buffer;
+        }
+        bool isRtDs = (combinedAccess & (ResourceAccess::ColorAttachWrite | ResourceAccess::DepthStencilWrite))
+                      != ResourceAccess::None;
+        return isRtDs ? HeapGroupType::RtDs : HeapGroupType::NonRtDs;
+    }
+
+    // =========================================================================
+    // Subpass dependency — replaces inter-pass barriers within a merged group (§5.7.2)
+    // =========================================================================
+
+    struct SubpassDependency {
+        uint32_t srcSubpass = 0;  ///< Index within merged group (0-based)
+        uint32_t dstSubpass = 0;
+        ResourceAccess srcAccess = ResourceAccess::None;
+        ResourceAccess dstAccess = ResourceAccess::None;
+        rhi::TextureLayout srcLayout = rhi::TextureLayout::Undefined;
+        rhi::TextureLayout dstLayout = rhi::TextureLayout::Undefined;
+        bool byRegion = true;  ///< VK_DEPENDENCY_BY_REGION_BIT (tile-local dependency)
+    };
+
+    // =========================================================================
+    // Merged render pass group — consecutive passes sharing tile memory (§5.7)
+    // =========================================================================
+
+    struct MergedRenderPassGroup {
+        std::vector<uint32_t> subpassIndices;  ///< Indices into CompiledRenderGraph::passes[]
+        std::vector<SubpassDependency> dependencies;
+        std::vector<uint16_t> sharedAttachments;  ///< Resource indices used across subpasses
+        uint32_t renderAreaWidth = 0;
+        uint32_t renderAreaHeight = 0;
+    };
+
+    // =========================================================================
+    // Adaptation pass — auxiliary pass injected by Stage 9 (§5.1 Stage 9)
+    // =========================================================================
+
+    struct AdaptationPassInfo {
+        uint32_t originalPassIndex = 0;     ///< The pass this adaptation supports
+        uint32_t insertBeforePosition = 0;  ///< Topo order position to insert before
+        RGQueueType queue = RGQueueType::Graphics;
+        rhi::adaptation::Feature feature{};    ///< Which feature triggered the adaptation
+        rhi::adaptation::Strategy strategy{};  ///< How the feature is adapted
+        const char* description = nullptr;     ///< Human-readable, from adaptation Rule
+    };
+
+    // =========================================================================
+    // Command batch — submission unit for a single queue (§5.1 Stage 10)
+    // =========================================================================
+
+    struct CommandBatch {
+        RGQueueType queue = RGQueueType::Graphics;
+        std::vector<uint32_t> passIndices;  ///< Indices into CompiledRenderGraph::passes[]
+        bool signalTimeline = false;        ///< true = allocate + signal timeline value after this batch
+
+        struct WaitEntry {
+            RGQueueType srcQueue = RGQueueType::Graphics;
+            uint64_t timelineValue = 0;  ///< Cross-queue timeline value to wait on
+        };
+        std::vector<WaitEntry> waits;  ///< Cross-queue dependencies this batch must wait for
     };
 
     // =========================================================================
@@ -457,15 +654,21 @@ namespace miki::rg {
         std::vector<CrossQueueSyncPoint> syncPoints;
         std::vector<DependencyEdge> edges;
 
-        // Resource lifetime intervals for aliasing
         struct ResourceLifetime {
             uint16_t resourceIndex = 0;
-            uint32_t firstPass = 0;
-            uint32_t lastPass = 0;
+            uint32_t firstPass = 0;  ///< Position in topological order
+            uint32_t lastPass = 0;   ///< Position in topological order
         };
         std::vector<ResourceLifetime> lifetimes;
 
-        // Structural hash for caching
+        AliasingLayout aliasing;  ///< Stage 7 output
+
+        std::vector<MergedRenderPassGroup> mergedGroups;   ///< Stage 8 output
+        std::vector<AdaptationPassInfo> adaptationPasses;  ///< Stage 9 output
+
+        /// @brief Stage 10 output: submission batches grouped by queue with sync metadata
+        std::vector<CommandBatch> batches;
+
         struct StructuralHash {
             uint64_t passCount = 0;
             uint64_t resourceCount = 0;

@@ -149,6 +149,11 @@ namespace miki::rhi {
         uint32_t maxMeshPayloadAndSharedMemorySize = 0;
 
         // =====================================================================
+        // GPU Architecture
+        // =====================================================================
+        bool isTileBasedGpu = false;  ///< Tile-based deferred rendering (Apple, Qualcomm, ARM Mali, Intel iGPU)
+
+        // =====================================================================
         // Device Info
         // =====================================================================
         std::string deviceName;

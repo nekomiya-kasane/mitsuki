@@ -2700,7 +2700,230 @@ D3D12 Fence Barriers (Agility SDK 1.719+) introduce `SignalBarrier` / `WaitBarri
 
 ---
 
-## 18. Cross-References
+## 18. Implementation Progress & Execution Order
+
+> **Last updated**: 2026-04-07
+> **Legend**: DONE = merged & tested | PARTIAL = header/stub exists, incomplete | TODO = not started
+
+### 18.1 Execution Order
+
+Implementation follows a strict bottom-up dependency order. Each item is atomic — all sub-items must be DONE before moving to the next numbered item.
+
+#### Phase A: Core Data Types & Builder (Layer 0 — no runtime deps)
+
+| #    | Item                                                                                                 | Spec Section | Status   | Notes                                                                                                          |
+| ---- | ---------------------------------------------------------------------------------------------------- | ------------ | -------- | -------------------------------------------------------------------------------------------------------------- |
+| A-1  | `RGPassHandle` — 32-bit typed pass index                                                             | §3.1         | **DONE** | `RenderGraphTypes.h`                                                                                           |
+| A-2  | `RGResourceHandle` — SSA versioned `[version:16 \| index:16]`                                        | §3.1, §4.2   | **DONE** | `RenderGraphTypes.h`, `NextVersion()` tested                                                                   |
+| A-3  | `RGTextureDesc` — graph-level texture descriptor + `ToRhiDesc()`                                     | §3.1         | **DONE** | `RenderGraphTypes.h`, conversion tested                                                                        |
+| A-4  | `RGBufferDesc` — graph-level buffer descriptor + `ToRhiDesc()`                                       | §3.1         | **DONE** | `RenderGraphTypes.h`                                                                                           |
+| A-5  | `RGQueueType` — Graphics / AsyncCompute / Transfer                                                   | §3.3         | **DONE** | `RenderGraphTypes.h`                                                                                           |
+| A-6  | `RGPassFlags` — bitmask (Graphics, Compute, AsyncCompute, Transfer, Present, SideEffects, NeverCull) | §3.3         | **DONE** | Divergence: spec has `AllowMerge`/`AsyncTransfer`, impl has `Present`/`NeverCull`                              |
+| A-7  | `ResourceAccess` — read/write access flags with `ReadMask`/`WriteMask`                               | §3.2         | **DONE** | Divergence: spec uses bits 0-11 read / 16-21 write; impl uses bits 0-7 read / 8-12 write. Functionally correct |
+| A-8  | `BarrierMapping` — `{PipelineStage, AccessFlags, TextureLayout}`                                     | §3.2         | **DONE** | Impl adds `TextureLayout` field (spec only has stage+access). This is an improvement                           |
+| A-9  | `ResolveBarrier()` / `ResolveBarrierCombined()` — constexpr access-to-barrier mapping                | §3.2         | **DONE** | `switch`-based (spec uses table). Both are constexpr. Debug assert on unknown bits added                       |
+| A-10 | `RGResourceAccess` — per-pass resource access record with subresource range                          | §3.4         | **DONE** | `RenderGraphTypes.h`                                                                                           |
+| A-11 | `RGResourceNode` — internal resource storage                                                         | §4.1         | **DONE** | `RenderGraphTypes.h`                                                                                           |
+| A-12 | `RGPassNode` — internal pass storage                                                                 | §4.1         | **DONE** | Uses `std::function` instead of `std::move_only_function` (libc++ compat)                                      |
+| A-13 | `DependencyEdge` — typed edges (RAW/WAR/WAW)                                                         | §5.2         | **DONE** | `HazardType` enum + `DependencyEdge` struct                                                                    |
+| A-14 | `CrossQueueSyncPoint` — timeline semaphore sync metadata                                             | §5.5         | **DONE** | `RenderGraphTypes.h`                                                                                           |
+| A-15 | `CompiledPassInfo` / `CompiledRenderGraph` — output structures                                       | §5.1         | **DONE** | `RenderGraphTypes.h`                                                                                           |
+| A-16 | `SchedulerStrategy` — `MinBarriers`/`MinMemory`/`MinLatency`/`Balanced`                              | §5.3.1       | **DONE** | `RenderGraphTypes.h`                                                                                           |
+| A-17 | `PassSetupFn` / `PassExecuteFn` / `ConditionFn` — lambda type aliases                                | §4.1         | **DONE** | `std::function` (see A-12)                                                                                     |
+
+#### Phase B: Builder & PassBuilder API
+
+| #    | Item                                                                                                 | Spec Section | Status   | Notes                                                                                                   |
+| ---- | ---------------------------------------------------------------------------------------------------- | ------------ | -------- | ------------------------------------------------------------------------------------------------------- |
+| B-1  | `RenderGraphBuilder::AddGraphicsPass` / `AddComputePass` / `AddAsyncComputePass` / `AddTransferPass` | §4.1         | **DONE** | Non-template (type-erased `std::function`). Spec uses template. Trade-off: simpler API, slight overhead |
+| B-2  | `RenderGraphBuilder::AddPresentPass`                                                                 | §4.1         | **DONE** | Returns void (spec returns handle)                                                                      |
+| B-3  | `RenderGraphBuilder::CreateTexture` / `CreateBuffer`                                                 | §4.1         | **DONE** |                                                                                                         |
+| B-4  | `RenderGraphBuilder::ImportTexture` / `ImportBuffer` / `ImportBackbuffer`                            | §4.1         | **DONE** |                                                                                                         |
+| B-5  | `RenderGraphBuilder::EnableIf`                                                                       | §4.1, §9     | **DONE** |                                                                                                         |
+| B-6  | `RenderGraphBuilder::InsertSubgraph`                                                                 | §4.1         | **DONE** | Move-based merge                                                                                        |
+| B-7  | `RenderGraphBuilder::Build`                                                                          | §4.1         | **DONE** | Sets `built_` flag                                                                                      |
+| B-8  | `PassBuilder::ReadTexture` / `ReadDepth` / `ReadInputAttachment` / `ReadBuffer`                      | §4.2         | **DONE** | SSA: reads do not bump version                                                                          |
+| B-9  | `PassBuilder::WriteTexture` / `WriteColorAttachment` / `WriteDepthStencil` / `WriteBuffer`           | §4.2         | **DONE** | SSA: writes bump version and return new handle                                                          |
+| B-10 | `PassBuilder::ReadWriteTexture` / `ReadWriteBuffer`                                                  | §4.2         | **DONE** | Records both read and write access                                                                      |
+| B-11 | `PassBuilder::CreateTexture` / `CreateBuffer` (per-pass)                                             | §4.2         | **DONE** |                                                                                                         |
+| B-12 | `PassBuilder::ReadHistoryTexture` / `ReadHistoryBuffer`                                              | §4.2, §9.5   | **DONE** | Stub: records access but no cross-frame lifetime extension logic yet                                    |
+| B-13 | `PassBuilder::WaitForAsyncTask`                                                                      | §4.2, §8.2   | **DONE** | Stub: records task handle, no executor integration yet                                                  |
+| B-14 | `PassBuilder::SetSideEffects` / `SetOrderHint`                                                       | §4.2         | **DONE** |                                                                                                         |
+| B-15 | `PassBuilder::ReadTextureMip` / `WriteTextureMip`                                                    | §5.4.1       | **DONE** | Per-subresource access with mip level                                                                   |
+| B-16 | Frame-scoped `LinearAllocator` for `Span<>`-backed per-pass storage                                  | §4.1.2       | **DONE** | `LinearAllocator` + staging pattern; `RGPassNode::reads/writes` now `std::span`                         |
+| B-17 | Lambda size `static_assert` for SBO compliance                                                       | §4.1.3       | **DONE** | `InlineFunction<Sig, Cap=64>` replaces `std::function`; compile-time size enforcement                   |
+| B-18 | Compile-time access validation `IsAccessValidForPassType()`                                          | §3.2 (C2-C3) | **DONE** | `constexpr` validation + debug asserts in `RecordRead`/`RecordWrite`                                    |
+
+#### Phase C: Compiler (Stages 1-6)
+
+| #   | Item                                                                         | Spec Section | Status   | Notes                                                                 |
+| --- | ---------------------------------------------------------------------------- | ------------ | -------- | --------------------------------------------------------------------- |
+| C-1 | Stage 1: Condition evaluation + DCE (backward reachability)                  | §5.1, §9.4   | **DONE** | `EvaluateConditions()` — BFS from side-effect passes                  |
+| C-2 | Stage 2: Dependency analysis & DAG construction (RAW/WAR/WAW classification) | §5.1, §5.2   | **DONE** | `BuildDAG()` — produces typed `DependencyEdge` vector                 |
+| C-3 | Stage 3: Topological sort (modified Kahn's with `orderHint` priority)        | §5.1, §5.3   | **DONE** | `TopologicalSort()` — priority queue with cycle detection             |
+| C-4 | Stage 4: Queue assignment                                                    | §5.1         | **DONE** | `AssignQueues()` — respects pass flags and preferred queue            |
+| C-5 | Stage 5: Cross-queue sync synthesis with fan-in optimization                 | §5.1, §5.5   | **DONE** | `SynthesizeCrossQueueSync()` — fan-in merge implemented               |
+| C-6 | Stage 6: Barrier synthesis (split barrier model)                             | §5.1, §5.4   | **DONE** | `SynthesizeBarriers()` — split into release/acquire when gap > 1 pass |
+| C-7 | Structural hash computation (`ComputeStructuralHash`)                        | §10.1        | **DONE** | FNV-1a + MurmurFinalize over passes, edges, descriptors, conditions   |
+| C-8 | Cache hit detection (`IsCacheHit`)                                           | §10.1        | **DONE** | Compares structural hash                                              |
+
+#### Phase D: Compiler (Stages 7-10) — DONE
+
+| #    | Item                                                                                    | Spec Section   | Status   | Notes                                                                                                                                                                      |
+| ---- | --------------------------------------------------------------------------------------- | -------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-1  | Stage 7: Transient resource aliasing — lifetime interval computation                    | §5.6           | **DONE** | `ComputeLifetimes()` extracted from `Compile()`. Types: `HeapGroupType`, `AliasingSlot`, `AliasingLayout`. Estimation helpers: `EstimateTextureSize/BufferSize/Alignment`. |
+| D-2  | Stage 7: Interval graph coloring (greedy bin-packing, largest-first)                    | §5.6           | **DONE** | First-fit decreasing with 10% overshoot tolerance. Heap group classification (RtDs/NonRtDs/Buffer).                                                                        |
+| D-3  | Stage 7: Alignment-aware offset packing                                                 | §5.6.6         | **DONE** | Per-heap-group packing sorted by alignment descending. Constants: 64KB texture, 4MB MSAA, 256B buffer.                                                                     |
+| D-4  | Stage 7: Aliasing barrier injection (Vulkan `UNDEFINED` layout, D3D12 aliasing barrier) | §5.6.1, §5.6.2 | **DONE** | Handoff-only barriers (first use handled by Stage 6). Batched with acquire barriers per §5.6.4.                                                                            |
+| D-5  | Stage 8: Render pass merging — eligibility check                                        | §5.7.1         | **DONE** | 6 conditions implemented. `MergeRenderPasses()` with O(N) linear scan. Types: `SubpassDependency`, `MergedRenderPassGroup`.                                                |
+| D-6  | Stage 8: Render pass merging — merge algorithm + subpass dependency conversion          | §5.7.2         | **DONE** | Barriers converted to `SubpassDependency`; `std::erase_if` removes consumed barriers. Merged groups stored in `CompiledRenderGraph::mergedGroups`.                         |
+| D-7  | Stage 8: Merge profitability heuristic                                                  | §5.7.4         | **DONE** | `isTileBasedGpu` added to `GpuCapabilityProfile`. Limits: 8 subpasses, maxColorAttachments, UAV+color write filter on non-tile GPUs.                                       |
+| D-8  | Stage 9: Backend adaptation pass injection                                              | §5.1 Stage 9   | **DONE** | Feature inference from resource access. `InjectAdaptationPasses()` queries `AdaptationQuery` API. `AdaptationPassInfo` in `CompiledRenderGraph::adaptationPasses`.         |
+| D-9  | Stage 10: Command batch formation                                                       | §5.1 Stage 10  | **DONE** | `FormCommandBatches()` groups passes by queue, splits at queue changes/sync points/merged group boundaries. `CommandBatch` type with signalTimeline + cross-queue waits.   |
+| D-10 | Stage 6 ∥ 7 parallelization                                                             | §5.1.1         | **DONE** | Refactored into `ComputeAliasingSlots` (7a) + `InjectAliasingBarriers` (7b). Stage 6 ∥ 7a via `std::async`, 7b sequential after join. Zero shared mutable state.           |
+| D-11 | Stage 3b: Barrier-aware global reordering (optional second pass)                        | §5.3.1         | **DONE** | `ReorderPasses()` with greedy swap within DAG-constrained window. Weighted objective: barrier count, memory pressure, latency. Configurable via `SchedulerStrategy` enum.  |
+
+#### Phase E: Executor — TODO
+
+| #    | Item                                                                                             | Spec Section | Status      | Notes                                                                                               |
+| ---- | ------------------------------------------------------------------------------------------------ | ------------ | ----------- | --------------------------------------------------------------------------------------------------- |
+| E-1  | `RenderPassContext` — pass execution interface (handle resolution)                               | §6.3         | **PARTIAL** | Header exists, basic `ResolveTexture` tested. Missing: `GetTextureView`, `GetBuffer`, CRTP dispatch |
+| E-2  | `RenderGraphExecutor::AllocateTransients` — heap pool + placed resource creation                 | §6.1         | **TODO**    | Needs RHI `Device::CreatePlacedResource` / `vkBindImageMemory2`                                     |
+| E-3  | `RenderGraphExecutor::RecordPasses` — barrier emission + pass lambda invocation                  | §6.1         | **TODO**    | Single-threaded first, then parallel (E-5)                                                          |
+| E-4  | `RenderGraphExecutor::SubmitBatches` — queue submission with sync metadata                       | §6.1         | **TODO**    | Needs `SyncScheduler` integration                                                                   |
+| E-5  | Parallel command recording (Tier1: multi-threaded secondary cmd bufs)                            | §6.2         | **TODO**    | Per-thread `CommandPoolAllocator`, thread-local `RenderPassContext`                                 |
+| E-6  | Thread-safety invariants: command pool affinity, per-pass context isolation                      | §6.2.1       | **TODO**    |                                                                                                     |
+| E-7  | Async graph execution (render thread offloading)                                                 | §6.2.2       | **TODO**    | `AsyncExecuteResult` + `completionSemaphore`                                                        |
+| E-8  | CRTP zero-overhead dispatch path (`DispatchCommands`)                                            | §6.3.1       | **TODO**    | Requires `CommandListHandle::Dispatch` implementation in RHI                                        |
+| E-9  | Backend-specific execution (Vulkan dynamic rendering, D3D12 render pass, GL FBO, WebGPU encoder) | §6.4         | **TODO**    |                                                                                                     |
+| E-10 | ReadbackRing — triple-buffered host-visible ring with latency hiding                             | §6.5.2       | **TODO**    |                                                                                                     |
+| E-11 | Readback buffer as graph resource + barrier sequence                                             | §6.5.1       | **TODO**    |                                                                                                     |
+
+#### Phase F: Transient Memory Management — TODO
+
+| #   | Item                                                                      | Spec Section  | Status   | Notes                                                           |
+| --- | ------------------------------------------------------------------------- | ------------- | -------- | --------------------------------------------------------------- |
+| F-1 | Heap pool: cross-frame heap reuse with `layoutHash` matching              | §5.6.5        | **TODO** | `HeapPoolEntry { heapHandle, size, heapGroupType, layoutHash }` |
+| F-2 | Transient buffer suballocator: linear offset packing within single buffer | §5.6.7        | **TODO** | Per-frame reset, 256B alignment                                 |
+| F-3 | Heap defragmentation: over-provisioned heap detection + replacement       | §5.6.8        | **TODO** | Trigger: VRAM > 90% budget for 30+ frames, or explicit          |
+| F-4 | D3D12 heap grouping: RT/DS, non-RT, buffers, mixed fallback               | §5.6.2        | **TODO** | Query `ResourceHeapTier`                                        |
+| F-5 | Vulkan heap grouping: by `memoryTypeBits`                                 | §5.6 footnote | **TODO** | 2-3 groups typically sufficient                                 |
+| F-6 | Aliasing barrier batching: co-locate with acquire barriers at pass start  | §5.6.4        | **TODO** | Single API call per pass for all aliasing + acquire             |
+
+#### Phase G: Cross-Queue & Async Compute — TODO
+
+| #   | Item                                                             | Spec Section | Status   | Notes                                                               |
+| --- | ---------------------------------------------------------------- | ------------ | -------- | ------------------------------------------------------------------- |
+| G-1 | Adaptive async threshold (occupancy-aware feedback, EMA)         | §7.2.1       | **TODO** | Per-pass `emaBenefit`, cold start 8-frame warm-up, hysteresis       |
+| G-2 | Vulkan QFOT emission: release on src queue, acquire on dst queue | §5.5         | **TODO** | Buffers CONCURRENT, images EXCLUSIVE                                |
+| G-3 | D3D12 cross-queue state transitions                              | §5.5         | **TODO** | No QFOT needed                                                      |
+| G-4 | Deadlock prevention: cross-queue DAG validation + demotion       | §7.5         | **TODO** | Cycle detection in Stage 5, demote offending pass to graphics queue |
+| G-5 | 3-queue chain: Transfer → Compute → Graphics                     | §7.6         | **TODO** | Two QFOT pairs on Vulkan, two timeline waits                        |
+
+#### Phase H: Conditional Execution & History — PARTIAL
+
+| #   | Item                                                                          | Spec Section | Status   | Notes                                                            |
+| --- | ----------------------------------------------------------------------------- | ------------ | -------- | ---------------------------------------------------------------- |
+| H-1 | Static conditional (feature gating) — `EnableIf` with caps/settings           | §9.1         | **DONE** | `EnableIf` + condition evaluation in Stage 1                     |
+| H-2 | Dynamic conditional (per-frame runtime) — same API                            | §9.2         | **DONE** | Conditions evaluated every `Build()`                             |
+| H-3 | Zero-cost guarantee: no lambda call, no alloc, no barrier for disabled passes | §9.3         | **DONE** | DCE + condition cull verified in tests                           |
+| H-4 | History resource lifetime extension — prevent aliasing of stale history       | §9.5         | **TODO** | `ReadHistoryTexture` stub exists, no `lastWrittenFrame` tracking |
+| H-5 | History staleness counter + consumer-side fallback policy                     | §9.5         | **TODO** | TAA reset, GTAO spatial-only fallback                            |
+
+#### Phase I: Graph Caching & Incremental Recompile — PARTIAL
+
+| #   | Item                                                                | Spec Section | Status   | Notes                                      |
+| --- | ------------------------------------------------------------------- | ------------ | -------- | ------------------------------------------ |
+| I-1 | `GraphStructuralHash` — pass/resource/edge/condition/desc hashing   | §10.1        | **DONE** | FNV-1a + MurmurFinalize                    |
+| I-2 | Cache hit check (`IsCacheHit`)                                      | §10.1        | **DONE** |                                            |
+| I-3 | PSO readiness tracking (`psoGeneration`, `psoReadyMask`)            | §10.1.1      | **TODO** | Requires PipelineCache integration         |
+| I-4 | Incremental recompile: skip stages 1-6 when only `descHash` changed | §10.2        | **TODO** | Re-run only stages 7-10                    |
+| I-5 | Frame-to-frame resource handle patching (`PatchExternalResources`)  | §10.3        | **TODO** | Swap backbuffer + import handles per frame |
+| I-6 | Multi-graph composition (per-layer graphs, `FrameOrchestrator`)     | §10.4        | **TODO** | Cross-graph imports for depth, color       |
+
+#### Phase J: Debugging & Profiling — TODO
+
+| #   | Item                                                                                      | Spec Section | Status   | Notes                                                            |
+| --- | ----------------------------------------------------------------------------------------- | ------------ | -------- | ---------------------------------------------------------------- |
+| J-1 | Graphviz DOT export (`ExportGraphviz`)                                                    | §12.1        | **TODO** | Queue-colored nodes, typed edges, aliasing annotations           |
+| J-2 | Per-pass GPU timestamps (`PassTimingReport`)                                              | §12.2        | **TODO** | `vkCmdWriteTimestamp2` / `EndQuery`, readback via `ReadbackRing` |
+| J-3 | Barrier audit log (`BarrierAuditEntry`)                                                   | §12.3        | **TODO** | Compare emitted vs required barriers                             |
+| J-4 | RenderDoc / Nsight / PIX debug regions (begin/end per pass)                               | §12.4        | **TODO** | Queue-type-based color scheme                                    |
+| J-5 | Graph diff report (`GraphDiffReport`) on structural hash change                           | §12.5        | **TODO** | Pass + resource diffs, JSON export, recompilation cost           |
+| J-6 | `RenderGraphValidator` — post-pass state validation, aliasing correctness, timeline audit | §11.2        | **TODO** | Debug build only                                                 |
+
+#### Phase K: Plugin Extension System — TODO
+
+| #   | Item                                                                                    | Spec Section | Status   | Notes                              |
+| --- | --------------------------------------------------------------------------------------- | ------------ | -------- | ---------------------------------- |
+| K-1 | `IRenderGraphExtension` interface (`BuildPasses`, `Shutdown`, `GetName`, `GetPriority`) | §13.1        | **TODO** |                                    |
+| K-2 | Extension registration + priority-ordered invocation during `Build()`                   | §13.2        | **TODO** |                                    |
+| K-3 | PSO miss handling: Tier A async compile + Tier B fallback PSO                           | §13.4        | **TODO** | Requires PipelineCache integration |
+
+#### Phase L: GPGPU & Future — TODO
+
+| #    | Item                                                            | Spec Section | Status   | Notes                                                      |
+| ---- | --------------------------------------------------------------- | ------------ | -------- | ---------------------------------------------------------- |
+| L-1  | Compute-only subgraphs (ML inference, physics, mesh processing) | §8.1         | **TODO** | No graphics context, async compute scheduling              |
+| L-2  | Multi-frame compute tasks (`AsyncTaskManager` integration)      | §8.2         | **TODO** | `WaitForAsyncTask` → timeline semaphore wait at submission |
+| L-3  | Work graph integration (`DispatchGraph` shim)                   | §8.3         | **TODO** | Future: D3D12 SM 6.8+                                      |
+| L-4  | Cooperative matrix / tensor core pass support                   | §8.4         | **TODO** | No special RG handling needed                              |
+| L-5  | Heterogeneous device support (`RGDeviceAffinity`)               | §8.5         | **TODO** | Future: multi-GPU, iGPU+dGPU                               |
+| L-6  | Automatic async compute discovery (critical path analysis)      | §16.1        | **TODO** | Phase 7+                                                   |
+| L-7  | Mesh/task shader graph nodes (`AddMeshShaderPass`)              | §16.3        | **TODO** | Phase 6a                                                   |
+| L-8  | Ray tracing pass integration (BLAS/TLAS as graph resources)     | §16.4        | **TODO** | Phase 7+                                                   |
+| L-9  | VRS image as graph resource                                     | §16.5        | **TODO** |                                                            |
+| L-10 | GPU breadcrumbs for crash diagnosis                             | §16.6        | **TODO** | `VK_AMD_buffer_marker` / DRED                              |
+| L-11 | Sparse resource graph nodes (VSM page commit/decommit)          | §16.7        | **TODO** | Phase 10+                                                  |
+| L-12 | D3D12 Fence Barriers Tier-2 integration                         | §16.8        | **TODO** | Phase 5+                                                   |
+
+### 18.2 Progress Summary
+
+| Phase | Description                           | Total   | Done   | Partial | TODO   |
+| ----- | ------------------------------------- | ------- | ------ | ------- | ------ |
+| A     | Core data types                       | 17      | 17     | 0       | 0      |
+| B     | Builder & PassBuilder API             | 18      | 15     | 0       | 3      |
+| C     | Compiler stages 1-6 + caching         | 8       | 8      | 0       | 0      |
+| D     | Compiler stages 7-10                  | 11      | 0      | 0       | 11     |
+| E     | Executor                              | 11      | 0      | 1       | 10     |
+| F     | Transient memory management           | 6       | 0      | 0       | 6      |
+| G     | Cross-queue & async compute runtime   | 5       | 0      | 0       | 5      |
+| H     | Conditional execution & history       | 5       | 3      | 0       | 2      |
+| I     | Graph caching & incremental recompile | 6       | 2      | 0       | 4      |
+| J     | Debugging & profiling                 | 6       | 0      | 0       | 6      |
+| K     | Plugin extension system               | 3       | 0      | 0       | 3      |
+| L     | GPGPU & future                        | 12      | 0      | 0       | 12     |
+| **Σ** |                                       | **108** | **45** | **1**   | **62** |
+
+**Overall: 42% complete** (core builder + compiler stages 1-6 done; executor, advanced compiler stages, and runtime subsystems remain).
+
+### 18.3 Recommended Next Steps
+
+```
+1. Phase D (compiler stages 7-10)  — highest leverage: unlocks transient aliasing + batch formation
+   Start with D-1/D-2 (lifetime intervals + interval coloring), then D-9 (batch formation)
+2. Phase E (executor)              — makes the graph actually runnable on GPU
+   Start with E-1 (complete RenderPassContext), then E-3 (single-threaded RecordPasses)
+3. Phase F (heap pool)             — required for transient aliasing runtime
+4. Phase J-1 (Graphviz export)     — cheap to implement, huge debugging value
+5. Remaining phases in dependency order
+```
+
+### 18.4 Known Divergences from Spec
+
+| Item | Spec                                                                                                             | Implementation                          | Severity | Action                                                                              |
+| ---- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------- | ----------------------------------------------------------------------------------- |
+| 1    | `ResourceAccess` bits 0-11 read / 16-31 write                                                                    | Bits 0-7 read / 8-12 write              | Low      | Functionally identical; consider aligning if `HostRead`/`HostWrite` are added later |
+| 2    | `BarrierMapping` has stage + access only                                                                         | Impl adds `TextureLayout` field         | None     | Improvement — keep                                                                  |
+| 3    | `ResolveBarrier` uses constexpr table `kAccessToBarrier[22]`                                                     | Impl uses `switch` on single flag       | None     | Both constexpr; switch is clearer                                                   |
+| 4    | Pass API is template-based (`SetupFn&&`, `ExecuteFn&&`)                                                          | Impl uses type-erased `std::function`   | Medium   | Prevents SBO `static_assert` (B-17). Revisit when `InlineFunction` is available     |
+| 5    | `std::move_only_function` for lambda storage                                                                     | `std::function` (libc++ compat)         | Low      | Revisit when coca-toolchain libc++ supports `move_only_function`                    |
+| 6    | Spec has `VertexBuffer`, `IndexBuffer`, `UniformBuffer`, `HostRead`, `HostWrite`, `ColorAttachRead` access flags | Impl omits these 6 flags                | Medium   | Add when needed by consumer passes                                                  |
+| 7    | Spec `RGPassFlags` has `AllowMerge`, `AsyncTransfer`                                                             | Impl has `Present`, `NeverCull` instead | Low      | Different design choices; both valid                                                |
+
+---
+
+## 19. Cross-References
 
 | Topic                                       | Document                             | Section                                |
 | ------------------------------------------- | ------------------------------------ | -------------------------------------- |

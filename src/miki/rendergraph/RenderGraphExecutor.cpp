@@ -1,0 +1,859 @@
+/** @file RenderGraphExecutor.cpp
+ *  @brief Runtime execution engine for compiled render graphs.
+ *
+ *  Implements the three-phase execution pipeline:
+ *    Phase 1: AllocateTransients — heap pool + placed resource creation
+ *    Phase 2: RecordPasses — barrier emission + pass lambda invocation
+ *    Phase 3: SubmitBatches — queue submission with timeline sync
+ *
+ *  See: specs/04-render-graph.md §6
+ */
+
+#include "miki/rendergraph/RenderGraphExecutor.h"
+
+#include "miki/resource/ReadbackRing.h"
+#include "miki/rhi/backend/AllBackends.h"
+#include "miki/rhi/backend/AllCommandBuffers.h"
+
+#include <cassert>
+#include <cstring>
+#include <utility>
+
+namespace miki::rg {
+
+    // =========================================================================
+    // ResourceAccess → rhi::TextureUsage inference
+    // =========================================================================
+
+    namespace {
+
+        /// @brief Infer RHI TextureUsage flags from combined ResourceAccess across all pass accesses.
+        [[nodiscard]] constexpr auto InferTextureUsage(ResourceAccess combined) noexcept -> rhi::TextureUsage {
+            auto usage = rhi::TextureUsage{0};
+            if ((combined & ResourceAccess::ShaderReadOnly) != ResourceAccess::None) {
+                usage = usage | rhi::TextureUsage::Sampled;
+            }
+            if ((combined & ResourceAccess::ShaderWrite) != ResourceAccess::None) {
+                usage = usage | rhi::TextureUsage::Storage;
+            }
+            if ((combined & ResourceAccess::ColorAttachWrite) != ResourceAccess::None) {
+                usage = usage | rhi::TextureUsage::ColorAttachment;
+            }
+            if ((combined & (ResourceAccess::DepthStencilWrite | ResourceAccess::DepthReadOnly))
+                != ResourceAccess::None) {
+                usage = usage | rhi::TextureUsage::DepthStencil;
+            }
+            if ((combined & ResourceAccess::TransferSrc) != ResourceAccess::None) {
+                usage = usage | rhi::TextureUsage::TransferSrc;
+            }
+            if ((combined & ResourceAccess::TransferDst) != ResourceAccess::None) {
+                usage = usage | rhi::TextureUsage::TransferDst;
+            }
+            if ((combined & ResourceAccess::InputAttachment) != ResourceAccess::None) {
+                usage = usage | rhi::TextureUsage::InputAttachment;
+            }
+            if ((combined & ResourceAccess::ShadingRateRead) != ResourceAccess::None) {
+                usage = usage | rhi::TextureUsage::ShadingRate;
+            }
+            // Ensure at least Sampled for general usability
+            if (static_cast<uint32_t>(usage) == 0) {
+                usage = rhi::TextureUsage::Sampled;
+            }
+            return usage;
+        }
+
+        /// @brief Infer RHI BufferUsage flags from combined ResourceAccess.
+        [[nodiscard]] constexpr auto InferBufferUsage(ResourceAccess combined) noexcept -> rhi::BufferUsage {
+            auto usage = rhi::BufferUsage{0};
+            if ((combined & ResourceAccess::ShaderReadOnly) != ResourceAccess::None) {
+                usage = usage | rhi::BufferUsage::Storage;
+            }
+            if ((combined & ResourceAccess::ShaderWrite) != ResourceAccess::None) {
+                usage = usage | rhi::BufferUsage::Storage;
+            }
+            if ((combined & ResourceAccess::IndirectBuffer) != ResourceAccess::None) {
+                usage = usage | rhi::BufferUsage::Indirect;
+            }
+            if ((combined & ResourceAccess::TransferSrc) != ResourceAccess::None) {
+                usage = usage | rhi::BufferUsage::TransferSrc;
+            }
+            if ((combined & ResourceAccess::TransferDst) != ResourceAccess::None) {
+                usage = usage | rhi::BufferUsage::TransferDst;
+            }
+            if ((combined & ResourceAccess::AccelStructRead) != ResourceAccess::None) {
+                usage = usage | rhi::BufferUsage::AccelStructInput;
+            }
+            if ((combined & ResourceAccess::AccelStructWrite) != ResourceAccess::None) {
+                usage = usage | rhi::BufferUsage::AccelStructStorage;
+            }
+            if (static_cast<uint32_t>(usage) == 0) {
+                usage = rhi::BufferUsage::Storage;
+            }
+            return usage;
+        }
+
+        /// @brief Compute combined ResourceAccess for a resource across all passes.
+        [[nodiscard]] auto ComputeCombinedAccess(uint16_t resourceIndex, const RenderGraphBuilder& builder) noexcept
+            -> ResourceAccess {
+            auto combined = ResourceAccess::None;
+            for (auto& pass : builder.GetPasses()) {
+                for (auto& r : pass.reads) {
+                    if (r.handle.GetIndex() == resourceIndex) {
+                        combined = combined | r.access;
+                    }
+                }
+                for (auto& w : pass.writes) {
+                    if (w.handle.GetIndex() == resourceIndex) {
+                        combined = combined | w.access;
+                    }
+                }
+            }
+            return combined;
+        }
+
+    }  // anonymous namespace
+
+    // =========================================================================
+    // Constructor / Destructor / Move
+    // =========================================================================
+
+    RenderGraphExecutor::RenderGraphExecutor(const ExecutorConfig& config)
+        : config_(config), frameAllocator_(config.frameAllocatorCapacity) {}
+
+    RenderGraphExecutor::~RenderGraphExecutor() = default;
+
+    RenderGraphExecutor::RenderGraphExecutor(RenderGraphExecutor&&) noexcept = default;
+    auto RenderGraphExecutor::operator=(RenderGraphExecutor&&) noexcept -> RenderGraphExecutor& = default;
+
+    // =========================================================================
+    // Execute — main entry point
+    // =========================================================================
+
+    auto RenderGraphExecutor::Execute(
+        const CompiledRenderGraph& graph, RenderGraphBuilder& builder, const frame::FrameContext& frame,
+        rhi::DeviceHandle device, frame::SyncScheduler& scheduler, frame::CommandPoolAllocator& poolAllocator
+    ) -> core::Result<void> {
+        // Reset per-frame state
+        stats_ = {};
+        frameAllocator_.Reset();
+        batchRecordings_.clear();
+
+        // Phase 1: Allocate transient resources
+        auto allocResult = AllocateTransients(graph, builder, device);
+        if (!allocResult) {
+            return allocResult;
+        }
+
+        // Phase 2: Record command buffers (choose single-threaded or parallel path)
+        auto recordResult = (config_.enableParallelRecording && config_.maxRecordingThreads > 1)
+                                ? RecordPassesParallel(graph, builder, frame, device, poolAllocator)
+                                : RecordPasses(graph, builder, frame, device, poolAllocator);
+        if (!recordResult) {
+            DestroyTransients(device);
+            return recordResult;
+        }
+
+        // Phase 3: Submit batches
+        auto submitResult = SubmitBatches(graph, device, scheduler);
+        if (!submitResult) {
+            DestroyTransients(device);
+            return submitResult;
+        }
+
+        // Transient resources will be destroyed on next Execute() or destructor
+        // (deferred destruction via FrameManager ensures GPU completion)
+        return {};
+    }
+
+    // =========================================================================
+    // ExecuteAsync — offload Phase 1 + 2 to worker thread (E-7)
+    // =========================================================================
+
+    auto RenderGraphExecutor::ExecuteAsync(
+        const CompiledRenderGraph& graph, RenderGraphBuilder& builder, const frame::FrameContext& frame,
+        rhi::DeviceHandle device, frame::CommandPoolAllocator& poolAllocator
+    ) -> std::future<core::Result<void>> {
+        // Reset per-frame state on calling thread (safe: no concurrent access yet)
+        stats_ = {};
+        frameAllocator_.Reset();
+        batchRecordings_.clear();
+
+        return std::async(
+            std::launch::async, [this, &graph, &builder, &frame, device, &poolAllocator]() -> core::Result<void> {
+                // Phase 1: Allocate transient resources
+                auto allocResult = AllocateTransients(graph, builder, device);
+                if (!allocResult) {
+                    return allocResult;
+                }
+
+                // Phase 2: Record command buffers
+                auto recordResult = (config_.enableParallelRecording && config_.maxRecordingThreads > 1)
+                                        ? RecordPassesParallel(graph, builder, frame, device, poolAllocator)
+                                        : RecordPasses(graph, builder, frame, device, poolAllocator);
+                if (!recordResult) {
+                    DestroyTransients(device);
+                    return recordResult;
+                }
+
+                return {};
+            }
+        );
+    }
+
+    // =========================================================================
+    // SubmitAfterAsync — Phase 3 on render thread after async completes
+    // =========================================================================
+
+    auto RenderGraphExecutor::SubmitAfterAsync(
+        const CompiledRenderGraph& graph, rhi::DeviceHandle device, frame::SyncScheduler& scheduler
+    ) -> core::Result<void> {
+        return SubmitBatches(graph, device, scheduler);
+    }
+
+    // =========================================================================
+    // Phase 1: AllocateTransients
+    // =========================================================================
+
+    auto RenderGraphExecutor::AllocateTransients(
+        const CompiledRenderGraph& graph, RenderGraphBuilder& builder, rhi::DeviceHandle device
+    ) -> core::Result<void> {
+        auto& resources = builder.GetResources();
+        auto resourceCount = static_cast<uint16_t>(resources.size());
+
+        // Resize physical handle tables
+        physicalTextures_.assign(resourceCount, {});
+        physicalBuffers_.assign(resourceCount, {});
+        physicalTextureViews_.assign(resourceCount, {});
+
+        // Clean up previous frame's transient resources
+        DestroyTransients(device);
+
+        // --- Step 1: Create memory heaps for aliased transient resources ---
+        auto& aliasing = graph.aliasing;
+        heapAllocations_.clear();
+
+        for (uint32_t g = 0; g < kHeapGroupCount; ++g) {
+            uint64_t heapSize = aliasing.heapGroupSizes[g];
+            if (heapSize == 0) {
+                continue;
+            }
+
+            auto heapResult = device.Dispatch([&](auto& dev) {
+                return dev.CreateMemoryHeap(
+                    rhi::MemoryHeapDesc{
+                        .size = heapSize,
+                        .memory = rhi::MemoryLocation::GpuOnly,
+                        .debugName = "RG Transient Heap",
+                    }
+                );
+            });
+            if (!heapResult) {
+                return std::unexpected(core::ErrorCode::OutOfMemory);
+            }
+
+            heapAllocations_.push_back({
+                .group = static_cast<HeapGroupType>(g),
+                .heap = *heapResult,
+                .size = heapSize,
+            });
+            stats_.heapsCreated++;
+            stats_.transientMemoryBytes += heapSize;
+        }
+
+        // --- Step 2: Create physical resources ---
+        for (uint16_t ri = 0; ri < resourceCount; ++ri) {
+            auto& resNode = resources[ri];
+
+            if (resNode.imported) {
+                // Imported resources: use existing physical handles
+                if (resNode.kind == RGResourceKind::Texture) {
+                    physicalTextures_[ri] = resNode.importedTexture;
+                    // Create a default view for imported textures
+                    if (resNode.importedTexture.IsValid()) {
+                        auto viewResult = device.Dispatch([&](auto& dev) {
+                            return dev.CreateTextureView(
+                                rhi::TextureViewDesc{
+                                    .texture = resNode.importedTexture,
+                                }
+                            );
+                        });
+                        if (viewResult) {
+                            physicalTextureViews_[ri] = *viewResult;
+                            transientTextures_.push_back({ri, {}, *viewResult});  // track view for cleanup
+                        }
+                    }
+                } else {
+                    physicalBuffers_[ri] = resNode.importedBuffer;
+                }
+                continue;
+            }
+
+            // Transient resource: compute combined access for usage inference
+            auto combinedAccess = ComputeCombinedAccess(ri, builder);
+
+            if (resNode.kind == RGResourceKind::Texture) {
+                auto inferredUsage = InferTextureUsage(combinedAccess);
+                auto rhiDesc = resNode.textureDesc.ToRhiDesc(inferredUsage);
+
+                auto texResult = device.Dispatch([&](auto& dev) { return dev.CreateTexture(rhiDesc); });
+                if (!texResult) {
+                    return std::unexpected(core::ErrorCode::OutOfMemory);
+                }
+
+                physicalTextures_[ri] = *texResult;
+                stats_.transientTexturesAllocated++;
+
+                // Bind to aliasing heap if slot assigned
+                if (ri < aliasing.resourceToSlot.size() && aliasing.resourceToSlot[ri] != AliasingLayout::kNotAliased) {
+                    uint32_t slotIdx = aliasing.resourceToSlot[ri];
+                    if (slotIdx < aliasing.slots.size()) {
+                        auto& slot = aliasing.slots[slotIdx];
+                        // Find the heap for this group
+                        for (auto& heap : heapAllocations_) {
+                            if (heap.group == slot.heapGroup) {
+                                device.Dispatch([&](auto& dev) {
+                                    dev.AliasTextureMemory(*texResult, heap.heap, slot.heapOffset);
+                                });
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Create default texture view
+                auto viewResult = device.Dispatch([&](auto& dev) {
+                    return dev.CreateTextureView(rhi::TextureViewDesc{.texture = *texResult});
+                });
+                if (viewResult) {
+                    physicalTextureViews_[ri] = *viewResult;
+                    stats_.transientTextureViewsCreated++;
+                }
+
+                transientTextures_.push_back({
+                    .resourceIndex = ri,
+                    .texture = *texResult,
+                    .view = viewResult ? *viewResult : rhi::TextureViewHandle{},
+                });
+
+            } else {
+                // Buffer
+                auto inferredUsage = InferBufferUsage(combinedAccess);
+                auto rhiDesc = resNode.bufferDesc.ToRhiDesc(inferredUsage);
+
+                auto bufResult = device.Dispatch([&](auto& dev) { return dev.CreateBuffer(rhiDesc); });
+                if (!bufResult) {
+                    return std::unexpected(core::ErrorCode::OutOfMemory);
+                }
+
+                physicalBuffers_[ri] = *bufResult;
+                stats_.transientBuffersAllocated++;
+
+                // Bind to aliasing heap if slot assigned
+                if (ri < aliasing.resourceToSlot.size() && aliasing.resourceToSlot[ri] != AliasingLayout::kNotAliased) {
+                    uint32_t slotIdx = aliasing.resourceToSlot[ri];
+                    if (slotIdx < aliasing.slots.size()) {
+                        auto& slot = aliasing.slots[slotIdx];
+                        for (auto& heap : heapAllocations_) {
+                            if (heap.group == slot.heapGroup) {
+                                device.Dispatch([&](auto& dev) {
+                                    dev.AliasBufferMemory(*bufResult, heap.heap, slot.heapOffset);
+                                });
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                transientBuffers_.push_back({.resourceIndex = ri, .buffer = *bufResult});
+            }
+        }
+
+        return {};
+    }
+
+    // =========================================================================
+    // RecordSinglePass — shared helper for single-threaded and parallel paths
+    // =========================================================================
+
+    void RenderGraphExecutor::RecordSinglePass(
+        rhi::CommandListHandle& cmdList, const CompiledPassInfo& compiledPass, RGPassNode& passNode,
+        const frame::FrameContext& frame, bool emitBarriers, RenderGraphBuilder& builder
+    ) {
+        uint32_t passIdx = compiledPass.passIndex;
+
+        // Emit acquire barriers (only in primary cmd buf path)
+        if (emitBarriers && !compiledPass.acquireBarriers.empty()) {
+            EmitBarriers(cmdList, compiledPass.acquireBarriers, builder);
+            stats_.barriersEmitted += static_cast<uint32_t>(compiledPass.acquireBarriers.size());
+        }
+
+        // Build rendering attachments for graphics passes
+        std::vector<rhi::RenderingAttachment> colorAttachments;
+        rhi::RenderingAttachment depthAttachment{};
+        bool hasDepth = false;
+        bool isGraphicsPass = (static_cast<uint8_t>(passNode.flags) & static_cast<uint8_t>(RGPassFlags::Graphics)) != 0;
+
+        if (isGraphicsPass) {
+            BuildRenderingAttachments(passNode, builder, colorAttachments, depthAttachment, hasDepth);
+            if (!colorAttachments.empty() || hasDepth) {
+                rhi::RenderingDesc renderingDesc{
+                    .renderArea = {{0, 0}, {frame.width, frame.height}},
+                    .colorAttachments = colorAttachments,
+                    .depthAttachment = hasDepth ? &depthAttachment : nullptr,
+                };
+                cmdList.Dispatch([&](auto& cmd) { cmd.CmdBeginRendering(renderingDesc); });
+            }
+        }
+
+        // Build RenderPassContext
+        RenderPassContext ctx{
+            .commandList = cmdList,
+            .bufferHandle = {},
+            .passIndex = passIdx,
+            .passName = passNode.name,
+            .physicalTextures = physicalTextures_,
+            .physicalBuffers = physicalBuffers_,
+            .physicalTextureViews = physicalTextureViews_,
+            .colorAttachments = colorAttachments,
+            .depthAttachment = hasDepth ? &depthAttachment : nullptr,
+            .frameAllocator = &frameAllocator_,
+            .readbackRing = readbackRing_,
+        };
+
+        // Invoke pass execute lambda
+        if (passNode.executeFn) {
+            passNode.executeFn(ctx);
+        }
+        stats_.passesRecorded++;
+
+        // End dynamic rendering
+        if (isGraphicsPass && (!colorAttachments.empty() || hasDepth)) {
+            cmdList.Dispatch([](auto& cmd) { cmd.CmdEndRendering(); });
+        }
+
+        // Emit release barriers (only in primary cmd buf path)
+        if (emitBarriers && !compiledPass.releaseBarriers.empty()) {
+            EmitBarriers(cmdList, compiledPass.releaseBarriers, builder);
+            stats_.barriersEmitted += static_cast<uint32_t>(compiledPass.releaseBarriers.size());
+        }
+    }
+
+    // =========================================================================
+    // Phase 2a: RecordPasses (single-threaded)
+    // =========================================================================
+
+    auto RenderGraphExecutor::RecordPasses(
+        const CompiledRenderGraph& graph, RenderGraphBuilder& builder, const frame::FrameContext& frame,
+        rhi::DeviceHandle /*device*/, frame::CommandPoolAllocator& poolAllocator
+    ) -> core::Result<void> {
+        auto& passes = builder.GetPasses();
+
+        batchRecordings_.clear();
+        batchRecordings_.reserve(graph.batches.size());
+
+        for (auto& batch : graph.batches) {
+            auto rhiQueue = ToRhiQueueType(batch.queue);
+
+            auto acqResult = poolAllocator.Acquire(frame.frameIndex, rhiQueue, /*threadIndex=*/0);
+            if (!acqResult) {
+                return std::unexpected(acqResult.error());
+            }
+
+            auto& acq = acqResult->acquisition;
+            auto& cmdList = acq.listHandle;
+            cmdList.Dispatch([](auto& cmd) { cmd.Begin(); });
+
+            for (uint32_t compiledIdx : batch.passIndices) {
+                if (compiledIdx >= graph.passes.size()) {
+                    continue;
+                }
+                auto& compiledPass = graph.passes[compiledIdx];
+                if (compiledPass.passIndex >= passes.size()) {
+                    continue;
+                }
+                auto& passNode = passes[compiledPass.passIndex];
+                RecordSinglePass(cmdList, compiledPass, passNode, frame, /*emitBarriers=*/true, builder);
+            }
+
+            // E-10: Record pending readback transfers at end of last batch
+            if (readbackRing_ && readbackRing_->GetPendingCopyCount() > 0) {
+                readbackRing_->RecordTransfers(cmdList);
+            }
+
+            cmdList.Dispatch([](auto& cmd) { cmd.End(); });
+            batchRecordings_.push_back({.queue = batch.queue, .commandBuffers = {acq.bufferHandle}});
+        }
+
+        return {};
+    }
+
+    // =========================================================================
+    // Phase 2b: RecordPassesParallel (E-5/E-6)
+    //
+    // Design:
+    //   - Primary cmd buf: barriers only (thread-safe, no contention)
+    //   - Per-pass secondary cmd bufs: pass lambdas (one per thread, thread-affine pools)
+    //   - std::jthread workers + std::latch synchronization
+    //   - Invariant: each thread only touches its own command pool (threadIndex)
+    //   - Invariant: barriers always in primary (correct ordering)
+    // =========================================================================
+
+    auto RenderGraphExecutor::RecordPassesParallel(
+        const CompiledRenderGraph& graph, RenderGraphBuilder& builder, const frame::FrameContext& frame,
+        rhi::DeviceHandle /*device*/, frame::CommandPoolAllocator& poolAllocator
+    ) -> core::Result<void> {
+        auto& passes = builder.GetPasses();
+        uint32_t threadCount
+            = std::min(config_.maxRecordingThreads, static_cast<uint32_t>(std::thread::hardware_concurrency()));
+        threadCount = std::max(threadCount, 1u);
+
+        batchRecordings_.clear();
+        batchRecordings_.reserve(graph.batches.size());
+
+        for (auto& batch : graph.batches) {
+            auto rhiQueue = ToRhiQueueType(batch.queue);
+            uint32_t passCount = static_cast<uint32_t>(batch.passIndices.size());
+
+            // Acquire primary cmd buf (thread 0) for barriers
+            auto primaryResult = poolAllocator.Acquire(frame.frameIndex, rhiQueue, /*threadIndex=*/0);
+            if (!primaryResult) {
+                return std::unexpected(primaryResult.error());
+            }
+            auto& primaryAcq = primaryResult->acquisition;
+            auto& primaryCmd = primaryAcq.listHandle;
+            primaryCmd.Dispatch([](auto& cmd) { cmd.Begin(); });
+
+            // For small batches or single pass, fall back to single-threaded inline recording
+            if (passCount <= 1 || threadCount <= 1) {
+                for (uint32_t compiledIdx : batch.passIndices) {
+                    if (compiledIdx >= graph.passes.size()) {
+                        continue;
+                    }
+                    auto& compiledPass = graph.passes[compiledIdx];
+                    if (compiledPass.passIndex >= passes.size()) {
+                        continue;
+                    }
+                    auto& passNode = passes[compiledPass.passIndex];
+                    RecordSinglePass(primaryCmd, compiledPass, passNode, frame, /*emitBarriers=*/true, builder);
+                }
+                primaryCmd.Dispatch([](auto& cmd) { cmd.End(); });
+                batchRecordings_.push_back({.queue = batch.queue, .commandBuffers = {primaryAcq.bufferHandle}});
+                continue;
+            }
+
+            // Parallel path: acquire secondary cmd bufs (one per pass)
+            struct PassRecording {
+                rhi::CommandListHandle cmdList;
+                rhi::CommandBufferHandle bufferHandle;
+                uint32_t compiledIdx;
+            };
+            std::vector<PassRecording> passRecordings(passCount);
+
+            // Acquire secondary cmd bufs, round-robin across threads
+            for (uint32_t i = 0; i < passCount; ++i) {
+                uint32_t threadIdx = (i % threadCount) + 1;  // +1: thread 0 is primary
+                if (threadIdx >= threadCount) {
+                    threadIdx = 1;
+                }
+                auto secResult = poolAllocator.AcquireSecondary(frame.frameIndex, rhiQueue, threadIdx);
+                if (!secResult) {
+                    return std::unexpected(secResult.error());
+                }
+                passRecordings[i].cmdList = secResult->acquisition.listHandle;
+                passRecordings[i].bufferHandle = secResult->acquisition.bufferHandle;
+                passRecordings[i].compiledIdx = batch.passIndices[i];
+            }
+
+            // Parallel record: partition passes across worker threads
+            std::atomic<uint32_t> errorFlag{0};
+            uint32_t actualThreads = std::min(threadCount, passCount);
+            std::latch done(actualThreads);
+
+            auto workerFn = [&](uint32_t workerIdx) {
+                for (uint32_t i = workerIdx; i < passCount; i += actualThreads) {
+                    auto& pr = passRecordings[i];
+                    if (pr.compiledIdx >= graph.passes.size()) {
+                        continue;
+                    }
+                    auto& compiledPass = graph.passes[pr.compiledIdx];
+                    if (compiledPass.passIndex >= passes.size()) {
+                        continue;
+                    }
+                    auto& passNode = passes[compiledPass.passIndex];
+
+                    pr.cmdList.Dispatch([](auto& cmd) { cmd.Begin(); });
+                    RecordSinglePass(pr.cmdList, compiledPass, passNode, frame, /*emitBarriers=*/false, builder);
+                    pr.cmdList.Dispatch([](auto& cmd) { cmd.End(); });
+                }
+                done.count_down();
+            };
+
+            // Launch workers (worker 0 runs inline on calling thread)
+            std::vector<std::jthread> workers;
+            workers.reserve(actualThreads - 1);
+            for (uint32_t w = 1; w < actualThreads; ++w) {
+                workers.emplace_back([&workerFn, w] { workerFn(w); });
+            }
+            workerFn(0);  // Inline on calling thread
+            done.wait();
+
+            if (errorFlag.load(std::memory_order_relaxed) != 0) {
+                primaryCmd.Dispatch([](auto& cmd) { cmd.End(); });
+                return std::unexpected(core::ErrorCode::InvalidState);
+            }
+
+            // Primary cmd buf: emit barriers in order, then execute secondary cmd bufs
+            std::vector<rhi::CommandBufferHandle> secondaryHandles;
+            secondaryHandles.reserve(passCount);
+
+            for (uint32_t i = 0; i < passCount; ++i) {
+                auto& pr = passRecordings[i];
+                if (pr.compiledIdx >= graph.passes.size()) {
+                    continue;
+                }
+                auto& compiledPass = graph.passes[pr.compiledIdx];
+
+                // Emit acquire barriers in primary (correct ordering guarantee)
+                if (!compiledPass.acquireBarriers.empty()) {
+                    EmitBarriers(primaryCmd, compiledPass.acquireBarriers, builder);
+                    stats_.barriersEmitted += static_cast<uint32_t>(compiledPass.acquireBarriers.size());
+                }
+
+                // Execute this pass's secondary cmd buf
+                secondaryHandles.clear();
+                secondaryHandles.push_back(pr.bufferHandle);
+                primaryCmd.Dispatch([&](auto& cmd) {
+                    cmd.CmdExecuteSecondary(std::span<const rhi::CommandBufferHandle>{secondaryHandles});
+                });
+                stats_.passesRecorded++;
+
+                // Emit release barriers in primary
+                if (!compiledPass.releaseBarriers.empty()) {
+                    EmitBarriers(primaryCmd, compiledPass.releaseBarriers, builder);
+                    stats_.barriersEmitted += static_cast<uint32_t>(compiledPass.releaseBarriers.size());
+                }
+            }
+
+            // E-10: Record pending readback transfers at end of batch
+            if (readbackRing_ && readbackRing_->GetPendingCopyCount() > 0) {
+                readbackRing_->RecordTransfers(primaryCmd);
+            }
+
+            primaryCmd.Dispatch([](auto& cmd) { cmd.End(); });
+            batchRecordings_.push_back({.queue = batch.queue, .commandBuffers = {primaryAcq.bufferHandle}});
+        }
+
+        return {};
+    }
+
+    // =========================================================================
+    // Phase 3: SubmitBatches
+    // =========================================================================
+
+    auto RenderGraphExecutor::SubmitBatches(
+        const CompiledRenderGraph& graph, rhi::DeviceHandle device, frame::SyncScheduler& scheduler
+    ) -> core::Result<void> {
+        for (size_t bi = 0; bi < graph.batches.size() && bi < batchRecordings_.size(); ++bi) {
+            auto& batch = graph.batches[bi];
+            auto& recording = batchRecordings_[bi];
+            auto rhiQueue = ToRhiQueueType(batch.queue);
+
+            // Build wait semaphores from cross-queue dependencies
+            std::vector<rhi::SemaphoreSubmitInfo> waitSems;
+            for (auto& wait : batch.waits) {
+                auto srcRhiQueue = ToRhiQueueType(wait.srcQueue);
+                auto sem = scheduler.GetSemaphore(srcRhiQueue);
+                if (sem.IsValid() && wait.timelineValue > 0) {
+                    waitSems.push_back({
+                        .semaphore = sem,
+                        .value = wait.timelineValue,
+                        .stageMask = rhi::PipelineStage::AllCommands,
+                    });
+                }
+            }
+
+            // Also add any pending waits accumulated in the scheduler for this queue
+            auto pendingWaits = scheduler.GetPendingWaits(rhiQueue);
+            for (auto& pw : pendingWaits) {
+                waitSems.push_back({
+                    .semaphore = pw.semaphore,
+                    .value = pw.value,
+                    .stageMask = pw.stageMask,
+                });
+            }
+
+            // Build signal semaphores
+            std::vector<rhi::SemaphoreSubmitInfo> signalSems;
+            if (batch.signalTimeline) {
+                auto signalValue = scheduler.AllocateSignal(rhiQueue);
+                auto sem = scheduler.GetSemaphore(rhiQueue);
+                if (sem.IsValid()) {
+                    signalSems.push_back({
+                        .semaphore = sem,
+                        .value = signalValue,
+                        .stageMask = rhi::PipelineStage::AllCommands,
+                    });
+                }
+            }
+
+            // Submit
+            rhi::SubmitDesc submitDesc{
+                .commandBuffers = recording.commandBuffers,
+                .waitSemaphores = waitSems,
+                .signalSemaphores = signalSems,
+                .signalFence = {},
+            };
+            device.Dispatch([&](auto& dev) { dev.Submit(rhiQueue, submitDesc); });
+            scheduler.CommitSubmit(rhiQueue);
+
+            stats_.batchesSubmitted++;
+        }
+
+        return {};
+    }
+
+    // =========================================================================
+    // DestroyTransients
+    // =========================================================================
+
+    void RenderGraphExecutor::DestroyTransients(rhi::DeviceHandle device) {
+        // Destroy texture views and textures
+        for (auto& tt : transientTextures_) {
+            if (tt.view.IsValid()) {
+                device.Dispatch([&](auto& dev) { dev.DestroyTextureView(tt.view); });
+            }
+            if (tt.texture.IsValid()) {
+                device.Dispatch([&](auto& dev) { dev.DestroyTexture(tt.texture); });
+            }
+        }
+        transientTextures_.clear();
+
+        // Destroy buffers
+        for (auto& tb : transientBuffers_) {
+            if (tb.buffer.IsValid()) {
+                device.Dispatch([&](auto& dev) { dev.DestroyBuffer(tb.buffer); });
+            }
+        }
+        transientBuffers_.clear();
+
+        // Destroy heaps
+        for (auto& ha : heapAllocations_) {
+            if (ha.heap.IsValid()) {
+                device.Dispatch([&](auto& dev) { dev.DestroyMemoryHeap(ha.heap); });
+            }
+        }
+        heapAllocations_.clear();
+    }
+
+    // =========================================================================
+    // EmitBarriers — translate BarrierCommand to RHI barriers
+    // =========================================================================
+
+    void RenderGraphExecutor::EmitBarriers(
+        rhi::CommandListHandle& cmd, std::span<const BarrierCommand> barriers, RenderGraphBuilder& builder
+    ) {
+        auto& resources = builder.GetResources();
+
+        for (auto& bc : barriers) {
+            if (bc.resourceIndex >= resources.size()) {
+                continue;
+            }
+
+            auto srcMapping = ResolveBarrierCombined(bc.srcAccess);
+            auto dstMapping = ResolveBarrierCombined(bc.dstAccess);
+
+            // Use explicit layouts from BarrierCommand if set, otherwise fall back to resolved mapping
+            auto srcLayout = bc.srcLayout != rhi::TextureLayout::Undefined ? bc.srcLayout : srcMapping.layout;
+            auto dstLayout = bc.dstLayout != rhi::TextureLayout::Undefined ? bc.dstLayout : dstMapping.layout;
+
+            auto srcStage
+                = srcMapping.stage != rhi::PipelineStage::None ? srcMapping.stage : rhi::PipelineStage::TopOfPipe;
+            auto dstStage
+                = dstMapping.stage != rhi::PipelineStage::None ? dstMapping.stage : rhi::PipelineStage::BottomOfPipe;
+
+            auto srcQueue = bc.isCrossQueue ? ToRhiQueueType(bc.srcQueue) : rhi::QueueType::Graphics;
+            auto dstQueue = bc.isCrossQueue ? ToRhiQueueType(bc.dstQueue) : rhi::QueueType::Graphics;
+
+            if (resources[bc.resourceIndex].kind == RGResourceKind::Texture) {
+                auto texHandle = physicalTextures_[bc.resourceIndex];
+                if (!texHandle.IsValid()) {
+                    continue;
+                }
+
+                rhi::TextureSubresourceRange subresource{};
+                if (bc.mipLevel != kAllMips) {
+                    subresource.baseMipLevel = bc.mipLevel;
+                    subresource.mipLevelCount = 1;
+                }
+                if (bc.arrayLayer != kAllLayers) {
+                    subresource.baseArrayLayer = bc.arrayLayer;
+                    subresource.arrayLayerCount = 1;
+                }
+
+                rhi::TextureBarrierDesc desc{
+                    .srcStage = srcStage,
+                    .dstStage = dstStage,
+                    .srcAccess = srcMapping.access,
+                    .dstAccess = dstMapping.access,
+                    .oldLayout = srcLayout,
+                    .newLayout = dstLayout,
+                    .subresource = subresource,
+                    .srcQueue = srcQueue,
+                    .dstQueue = dstQueue,
+                };
+                cmd.Dispatch([&](auto& c) { c.CmdTextureBarrier(texHandle, desc); });
+
+            } else {
+                auto bufHandle = physicalBuffers_[bc.resourceIndex];
+                if (!bufHandle.IsValid()) {
+                    continue;
+                }
+
+                rhi::BufferBarrierDesc desc{
+                    .srcStage = srcStage,
+                    .dstStage = dstStage,
+                    .srcAccess = srcMapping.access,
+                    .dstAccess = dstMapping.access,
+                    .srcQueue = srcQueue,
+                    .dstQueue = dstQueue,
+                };
+                cmd.Dispatch([&](auto& c) { c.CmdBufferBarrier(bufHandle, desc); });
+            }
+        }
+    }
+
+    // =========================================================================
+    // BuildRenderingAttachments
+    // =========================================================================
+
+    void RenderGraphExecutor::BuildRenderingAttachments(
+        const RGPassNode& passNode, RenderGraphBuilder& /*builder*/, std::vector<rhi::RenderingAttachment>& outColor,
+        rhi::RenderingAttachment& outDepth, bool& hasDepth
+    ) {
+        hasDepth = false;
+        outColor.clear();
+
+        for (auto& w : passNode.writes) {
+            auto idx = w.handle.GetIndex();
+            if ((w.access & ResourceAccess::ColorAttachWrite) != ResourceAccess::None) {
+                rhi::RenderingAttachment att{};
+                if (idx < physicalTextureViews_.size()) {
+                    att.view = physicalTextureViews_[idx];
+                }
+                att.loadOp = rhi::AttachmentLoadOp::Clear;
+                att.storeOp = rhi::AttachmentStoreOp::Store;
+                outColor.push_back(att);
+            }
+            if ((w.access & ResourceAccess::DepthStencilWrite) != ResourceAccess::None) {
+                if (idx < physicalTextureViews_.size()) {
+                    outDepth.view = physicalTextureViews_[idx];
+                }
+                outDepth.loadOp = rhi::AttachmentLoadOp::Clear;
+                outDepth.storeOp = rhi::AttachmentStoreOp::Store;
+                outDepth.clearValue.depthStencil = {1.0f, 0};
+                hasDepth = true;
+            }
+        }
+    }
+
+}  // namespace miki::rg

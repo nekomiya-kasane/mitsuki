@@ -58,12 +58,14 @@ namespace miki::rg {
     // Read-Write operations (read + write combined, single version bump)
     // =========================================================================
 
-    auto PassBuilder::ReadWriteTexture(RGResourceHandle handle, ResourceAccess readAccess, ResourceAccess writeAccess) -> RGResourceHandle {
+    auto PassBuilder::ReadWriteTexture(RGResourceHandle handle, ResourceAccess readAccess, ResourceAccess writeAccess)
+        -> RGResourceHandle {
         RecordRead(handle, readAccess);
         return RecordWrite(handle, writeAccess);
     }
 
-    auto PassBuilder::ReadWriteBuffer(RGResourceHandle handle, ResourceAccess readAccess, ResourceAccess writeAccess) -> RGResourceHandle {
+    auto PassBuilder::ReadWriteBuffer(RGResourceHandle handle, ResourceAccess readAccess, ResourceAccess writeAccess)
+        -> RGResourceHandle {
         RecordRead(handle, readAccess);
         return RecordWrite(handle, writeAccess);
     }
@@ -138,7 +140,8 @@ namespace miki::rg {
         RecordRead(handle, access, mipLevel, kAllLayers);
     }
 
-    auto PassBuilder::WriteTextureMip(RGResourceHandle handle, uint32_t mipLevel, ResourceAccess access) -> RGResourceHandle {
+    auto PassBuilder::WriteTextureMip(RGResourceHandle handle, uint32_t mipLevel, ResourceAccess access)
+        -> RGResourceHandle {
         assert(IsWriteAccess(access));
         return RecordWrite(handle, access, mipLevel, kAllLayers);
     }
@@ -150,24 +153,31 @@ namespace miki::rg {
     void PassBuilder::RecordRead(RGResourceHandle handle, ResourceAccess access, uint32_t mip, uint32_t layer) {
         assert(handle.IsValid());
         auto& pass = builder_.GetPasses()[passIndex_];
-        pass.reads.push_back(RGResourceAccess{
-            .handle = handle,
-            .access = access,
-            .mipLevel = mip,
-            .arrayLayer = layer,
-        });
+        assert(IsAccessValidForPassType(access, pass.flags) && "ResourceAccess incompatible with pass type (B-18)");
+        builder_.GetStagingReads().push_back(
+            RGResourceAccess{
+                .handle = handle,
+                .access = access,
+                .mipLevel = mip,
+                .arrayLayer = layer,
+            }
+        );
     }
 
-    auto PassBuilder::RecordWrite(RGResourceHandle handle, ResourceAccess access, uint32_t mip, uint32_t layer) -> RGResourceHandle {
+    auto PassBuilder::RecordWrite(RGResourceHandle handle, ResourceAccess access, uint32_t mip, uint32_t layer)
+        -> RGResourceHandle {
         assert(handle.IsValid());
         auto newHandle = builder_.AllocateResourceVersion(handle.GetIndex());
         auto& pass = builder_.GetPasses()[passIndex_];
-        pass.writes.push_back(RGResourceAccess{
-            .handle = newHandle,
-            .access = access,
-            .mipLevel = mip,
-            .arrayLayer = layer,
-        });
+        assert(IsAccessValidForPassType(access, pass.flags) && "ResourceAccess incompatible with pass type (B-18)");
+        builder_.GetStagingWrites().push_back(
+            RGResourceAccess{
+                .handle = newHandle,
+                .access = access,
+                .mipLevel = mip,
+                .arrayLayer = layer,
+            }
+        );
         return newHandle;
     }
 

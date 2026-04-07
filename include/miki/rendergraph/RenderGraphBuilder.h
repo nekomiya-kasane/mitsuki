@@ -11,6 +11,7 @@
 
 #include <vector>
 
+#include "miki/core/LinearAllocator.h"
 #include "miki/rendergraph/PassBuilder.h"
 #include "miki/rendergraph/RenderGraphTypes.h"
 
@@ -22,8 +23,11 @@ namespace miki::rg {
     /// All graph construction happens through this class. After declaring
     /// all passes and resources, call Build() to finalize the description.
     class RenderGraphBuilder {
-    public:
-        RenderGraphBuilder() = default;
+       public:
+        /// @brief Default arena capacity: 64 KiB. Covers ~500 resource accesses.
+        static constexpr size_t kDefaultArenaCapacity = 64 * 1024;
+
+        explicit RenderGraphBuilder(size_t arenaCapacity = kDefaultArenaCapacity);
         ~RenderGraphBuilder() = default;
 
         RenderGraphBuilder(const RenderGraphBuilder&) = delete;
@@ -42,7 +46,8 @@ namespace miki::rg {
         [[nodiscard]] auto AddComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle;
 
         /// @brief Add a compute pass eligible for the async compute queue.
-        [[nodiscard]] auto AddAsyncComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle;
+        [[nodiscard]] auto AddAsyncComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute)
+            -> RGPassHandle;
 
         /// @brief Add a transfer-only pass (copy/blit on dedicated transfer queue).
         [[nodiscard]] auto AddTransferPass(const char* name, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle;
@@ -67,7 +72,8 @@ namespace miki::rg {
         [[nodiscard]] auto ImportBuffer(rhi::BufferHandle buffer, const char* name = nullptr) -> RGResourceHandle;
 
         /// @brief Import the swapchain backbuffer.
-        [[nodiscard]] auto ImportBackbuffer(rhi::TextureHandle backbuffer, const char* name = "Backbuffer") -> RGResourceHandle;
+        [[nodiscard]] auto ImportBackbuffer(rhi::TextureHandle backbuffer, const char* name = "Backbuffer")
+            -> RGResourceHandle;
 
         // =====================================================================
         // Conditional execution
@@ -100,16 +106,27 @@ namespace miki::rg {
         [[nodiscard]] auto GetResources() const noexcept -> const std::vector<RGResourceNode>& { return resources_; }
         [[nodiscard]] auto GetResources() noexcept -> std::vector<RGResourceNode>& { return resources_; }
         [[nodiscard]] auto GetPassCount() const noexcept -> uint32_t { return static_cast<uint32_t>(passes_.size()); }
-        [[nodiscard]] auto GetResourceCount() const noexcept -> uint32_t { return static_cast<uint32_t>(resources_.size()); }
+        [[nodiscard]] auto GetResourceCount() const noexcept -> uint32_t {
+            return static_cast<uint32_t>(resources_.size());
+        }
         [[nodiscard]] auto IsBuilt() const noexcept -> bool { return built_; }
 
         /// @brief Allocate a new resource index and bump its version. Used by PassBuilder.
         [[nodiscard]] auto AllocateResourceVersion(uint16_t resourceIndex) -> RGResourceHandle;
 
-    private:
-        auto AddPass(const char* name, RGPassFlags flags, RGQueueType queue, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle;
-        auto AllocateResource(RGResourceKind kind, const char* name) -> uint16_t;
+        /// @brief Access staging buffers (used by PassBuilder during setup phase).
+        [[nodiscard]] auto GetStagingReads() noexcept -> std::vector<RGResourceAccess>& { return stagingReads_; }
+        [[nodiscard]] auto GetStagingWrites() noexcept -> std::vector<RGResourceAccess>& { return stagingWrites_; }
 
+       private:
+        auto AddPass(const char* name, RGPassFlags flags, RGQueueType queue, PassSetupFn setup, PassExecuteFn execute)
+            -> RGPassHandle;
+        auto AllocateResource(RGResourceKind kind, const char* name) -> uint16_t;
+        void CommitStagedAccesses(RGPassNode& pass);
+
+        core::LinearAllocator arena_;
+        std::vector<RGResourceAccess> stagingReads_;   ///< Temp buffer during pass setup
+        std::vector<RGResourceAccess> stagingWrites_;  ///< Temp buffer during pass setup
         std::vector<RGPassNode> passes_;
         std::vector<RGResourceNode> resources_;
         bool built_ = false;
