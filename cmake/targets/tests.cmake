@@ -141,3 +141,9 @@ if(TARGET test_readback_ring)
     target_include_directories(test_readback_ring PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
     set_tests_properties(test_readback_ring PROPERTIES TIMEOUT 300)
 endif()
+
+# -- RenderGraph tests (pure CPU, no device needed) ---------------------------
+miki_add_test(test_render_graph tests/rendergraph/test_render_graph.cpp)
+if(TARGET test_render_graph)
+    set_tests_properties(test_render_graph PROPERTIES TIMEOUT 60)
+endif()

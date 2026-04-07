@@ -32,6 +32,9 @@ endif()
 if(TARGET miki_shader)
     list(APPEND _miki_objects $<TARGET_OBJECTS:miki_shader>)
 endif()
+if(TARGET miki_rendergraph)
+    list(APPEND _miki_objects $<TARGET_OBJECTS:miki_rendergraph>)
+endif()
 
 # -- Create STATIC library -----------------------------------------------------
 add_library(miki STATIC ${_miki_objects})

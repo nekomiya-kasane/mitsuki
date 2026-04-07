@@ -48,6 +48,7 @@ include(cmake/targets/miki_opengl.cmake)
 include(cmake/targets/miki_webgpu.cmake)
 include(cmake/targets/miki_glfw_backend.cmake)
 include(cmake/targets/miki_shader.cmake)
+include(cmake/targets/miki_rendergraph.cmake)
 
 # ---------------------------------------------------------------------------
 # Unified shared library (DLL) — all tests and demos link to this
