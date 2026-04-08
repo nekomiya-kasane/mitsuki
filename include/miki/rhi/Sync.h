@@ -84,6 +84,7 @@ namespace miki::rhi {
         std::span<const SemaphoreSubmitInfo> waitSemaphores;
         std::span<const SemaphoreSubmitInfo> signalSemaphores;
         FenceHandle signalFence;
+        bool preferAsyncQueue = false;  ///< When true and Level A, route to the async compute queue
     };
 
 }  // namespace miki::rhi

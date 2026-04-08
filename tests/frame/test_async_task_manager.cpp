@@ -13,6 +13,7 @@
 
 #include "RhiTestFixture.h"
 #include "miki/frame/AsyncTaskManager.h"
+#include "miki/frame/ComputeQueueLevel.h"
 #include "miki/frame/SyncScheduler.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Handle.h"
@@ -54,7 +55,8 @@ class AsyncTaskManagerTest : public RhiTest {
     }
 
     [[nodiscard]] auto MakeATM() -> core::Result<AsyncTaskManager> {
-        return AsyncTaskManager::Create(Dev(), scheduler_);
+        auto level = DetectComputeQueueLevel(Caps());
+        return AsyncTaskManager::Create(Dev(), scheduler_, level);
     }
 
     [[nodiscard]] auto RecordEmptyComputeCmd() -> CommandBufferHandle {

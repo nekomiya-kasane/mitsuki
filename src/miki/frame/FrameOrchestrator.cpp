@@ -7,7 +7,9 @@
 
 #include <cassert>
 
+#include "miki/debug/StructuredLogger.h"
 #include "miki/frame/AsyncTaskManager.h"
+#include "miki/frame/ComputeQueueLevel.h"
 #include "miki/frame/DeferredDestructor.h"
 #include "miki/frame/SyncScheduler.h"
 #include "miki/rhi/backend/AllBackends.h"
@@ -16,13 +18,20 @@ namespace miki::frame {
 
     struct FrameOrchestrator::Impl {
         rhi::DeviceHandle device;
+        ComputeQueueLevel computeLevel = ComputeQueueLevel::D_GraphicsOnly;
         SyncScheduler syncScheduler;
         AsyncTaskManager asyncTaskManager;
         DeferredDestructor deferredDestructor;
 
-        Impl(SyncScheduler&& sched, AsyncTaskManager&& atm, DeferredDestructor&& dd, rhi::DeviceHandle dev)
-            : device(dev), syncScheduler(std::move(sched)), asyncTaskManager(std::move(atm)),
-              deferredDestructor(std::move(dd)) {}
+        Impl(
+            SyncScheduler&& sched, AsyncTaskManager&& atm, DeferredDestructor&& dd, rhi::DeviceHandle dev,
+            ComputeQueueLevel level
+        )
+            : device(dev)
+            , computeLevel(level)
+            , syncScheduler(std::move(sched))
+            , asyncTaskManager(std::move(atm))
+            , deferredDestructor(std::move(dd)) {}
     };
 
     FrameOrchestrator::~FrameOrchestrator() {
@@ -46,9 +55,15 @@ namespace miki::frame {
         auto timelines = iDevice.Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
         scheduler.Init(timelines);
 
-        // Create AsyncTaskManager (needs SyncScheduler reference — will be wired after move)
-        // We create a temporary and re-wire after Impl construction
-        auto atmResult = AsyncTaskManager::Create(iDevice, scheduler);
+        // Detect compute queue level
+        auto caps = iDevice.Dispatch([](const auto& dev) -> const rhi::GpuCapabilityProfile& {
+            return dev.GetCapabilities();
+        });
+        auto computeLevel = DetectComputeQueueLevel(caps);
+        MIKI_LOG_INFO(debug::LogCategory::Render, "[Frame] ComputeQueueLevel: {}", ComputeQueueLevelName(computeLevel));
+
+        // Create AsyncTaskManager with level awareness
+        auto atmResult = AsyncTaskManager::Create(iDevice, scheduler, computeLevel);
         if (!atmResult) {
             return std::unexpected(core::ErrorCode::InvalidState);
         }
@@ -56,7 +71,8 @@ namespace miki::frame {
         // Create DeferredDestructor
         auto dd = DeferredDestructor::Create(iDevice, iFramesInFlight);
 
-        auto impl = std::make_unique<Impl>(std::move(scheduler), std::move(*atmResult), std::move(dd), iDevice);
+        auto impl
+            = std::make_unique<Impl>(std::move(scheduler), std::move(*atmResult), std::move(dd), iDevice, computeLevel);
         return FrameOrchestrator(std::move(impl));
     }
 
@@ -94,8 +110,14 @@ namespace miki::frame {
         return impl_ ? impl_->device : rhi::DeviceHandle{};
     }
 
+    auto FrameOrchestrator::GetComputeQueueLevel() const noexcept -> ComputeQueueLevel {
+        return impl_ ? impl_->computeLevel : ComputeQueueLevel::D_GraphicsOnly;
+    }
+
     auto FrameOrchestrator::Shutdown() -> void {
-        if (!impl_) return;
+        if (!impl_) {
+            return;
+        }
         impl_->asyncTaskManager.Shutdown();
         impl_->device.Dispatch([](auto& dev) { dev.WaitIdle(); });
         impl_->deferredDestructor.DrainAll();

@@ -18,6 +18,7 @@
 #include <span>
 
 #include "miki/core/Result.h"
+#include "miki/frame/ComputeQueueLevel.h"
 #include "miki/frame/SyncScheduler.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Handle.h"
@@ -45,8 +46,11 @@ namespace miki::frame {
         auto operator=(AsyncTaskManager&&) noexcept -> AsyncTaskManager&;
 
         /// @brief Create an AsyncTaskManager bound to a device and SyncScheduler.
-        [[nodiscard]] static auto Create(rhi::DeviceHandle iDevice, SyncScheduler& iScheduler)
-            -> core::Result<AsyncTaskManager>;
+        /// @param iLevel  Detected compute queue level (affects queue routing).
+        [[nodiscard]] static auto Create(
+            rhi::DeviceHandle iDevice, SyncScheduler& iScheduler,
+            ComputeQueueLevel iLevel = ComputeQueueLevel::D_GraphicsOnly
+        ) -> core::Result<AsyncTaskManager>;
 
         /// @brief Submit a long-running compute task.
         /// Command buffer is submitted to the async compute queue with optional waits.

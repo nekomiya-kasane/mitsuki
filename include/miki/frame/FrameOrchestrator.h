@@ -18,6 +18,7 @@
 #include <memory>
 
 #include "miki/core/Result.h"
+#include "miki/frame/ComputeQueueLevel.h"
 #include "miki/rhi/Device.h"
 
 namespace miki::frame {
@@ -60,6 +61,9 @@ namespace miki::frame {
 
         /// @brief Get the device handle.
         [[nodiscard]] auto GetDevice() const noexcept -> rhi::DeviceHandle;
+
+        /// @brief Get the detected compute queue isolation level.
+        [[nodiscard]] auto GetComputeQueueLevel() const noexcept -> ComputeQueueLevel;
 
         /// @brief Shutdown: wait for all async tasks, drain all deferred destructions.
         auto Shutdown() -> void;

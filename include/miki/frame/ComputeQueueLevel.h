@@ -28,13 +28,16 @@ namespace miki::frame {
 
     /// @brief Detect the highest available compute queue isolation level.
     inline auto DetectComputeQueueLevel(const rhi::GpuCapabilityProfile& iCaps) -> ComputeQueueLevel {
-        if (iCaps.computeQueueFamilyCount >= 2 && iCaps.hasGlobalPriority)
+        if (!iCaps.hasAsyncCompute) {
+            return ComputeQueueLevel::D_GraphicsOnly;
+        }
+        if (iCaps.computeQueueFamilyCount >= 2 && iCaps.hasGlobalPriority) {
             return ComputeQueueLevel::A_DualQueuePriority;
-        if (iCaps.hasAsyncCompute && iCaps.hasGlobalPriority)
+        }
+        if (iCaps.hasGlobalPriority) {
             return ComputeQueueLevel::B_SingleQueuePriority;
-        if (iCaps.hasAsyncCompute)
-            return ComputeQueueLevel::C_SingleQueueBatch;
-        return ComputeQueueLevel::D_GraphicsOnly;
+        }
+        return ComputeQueueLevel::C_SingleQueueBatch;
     }
 
     /// @brief Human-readable name for ComputeQueueLevel.

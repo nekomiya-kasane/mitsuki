@@ -26,6 +26,7 @@
 #include "miki/debug/StructuredLogger.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -288,6 +289,8 @@ namespace miki::rhi {
         std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
         vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &queueFamilyCount, queueFamilies.data());
 
+        uint32_t computeOnlyFamilyCount = 0;
+        uint32_t computeFamilyQueueCount = 0;
         for (uint32_t i = 0; i < queueFamilyCount; ++i) {
             auto flags = queueFamilies[i].queueFlags;
 
@@ -295,15 +298,20 @@ namespace miki::rhi {
                 queueFamilies_.graphics = i;
                 queueFamilies_.present = i;
             }
-            if ((flags & VK_QUEUE_COMPUTE_BIT) && !(flags & VK_QUEUE_GRAPHICS_BIT)
-                && queueFamilies_.compute == UINT32_MAX) {
-                queueFamilies_.compute = i;
+            if ((flags & VK_QUEUE_COMPUTE_BIT) && !(flags & VK_QUEUE_GRAPHICS_BIT)) {
+                ++computeOnlyFamilyCount;
+                if (queueFamilies_.compute == UINT32_MAX) {
+                    queueFamilies_.compute = i;
+                    computeFamilyQueueCount = queueFamilies[i].queueCount;
+                }
             }
             if ((flags & VK_QUEUE_TRANSFER_BIT) && !(flags & VK_QUEUE_GRAPHICS_BIT) && !(flags & VK_QUEUE_COMPUTE_BIT)
                 && queueFamilies_.transfer == UINT32_MAX) {
                 queueFamilies_.transfer = i;
             }
         }
+        computeOnlyFamilyCount_ = computeOnlyFamilyCount;
+        computeFamilyQueueCount_ = computeFamilyQueueCount;
 
         if (queueFamilies_.compute == UINT32_MAX) {
             queueFamilies_.compute = queueFamilies_.graphics;
@@ -326,6 +334,10 @@ namespace miki::rhi {
     auto VulkanDevice::CreateLogicalDevice() -> RhiResult<void> {
         using enum ::miki::debug::LogCategory;
 
+        // -- Determine dual-queue eligibility for async compute (Level A) --
+        bool canDualComputeQueue
+            = (queueFamilies_.compute != queueFamilies_.graphics) && (computeFamilyQueueCount_ >= 2);
+
         std::vector<uint32_t> uniqueFamilies = {queueFamilies_.graphics};
         auto addUnique = [&](uint32_t idx) {
             if (idx != UINT32_MAX && std::ranges::find(uniqueFamilies, idx) == uniqueFamilies.end()) {
@@ -336,15 +348,24 @@ namespace miki::rhi {
         addUnique(queueFamilies_.transfer);
         addUnique(queueFamilies_.present);
 
-        float queuePriority = 1.0f;
+        // Priority arrays: dual compute gets {1.0f (frame-sync), kAsyncComputePriority (async)}
+        static constexpr float kAsyncComputePriority = 0.5f;
+        float singlePriority = 1.0f;
+        std::array<float, 2> dualComputePriorities = {1.0f, kAsyncComputePriority};
+
         std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
         queueCreateInfos.reserve(uniqueFamilies.size());
         for (uint32_t family : uniqueFamilies) {
             VkDeviceQueueCreateInfo queueInfo{};
             queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
             queueInfo.queueFamilyIndex = family;
-            queueInfo.queueCount = 1;
-            queueInfo.pQueuePriorities = &queuePriority;
+            if (family == queueFamilies_.compute && canDualComputeQueue) {
+                queueInfo.queueCount = 2;
+                queueInfo.pQueuePriorities = dualComputePriorities.data();
+            } else {
+                queueInfo.queueCount = 1;
+                queueInfo.pQueuePriorities = &singlePriority;
+            }
             queueCreateInfos.push_back(queueInfo);
         }
 
@@ -364,6 +385,16 @@ namespace miki::rhi {
 
         // Extension list — swapchain is always required
         std::vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+        // Global priority extension (for ComputeQueueLevel A/B)
+        bool hasGlobalPriorityExt = false;
+        if (hasExt("VK_KHR_global_priority")) {
+            deviceExtensions.push_back("VK_KHR_global_priority");
+            hasGlobalPriorityExt = true;
+        } else if (hasExt("VK_EXT_global_priority")) {
+            deviceExtensions.push_back("VK_EXT_global_priority");
+            hasGlobalPriorityExt = true;
+        }
 
         // =====================================================================
         // Step 2: Probe physical device features + API version for tier decision
@@ -542,8 +573,15 @@ namespace miki::rhi {
         vkGetDeviceQueue(device_, queueFamilies_.present, 0, &presentQueue_);
         if (queueFamilies_.compute != queueFamilies_.graphics) {
             vkGetDeviceQueue(device_, queueFamilies_.compute, 0, &computeQueue_);
+            if (canDualComputeQueue && hasGlobalPriorityExt) {
+                // Level A: queue[0] = frame-sync (high priority), queue[1] = async (low priority)
+                vkGetDeviceQueue(device_, queueFamilies_.compute, 1, &computeAsyncQueue_);
+            } else {
+                computeAsyncQueue_ = computeQueue_;
+            }
         } else {
             computeQueue_ = graphicsQueue_;
+            computeAsyncQueue_ = graphicsQueue_;
         }
         if (queueFamilies_.transfer != queueFamilies_.graphics) {
             vkGetDeviceQueue(device_, queueFamilies_.transfer, 0, &transferQueue_);
@@ -726,6 +764,7 @@ namespace miki::rhi {
 
         capabilities_.hasAsyncCompute = (queueFamilies_.compute != queueFamilies_.graphics);
         capabilities_.hasAsyncTransfer = (queueFamilies_.transfer != queueFamilies_.graphics);
+        capabilities_.computeQueueFamilyCount = computeOnlyFamilyCount_;
         capabilities_.hasMultiDrawIndirect = (deviceFeatures.multiDrawIndirect == VK_TRUE);
         capabilities_.hasSubgroupOps = true;   // Vulkan 1.1+ always has subgroup ops
         capabilities_.hasSpirvShaders = true;  // Vulkan always consumes SPIR-V
@@ -789,6 +828,10 @@ namespace miki::rhi {
             capabilities_.hasPushDescriptors = true;
             capabilities_.enabledFeatures.Add(DeviceFeature::PushDescriptors);
         }
+
+        // Global priority (VK_KHR_global_priority promoted in Vulkan 1.4, check both KHR and EXT)
+        capabilities_.hasGlobalPriority
+            = hasExt(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) || hasExt(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME);
 
         MIKI_LOG_INFO(
             Rhi, "[Vulkan] Capability tier: {} (backend: {}, GPU: {})", isTier1 ? "Tier1_Vulkan" : "Tier2_Compat",
@@ -1269,8 +1312,14 @@ namespace miki::rhi {
         VkQueue targetQueue = graphicsQueue_;
         std::mutex* queueMutex = &graphicsQueueMutex_;
         if (queue == QueueType::Compute) {
-            targetQueue = computeQueue_;
-            queueMutex = (computeQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &computeQueueMutex_;
+            if (desc.preferAsyncQueue && computeAsyncQueue_ != computeQueue_) {
+                // Level A: route to the dedicated async compute queue
+                targetQueue = computeAsyncQueue_;
+                queueMutex = &computeAsyncQueueMutex_;
+            } else {
+                targetQueue = computeQueue_;
+                queueMutex = (computeQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &computeQueueMutex_;
+            }
         } else if (queue == QueueType::Transfer) {
             targetQueue = transferQueue_;
             queueMutex = (transferQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &transferQueueMutex_;

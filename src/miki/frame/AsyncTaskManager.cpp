@@ -16,6 +16,7 @@ namespace miki::frame {
     struct AsyncTaskManager::Impl {
         rhi::DeviceHandle device;
         SyncScheduler* scheduler = nullptr;
+        ComputeQueueLevel level = ComputeQueueLevel::D_GraphicsOnly;
         uint64_t nextTaskId = 1;
 
         struct TaskEntry {
@@ -43,7 +44,7 @@ namespace miki::frame {
     auto AsyncTaskManager::operator=(AsyncTaskManager&&) noexcept -> AsyncTaskManager& = default;
     AsyncTaskManager::AsyncTaskManager(std::unique_ptr<Impl> iImpl) : impl_(std::move(iImpl)) {}
 
-    auto AsyncTaskManager::Create(rhi::DeviceHandle iDevice, SyncScheduler& iScheduler)
+    auto AsyncTaskManager::Create(rhi::DeviceHandle iDevice, SyncScheduler& iScheduler, ComputeQueueLevel iLevel)
         -> core::Result<AsyncTaskManager> {
         if (!iDevice.IsValid()) {
             return std::unexpected(core::ErrorCode::InvalidArgument);
@@ -51,6 +52,7 @@ namespace miki::frame {
         auto impl = std::make_unique<Impl>();
         impl->device = iDevice;
         impl->scheduler = &iScheduler;
+        impl->level = iLevel;
         return AsyncTaskManager(std::move(impl));
     }
 
@@ -58,24 +60,27 @@ namespace miki::frame {
         -> core::Result<AsyncTaskHandle> {
         assert(impl_ && "AsyncTaskManager used after move");
 
-        // Allocate timeline value via SyncScheduler to avoid conflicts with frame-sync compute
-        uint64_t signalValue = impl_->scheduler->AllocateSignal(rhi::QueueType::Compute);
-        auto computeSem = impl_->scheduler->GetSemaphore(rhi::QueueType::Compute);
+        // Level D: no compute queue, submit to graphics queue during idle
+        auto submitQueue
+            = (impl_->level == ComputeQueueLevel::D_GraphicsOnly) ? rhi::QueueType::Graphics : rhi::QueueType::Compute;
+        uint64_t signalValue = impl_->scheduler->AllocateSignal(submitQueue);
+        auto computeSem = impl_->scheduler->GetSemaphore(submitQueue);
 
         // Build signal info
         rhi::SemaphoreSubmitInfo signalInfo{
             .semaphore = computeSem, .value = signalValue, .stageMask = rhi::PipelineStage::ComputeShader
         };
 
-        // Submit to compute queue
+        // Submit — async tasks always prefer the async compute queue (Level A: separate queue)
         rhi::SubmitDesc submitDesc{
             .commandBuffers = std::span<const rhi::CommandBufferHandle>(&iCmd, 1),
             .waitSemaphores = iWaits,
             .signalSemaphores = std::span<const rhi::SemaphoreSubmitInfo>(&signalInfo, 1),
             .signalFence = {},
+            .preferAsyncQueue = (impl_->level != ComputeQueueLevel::D_GraphicsOnly),
         };
-        impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Compute, submitDesc); });
-        impl_->scheduler->CommitSubmit(rhi::QueueType::Compute);
+        impl_->device.Dispatch([&](auto& dev) { dev.Submit(submitQueue, submitDesc); });
+        impl_->scheduler->CommitSubmit(submitQueue);
 
         // Track the task
         AsyncTaskHandle handle{.id = impl_->nextTaskId++};
@@ -132,11 +137,13 @@ namespace miki::frame {
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }
 
-        auto computeSem = impl_->scheduler->GetSemaphore(rhi::QueueType::Compute);
+        auto submitQueue
+            = (impl_->level == ComputeQueueLevel::D_GraphicsOnly) ? rhi::QueueType::Graphics : rhi::QueueType::Compute;
+        auto computeSem = impl_->scheduler->GetSemaphore(submitQueue);
         uint64_t lastSignalValue = 0;
 
         for (size_t i = 0; i < iBatches.size(); ++i) {
-            uint64_t signalValue = impl_->scheduler->AllocateSignal(rhi::QueueType::Compute);
+            uint64_t signalValue = impl_->scheduler->AllocateSignal(submitQueue);
             rhi::SemaphoreSubmitInfo signalInfo{
                 .semaphore = computeSem, .value = signalValue, .stageMask = rhi::PipelineStage::ComputeShader
             };
@@ -146,9 +153,10 @@ namespace miki::frame {
                 .waitSemaphores = (i == 0) ? iWaits : std::span<const rhi::SemaphoreSubmitInfo>{},
                 .signalSemaphores = std::span<const rhi::SemaphoreSubmitInfo>(&signalInfo, 1),
                 .signalFence = {},
+                .preferAsyncQueue = (impl_->level != ComputeQueueLevel::D_GraphicsOnly),
             };
-            impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Compute, submitDesc); });
-            impl_->scheduler->CommitSubmit(rhi::QueueType::Compute);
+            impl_->device.Dispatch([&](auto& dev) { dev.Submit(submitQueue, submitDesc); });
+            impl_->scheduler->CommitSubmit(submitQueue);
             lastSignalValue = signalValue;
         }
 

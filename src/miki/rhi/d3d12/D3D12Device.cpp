@@ -224,22 +224,36 @@ namespace miki::rhi {
     // =========================================================================
 
     auto D3D12Device::CreateQueues() -> RhiResult<void> {
-        auto createQueue = [&](D3D12_COMMAND_LIST_TYPE type, ComPtr<ID3D12CommandQueue>& out) -> HRESULT {
+        auto createQueue = [&](D3D12_COMMAND_LIST_TYPE type, D3D12_COMMAND_QUEUE_PRIORITY priority,
+                               ComPtr<ID3D12CommandQueue>& out) -> HRESULT {
             D3D12_COMMAND_QUEUE_DESC desc{};
             desc.Type = type;
-            desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+            desc.Priority = priority;
             desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
             desc.NodeMask = 0;
             return device_->CreateCommandQueue(&desc, IID_PPV_ARGS(&out));
         };
 
-        if (FAILED(createQueue(D3D12_COMMAND_LIST_TYPE_DIRECT, queues_.graphics))) {
+        if (FAILED(
+                createQueue(D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_PRIORITY_NORMAL, queues_.graphics)
+            )) {
             return std::unexpected(RhiError::DeviceLost);
         }
-        if (FAILED(createQueue(D3D12_COMMAND_LIST_TYPE_COMPUTE, queues_.compute))) {
+        // Frame-sync compute queue at HIGH priority
+        if (FAILED(createQueue(D3D12_COMMAND_LIST_TYPE_COMPUTE, D3D12_COMMAND_QUEUE_PRIORITY_HIGH, queues_.compute))) {
             queues_.compute = queues_.graphics;  // Fallback to graphics queue
         }
-        if (FAILED(createQueue(D3D12_COMMAND_LIST_TYPE_COPY, queues_.copy))) {
+        // Async compute queue at NORMAL priority (Level A: physically separate from frame-sync)
+        if (queues_.compute.Get() != queues_.graphics.Get()) {
+            if (FAILED(createQueue(
+                    D3D12_COMMAND_LIST_TYPE_COMPUTE, D3D12_COMMAND_QUEUE_PRIORITY_NORMAL, queues_.computeAsync
+                ))) {
+                queues_.computeAsync = queues_.compute;  // Fallback: share with frame-sync
+            }
+        } else {
+            queues_.computeAsync = queues_.compute;
+        }
+        if (FAILED(createQueue(D3D12_COMMAND_LIST_TYPE_COPY, D3D12_COMMAND_QUEUE_PRIORITY_NORMAL, queues_.copy))) {
             queues_.copy = queues_.graphics;  // Fallback to graphics queue
         }
 
@@ -363,7 +377,9 @@ namespace miki::rhi {
         // Feature level determines many capabilities
         capabilities_.hasTimelineSemaphore = true;  // D3D12 fences are inherently timeline
         capabilities_.hasAsyncCompute = (queues_.compute.Get() != queues_.graphics.Get());
-        capabilities_.hasAsyncTransfer = true;  // D3D12 always has a dedicated copy command queue
+        capabilities_.hasAsyncTransfer = true;      // D3D12 always has a dedicated copy command queue
+        capabilities_.computeQueueFamilyCount = 1;  // D3D12 COMPUTE type is always available
+        capabilities_.hasGlobalPriority = true;     // D3D12_COMMAND_QUEUE_PRIORITY_HIGH always available
         capabilities_.hasMultiDrawIndirect = true;
         capabilities_.hasMultiDrawIndirectCount = true;  // ExecuteIndirect
         capabilities_.hasBindless = true;
@@ -822,7 +838,11 @@ namespace miki::rhi {
     void D3D12Device::SubmitImpl(QueueType queue, const SubmitDesc& desc) {
         ID3D12CommandQueue* targetQueue = queues_.graphics.Get();
         if (queue == QueueType::Compute && queues_.compute) {
-            targetQueue = queues_.compute.Get();
+            if (desc.preferAsyncQueue && queues_.computeAsync && queues_.computeAsync.Get() != queues_.compute.Get()) {
+                targetQueue = queues_.computeAsync.Get();
+            } else {
+                targetQueue = queues_.compute.Get();
+            }
         } else if (queue == QueueType::Transfer && queues_.copy) {
             targetQueue = queues_.copy.Get();
         }

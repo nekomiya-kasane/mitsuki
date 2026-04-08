@@ -115,6 +115,16 @@ if(TARGET test_deferred_destructor)
     set_tests_properties(test_deferred_destructor PROPERTIES TIMEOUT 120)
 endif()
 
+# §5.8.2 ComputeQueueLevel (pure CPU tests)
+miki_add_test(test_compute_queue_level tests/frame/test_compute_queue_level.cpp)
+
+# §5.8.2 ComputeQueueLevel integration (GPU device required)
+miki_add_test(test_compute_queue_level_integration tests/frame/test_compute_queue_level_integration.cpp)
+if(TARGET test_compute_queue_level_integration)
+    target_include_directories(test_compute_queue_level_integration PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_compute_queue_level_integration PROPERTIES TIMEOUT 120)
+endif()
+
 # §5.6 AsyncTaskManager
 miki_add_test(test_async_task_manager tests/frame/test_async_task_manager.cpp)
 if(TARGET test_async_task_manager)

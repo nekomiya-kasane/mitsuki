@@ -380,10 +380,17 @@ namespace miki::rhi {
         VkQueue computeQueue_ = VK_NULL_HANDLE;
         VkQueue transferQueue_ = VK_NULL_HANDLE;
         VulkanQueueFamilies queueFamilies_;
+        uint32_t computeOnlyFamilyCount_ = 0;   ///< Number of compute-only queue families (for ComputeQueueLevel)
+        uint32_t computeFamilyQueueCount_ = 0;  ///< Number of queues in the selected compute family
         // TODO (Nekomiya) think about single summit thread
         std::mutex graphicsQueueMutex_;
-        std::mutex computeQueueMutex_;
+        std::mutex computeQueueMutex_;       ///< Protects computeQueue_ (frame-sync compute)
+        std::mutex computeAsyncQueueMutex_;  ///< Protects computeAsyncQueue_ (Level A only; aliases computeQueueMutex_
+                                             ///< otherwise)
         std::mutex transferQueueMutex_;
+
+        VkQueue computeAsyncQueue_
+            = VK_NULL_HANDLE;  ///< Level A: separate async compute queue; otherwise == computeQueue_
 
        public:
         [[nodiscard]] auto QueueFamilyIndex(QueueType q) const noexcept -> uint32_t {

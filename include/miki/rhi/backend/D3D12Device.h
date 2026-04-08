@@ -41,7 +41,8 @@ namespace miki::rhi {
 
     struct D3D12Queues {
         ComPtr<ID3D12CommandQueue> graphics;
-        ComPtr<ID3D12CommandQueue> compute;
+        ComPtr<ID3D12CommandQueue> compute;       ///< Frame-sync compute (HIGH priority for Level A/B)
+        ComPtr<ID3D12CommandQueue> computeAsync;  ///< Async compute (NORMAL priority); may alias compute
         ComPtr<ID3D12CommandQueue> copy;
     };
 
