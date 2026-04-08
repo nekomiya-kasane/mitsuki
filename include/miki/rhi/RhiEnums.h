@@ -27,6 +27,12 @@ namespace miki::rhi {
 
     // =========================================================================
     // Shader stages (bitmask)
+    //
+    // NOTE: Geometry Shader and Tessellation (Hull/Domain) are intentionally excluded.
+    //   - GS is deprecated by all major IHVs; Mesh Shader is the replacement for vertex amplification.
+    //   - Tessellation is unsupported on WebGPU and discouraged on mobile; compute-driven
+    //     tessellation (via Compute -> Vertex/Mesh) is the modern alternative.
+    //   - Keeping these out avoids backend complexity for Tier3/4 where no fallback exists.
     // =========================================================================
 
     enum class ShaderStage : uint32_t {
