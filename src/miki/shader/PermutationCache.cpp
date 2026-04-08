@@ -8,6 +8,8 @@
  */
 
 #include "miki/shader/PermutationCache.h"
+
+#include "miki/debug/StructuredLogger.h"
 #include "miki/shader/SlangCompiler.h"
 
 #include <algorithm>
@@ -290,6 +292,10 @@ namespace miki::shader {
         {
             std::lock_guard lock(impl_->mutex);
             if (auto* cached = impl_->Find(key)) {
+                MIKI_LOG_DEBUG(
+                    debug::LogCategory::Shader, "[PermutationCache] Memory hit: {} [{}]", iDesc.sourcePath.string(),
+                    iDesc.entryPoint
+                );
                 return cached;
             }
         }
@@ -301,11 +307,19 @@ namespace miki::shader {
             auto diskPath = DiskCachePath(impl_->config.cacheDir, key);
             auto diskBlob = ReadBlobFromDisk(diskPath, iDesc.target, iDesc.stage, iDesc.entryPoint, sourceHash);
             if (diskBlob) {
+                MIKI_LOG_DEBUG(
+                    debug::LogCategory::Shader, "[PermutationCache] Disk hit: {} ({} bytes)", iDesc.sourcePath.string(),
+                    diskBlob->data.size()
+                );
                 std::lock_guard lock(impl_->mutex);
                 return impl_->Insert(std::move(key), std::move(*diskBlob));
             }
         }
 
+        MIKI_LOG_DEBUG(
+            debug::LogCategory::Shader, "[PermutationCache] Cache miss, compiling: {} -> {}", iDesc.sourcePath.string(),
+            iDesc.entryPoint
+        );
         auto compileResult = iCompiler.Compile(iDesc);
         if (!compileResult) {
             return std::unexpected(compileResult.error());
@@ -313,7 +327,9 @@ namespace miki::shader {
 
         if (impl_->config.enableDiskCache) {
             auto diskPath = DiskCachePath(impl_->config.cacheDir, key);
-            WriteBlobToDisk(diskPath, *compileResult, sourceHash);
+            if (WriteBlobToDisk(diskPath, *compileResult, sourceHash)) {
+                MIKI_LOG_TRACE(debug::LogCategory::Shader, "[PermutationCache] Disk write: {}", diskPath.string());
+            }
         }
 
         std::lock_guard lock(impl_->mutex);
@@ -328,8 +344,12 @@ namespace miki::shader {
 
     auto PermutationCache::Clear() -> void {
         std::lock_guard lock(impl_->mutex);
+        auto count = impl_->map.size();
         impl_->map.clear();
         impl_->lruList.clear();
+        if (count > 0) {
+            MIKI_LOG_DEBUG(debug::LogCategory::Shader, "[PermutationCache] Cleared {} entries", count);
+        }
     }
 
     auto PermutationCache::Size() const -> uint32_t {

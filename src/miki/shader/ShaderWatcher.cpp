@@ -10,6 +10,8 @@
  */
 
 #include "miki/shader/ShaderWatcher.h"
+
+#include "miki/debug/StructuredLogger.h"
 #include "miki/shader/SlangCompiler.h"
 
 #include <atomic>
@@ -150,6 +152,7 @@ namespace miki::shader {
         std::unordered_map<std::string, fs::file_time_type> lastWriteTimes;
 
         void RecompileFile(fs::path const& iFile) {
+            MIKI_LOG_DEBUG(debug::LogCategory::Shader, "[ShaderWatcher] Recompiling: {}", iFile.string());
             for (auto target : config.targets) {
                 ShaderCompileDesc desc;
                 desc.sourcePath = iFile;
@@ -168,6 +171,9 @@ namespace miki::shader {
 
                     std::lock_guard lock(changeMutex);
                     pendingChanges.push_back(std::move(change));
+                    MIKI_LOG_INFO(
+                        debug::LogCategory::Shader, "[ShaderWatcher] Hot-reload OK: {} (gen {})", iFile.string(), gen
+                    );
                 } else {
                     ShaderError err;
                     err.path = iFile;
@@ -176,6 +182,10 @@ namespace miki::shader {
                     if (!diags.empty()) {
                         err.message = diags[0].message;
                     }
+                    MIKI_LOG_WARN(
+                        debug::LogCategory::Shader, "[ShaderWatcher] Hot-reload FAIL: {} - {}", iFile.string(),
+                        err.message
+                    );
 
                     std::lock_guard lock(errorMutex);
                     lastErrors.push_back(std::move(err));
@@ -195,6 +205,11 @@ namespace miki::shader {
                 auto affected = depGraph.GetAffected(changed);
                 allAffected.merge(std::move(affected));
             }
+
+            MIKI_LOG_DEBUG(
+                debug::LogCategory::Shader, "[ShaderWatcher] {} file(s) changed -> {} affected", iChangedFiles.size(),
+                allAffected.size()
+            );
 
             for (auto const& file : allAffected) {
                 if (fs::path(file).extension() == ".slang") {
@@ -341,12 +356,16 @@ namespace miki::shader {
             return {};  // Already running
         }
         if (!fs::is_directory(iWatchDir)) {
+            MIKI_LOG_ERROR(
+                debug::LogCategory::Shader, "[ShaderWatcher] Watch directory not found: {}", iWatchDir.string()
+            );
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }
 
         impl_->watchDir = fs::canonical(iWatchDir);
         impl_->depGraph.ScanDirectory(impl_->watchDir);
         impl_->watchThread = std::jthread([this](std::stop_token st) { impl_->WatchThreadFunc(std::move(st)); });
+        MIKI_LOG_INFO(debug::LogCategory::Shader, "[ShaderWatcher] Started watching: {}", impl_->watchDir.string());
         return {};
     }
 
@@ -354,6 +373,7 @@ namespace miki::shader {
         if (impl_->watchThread.joinable()) {
             impl_->watchThread.request_stop();
             impl_->watchThread.join();
+            MIKI_LOG_INFO(debug::LogCategory::Shader, "[ShaderWatcher] Stopped");
         }
     }
 
