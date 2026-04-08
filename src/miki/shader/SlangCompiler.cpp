@@ -11,6 +11,7 @@
 
 #include "miki/shader/SlangCompiler.h"
 
+#include "miki/debug/StructuredLogger.h"
 #include "miki/shader/GLSLPostProcessor.h"
 
 #include <slang.h>
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <expected>
 #include <fstream>
@@ -30,6 +32,94 @@
 #include <vector>
 
 namespace miki::shader {
+
+    // ===========================================================================
+    // String helpers for logging
+    // ===========================================================================
+
+    static constexpr auto TargetTypeName(ShaderTargetType t) noexcept -> std::string_view {
+        switch (t) {
+            case ShaderTargetType::SPIRV: return "SPIR-V";
+            case ShaderTargetType::DXIL: return "DXIL";
+            case ShaderTargetType::GLSL: return "GLSL";
+            case ShaderTargetType::WGSL: return "WGSL";
+        }
+        return "Unknown";
+    }
+
+    static constexpr auto StageName(ShaderStage s) noexcept -> std::string_view {
+        switch (s) {
+            case ShaderStage::Vertex: return "Vertex";
+            case ShaderStage::Fragment: return "Fragment";
+            case ShaderStage::Compute: return "Compute";
+            case ShaderStage::Mesh: return "Mesh";
+            case ShaderStage::Task: return "Task";
+            case ShaderStage::RayGen: return "RayGen";
+            case ShaderStage::ClosestHit: return "ClosestHit";
+            case ShaderStage::Miss: return "Miss";
+            case ShaderStage::AnyHit: return "AnyHit";
+            case ShaderStage::Intersection: return "Intersection";
+            case ShaderStage::Callable: return "Callable";
+            default: return "Multi";
+        }
+    }
+
+    // ===========================================================================
+    // Output blob validation (debug builds only)
+    // ===========================================================================
+
+    static constexpr uint32_t kSpirvMagic = 0x07230203;
+    static constexpr uint32_t kDxbcMagic = 0x43425844;  // "DXBC" little-endian
+
+    /** @brief Validate compiled shader blob integrity. Returns empty string on success, error message on failure. */
+    [[maybe_unused]] static auto ValidateOutputBlob(ShaderBlob const& blob) -> std::string {
+        if (blob.data.empty()) {
+            return "Empty shader blob";
+        }
+
+        switch (blob.target.type) {
+            case ShaderTargetType::SPIRV: {
+                if (blob.data.size() < 20) {  // SPIR-V header is 5 x uint32_t = 20 bytes
+                    return std::format("SPIR-V blob too small ({} bytes, minimum 20)", blob.data.size());
+                }
+                if (blob.data.size() % 4 != 0) {
+                    return std::format("SPIR-V blob size {} not 4-byte aligned", blob.data.size());
+                }
+                uint32_t magic = 0;
+                std::memcpy(&magic, blob.data.data(), sizeof(magic));
+                if (magic != kSpirvMagic) {
+                    return std::format("SPIR-V magic mismatch: expected 0x{:08X}, got 0x{:08X}", kSpirvMagic, magic);
+                }
+                break;
+            }
+            case ShaderTargetType::DXIL: {
+                if (blob.data.size() < 24) {  // DXBC container header minimum
+                    return std::format("DXIL blob too small ({} bytes, minimum 24)", blob.data.size());
+                }
+                uint32_t magic = 0;
+                std::memcpy(&magic, blob.data.data(), sizeof(magic));
+                if (magic != kDxbcMagic) {
+                    return std::format("DXIL/DXBC magic mismatch: expected 0x{:08X}, got 0x{:08X}", kDxbcMagic, magic);
+                }
+                break;
+            }
+            case ShaderTargetType::GLSL: {
+                std::string_view glsl(reinterpret_cast<char const*>(blob.data.data()), blob.data.size());
+                if (glsl.find("#version") == std::string_view::npos) {
+                    return "GLSL output missing #version directive";
+                }
+                break;
+            }
+            case ShaderTargetType::WGSL: {
+                // WGSL: just ensure non-trivially-small output
+                if (blob.data.size() < 8) {
+                    return std::format("WGSL blob suspiciously small ({} bytes)", blob.data.size());
+                }
+                break;
+            }
+        }
+        return {};  // Valid
+    }
 
     // ===========================================================================
     // Helpers -- miki enum <-> Slang enum mapping
@@ -244,6 +334,13 @@ namespace miki::shader {
 
         auto RecordDiagnostic(std::string msg, ShaderDiagnostic::Severity severity = ShaderDiagnostic::Severity::Error)
             -> void {
+            if (severity == ShaderDiagnostic::Severity::Error) {
+                MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] {}", msg);
+            } else if (severity == ShaderDiagnostic::Severity::Warning) {
+                MIKI_LOG_WARN(debug::LogCategory::Shader, "[SlangCompiler] {}", msg);
+            } else {
+                MIKI_LOG_DEBUG(debug::LogCategory::Shader, "[SlangCompiler] {}", msg);
+            }
             ShaderDiagnostic d;
             d.message = std::move(msg);
             d.severity = severity;
@@ -320,11 +417,22 @@ namespace miki::shader {
             std::lock_guard lock(sessionPoolMutex);
             auto it = sessionPool.find(key);
             if (it != sessionPool.end()) {
+                MIKI_LOG_TRACE(
+                    debug::LogCategory::Shader, "[SlangCompiler] Session pool hit for {}", TargetTypeName(iTarget.type)
+                );
                 return it->second.get();
             }
 
+            MIKI_LOG_DEBUG(
+                debug::LogCategory::Shader, "[SlangCompiler] Session pool miss, creating session for {} {}.{}",
+                TargetTypeName(iTarget.type), iTarget.versionMajor, iTarget.versionMinor
+            );
             auto sessionResult = CreateSession(iTarget, {});
             if (!sessionResult) {
+                MIKI_LOG_ERROR(
+                    debug::LogCategory::Shader, "[SlangCompiler] Failed to create session for {}",
+                    TargetTypeName(iTarget.type)
+                );
                 return std::unexpected(sessionResult.error());
             }
             auto [inserted, _] = sessionPool.emplace(key, std::move(*sessionResult));
@@ -428,8 +536,22 @@ namespace miki::shader {
                 std::string glsl(reinterpret_cast<char const*>(blob.data.data()), blob.data.size());
                 if (GLSLPostProcessor::ApplyVulkanToOpenGL(glsl)) {
                     blob.data.assign(glsl.begin(), glsl.end());
+                    MIKI_LOG_TRACE(
+                        debug::LogCategory::Shader, "[SlangCompiler] GLSL post-processed: Vulkan->OpenGL builtins"
+                    );
                 }
             }
+
+#ifndef NDEBUG
+            if (auto err = ValidateOutputBlob(blob); !err.empty()) {
+                MIKI_LOG_ERROR(
+                    debug::LogCategory::Shader, "[SlangCompiler] Blob validation failed for {} {}: {}",
+                    TargetTypeName(iTarget.type), iSourcePath, err
+                );
+                RecordDiagnostic(std::format("Blob validation: {}", err));
+                return std::unexpected(core::ErrorCode::ShaderCompilationFailed);
+            }
+#endif
 
             return blob;
         }
@@ -642,15 +764,26 @@ namespace miki::shader {
         auto impl = std::make_unique<Impl>();
         auto result = slang::createGlobalSession(impl->globalSession.writeRef());
         if (SLANG_FAILED(result)) {
+            MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Failed to create Slang global session");
             return std::unexpected(core::ErrorCode::ShaderCompilationFailed);
         }
+        MIKI_LOG_INFO(debug::LogCategory::Shader, "[SlangCompiler] Global session created");
         return SlangCompiler(std::move(impl));
     }
 
     auto SlangCompiler::Compile(ShaderCompileDesc const& iDesc) -> core::Result<ShaderBlob> {
         impl_->lastDiagnostics.clear();
+        auto pathStr = iDesc.sourcePath.empty() ? std::string("<embedded>") : iDesc.sourcePath.string();
+        MIKI_LOG_DEBUG(
+            debug::LogCategory::Shader, "[SlangCompiler] Compile: {} -> {} [{}]", pathStr,
+            TargetTypeName(iDesc.target.type), StageName(iDesc.stage)
+        );
+
+        auto t0 = std::chrono::steady_clock::now();
+
         auto sessionResult = impl_->CreateSessionForDesc(iDesc);
         if (!sessionResult) {
+            MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Session creation failed for {}", pathStr);
             return std::unexpected(sessionResult.error());
         }
 
@@ -660,23 +793,46 @@ namespace miki::shader {
         } else {
             source = ReadFileToString(iDesc.sourcePath);
             if (source.empty()) {
+                MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Failed to read source: {}", pathStr);
                 return std::unexpected(core::ErrorCode::IoError);
             }
         }
 
-        auto pathStr = iDesc.sourcePath.empty() ? std::string("<embedded>") : iDesc.sourcePath.string();
-        return impl_->CompileToBlob(sessionResult->get(), source, pathStr, iDesc.entryPoint, iDesc.stage, iDesc.target);
+        auto result
+            = impl_->CompileToBlob(sessionResult->get(), source, pathStr, iDesc.entryPoint, iDesc.stage, iDesc.target);
+
+        auto t1 = std::chrono::steady_clock::now();
+        auto ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        if (result) {
+            MIKI_LOG_INFO(
+                debug::LogCategory::Shader, "[SlangCompiler] Compiled {} -> {} ({} bytes, {:.1f}ms)", pathStr,
+                TargetTypeName(iDesc.target.type), result->data.size(), ms
+            );
+        } else {
+            MIKI_LOG_ERROR(
+                debug::LogCategory::Shader, "[SlangCompiler] Compilation failed: {} -> {} ({:.1f}ms)", pathStr,
+                TargetTypeName(iDesc.target.type), ms
+            );
+        }
+        return result;
     }
 
     auto SlangCompiler::CompileDualTarget(
         std::filesystem::path const& iSourcePath, std::string const& iEntryPoint, ShaderStage iStage
     ) -> core::Result<std::pair<ShaderBlob, ShaderBlob>> {
         impl_->lastDiagnostics.clear();
+        auto pathStr = iSourcePath.string();
+        MIKI_LOG_DEBUG(
+            debug::LogCategory::Shader, "[SlangCompiler] CompileDualTarget: {} [{}]", pathStr, StageName(iStage)
+        );
+        auto t0 = std::chrono::steady_clock::now();
+
         auto source = ReadFileToString(iSourcePath);
         if (source.empty()) {
+            MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Failed to read source: {}", pathStr);
             return std::unexpected(core::ErrorCode::IoError);
         }
-        auto pathStr = iSourcePath.string();
 
         auto spirvTarget = ShaderTarget::SPIRV_1_5();
         auto spirvSession = impl_->GetPooledSession(spirvTarget);
@@ -698,6 +854,12 @@ namespace miki::shader {
             return std::unexpected(dxilBlob.error());
         }
 
+        auto t1 = std::chrono::steady_clock::now();
+        auto ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        MIKI_LOG_INFO(
+            debug::LogCategory::Shader, "[SlangCompiler] DualTarget compiled {} (SPIR-V {} + DXIL {} bytes, {:.1f}ms)",
+            pathStr, spirvBlob->data.size(), dxilBlob->data.size(), ms
+        );
         return std::make_pair(std::move(*spirvBlob), std::move(*dxilBlob));
     }
 
@@ -705,11 +867,17 @@ namespace miki::shader {
         std::filesystem::path const& iSourcePath, std::string const& iEntryPoint, ShaderStage iStage
     ) -> core::Result<std::array<ShaderBlob, kTargetCount>> {
         impl_->lastDiagnostics.clear();
+        auto pathStr = iSourcePath.string();
+        MIKI_LOG_DEBUG(
+            debug::LogCategory::Shader, "[SlangCompiler] CompileQuadTarget: {} [{}]", pathStr, StageName(iStage)
+        );
+        auto t0 = std::chrono::steady_clock::now();
+
         auto source = ReadFileToString(iSourcePath);
         if (source.empty()) {
+            MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Failed to read source: {}", pathStr);
             return std::unexpected(core::ErrorCode::IoError);
         }
-        auto pathStr = iSourcePath.string();
 
         static constexpr std::array<ShaderTarget, kTargetCount> kTargets
             = {ShaderTarget::SPIRV_1_5(), ShaderTarget::DXIL_6_6(), ShaderTarget::GLSL_430(), ShaderTarget::WGSL_1_0()};
@@ -726,6 +894,11 @@ namespace miki::shader {
             }
             blobs[i] = std::move(*blob);
         }
+        auto t1 = std::chrono::steady_clock::now();
+        auto ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        MIKI_LOG_INFO(
+            debug::LogCategory::Shader, "[SlangCompiler] QuadTarget compiled {} (4 targets, {:.1f}ms)", pathStr, ms
+        );
         return blobs;
     }
 
@@ -746,6 +919,7 @@ namespace miki::shader {
     }
 
     auto SlangCompiler::AddSearchPath(std::filesystem::path const& iPath) -> void {
+        MIKI_LOG_DEBUG(debug::LogCategory::Shader, "[SlangCompiler] AddSearchPath: {}", iPath.string());
         impl_->searchPaths.push_back(iPath.string());
         InvalidateSessionCache();
     }
@@ -756,7 +930,13 @@ namespace miki::shader {
 
     auto SlangCompiler::InvalidateSessionCache() -> void {
         std::lock_guard lock(impl_->sessionPoolMutex);
+        auto count = impl_->sessionPool.size();
         impl_->sessionPool.clear();
+        if (count > 0) {
+            MIKI_LOG_DEBUG(
+                debug::LogCategory::Shader, "[SlangCompiler] Session cache invalidated ({} sessions)", count
+            );
+        }
     }
 
 }  // namespace miki::shader
