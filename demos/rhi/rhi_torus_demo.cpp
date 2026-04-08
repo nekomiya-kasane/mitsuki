@@ -41,7 +41,7 @@ struct PushConst {
     float4x4 mvp;
     float4x4 model;
 };
-static_assert(sizeof(PushConst) == 128);
+static_assert(PushConstantFitsAllBackends<PushConst>(), "PushConst exceeds cross-platform push constant limit");
 
 // ============================================================================
 // TorusRenderer
