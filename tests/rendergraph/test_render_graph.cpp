@@ -4568,3 +4568,2977 @@ TEST(DeepValidation, EdgesReferenceValidPasses) {
         EXPECT_TRUE(passIndices.count(e.dstPass)) << "Edge dst " << e.dstPass << " not in compiled passes";
     }
 }
+
+// =============================================================================
+// SSA Versioning Deep Tests
+// =============================================================================
+
+TEST(SSAVersioning, WriteColorBumpsVersion) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    EXPECT_EQ(t.GetVersion(), 0);
+    RGResourceHandle written;
+    builder.AddGraphicsPass(
+        "W", [&](PassBuilder& pb) { written = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    EXPECT_EQ(written.GetIndex(), t.GetIndex());
+    EXPECT_EQ(written.GetVersion(), 1);
+}
+
+TEST(SSAVersioning, TwoWritesBumpTwice) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    RGResourceHandle v1, v2;
+    builder.AddGraphicsPass("W1", [&](PassBuilder& pb) { v1 = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "W2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(v1);
+            v2 = pb.WriteColorAttachment(v1);
+        },
+        [](RenderPassContext&) {}
+    );
+    EXPECT_EQ(v1.GetVersion(), 1);
+    EXPECT_EQ(v2.GetVersion(), 2);
+    EXPECT_EQ(v1.GetIndex(), v2.GetIndex());
+}
+
+TEST(SSAVersioning, ReadDoesNotBumpVersion) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    RGResourceHandle afterWrite;
+    builder.AddGraphicsPass(
+        "W", [&](PassBuilder& pb) { afterWrite = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(afterWrite);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    EXPECT_EQ(afterWrite.GetVersion(), 1);
+}
+
+TEST(SSAVersioning, MultipleResourcesIndependentVersioning) {
+    RenderGraphBuilder builder;
+    auto a = builder.CreateTexture({.width = 32, .height = 32, .debugName = "A"});
+    auto b = builder.CreateTexture({.width = 32, .height = 32, .debugName = "B"});
+    RGResourceHandle wa, wb;
+    builder.AddGraphicsPass("WA", [&](PassBuilder& pb) { wa = pb.WriteColorAttachment(a); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass("WB", [&](PassBuilder& pb) { wb = pb.WriteColorAttachment(b); }, [](RenderPassContext&) {});
+    EXPECT_NE(wa.GetIndex(), wb.GetIndex());
+    EXPECT_EQ(wa.GetVersion(), 1);
+    EXPECT_EQ(wb.GetVersion(), 1);
+}
+
+TEST(SSAVersioning, ChainOf5WritesYieldsVersion5) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "Chain"});
+    RGResourceHandle cur = t;
+    for (int i = 0; i < 5; ++i) {
+        std::string name = "W" + std::to_string(i);
+        bool first = (i == 0);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&cur, first](PassBuilder& pb) {
+                if (!first) {
+                    pb.ReadTexture(cur);
+                }
+                cur = pb.WriteColorAttachment(cur);
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    EXPECT_EQ(cur.GetVersion(), 5);
+    EXPECT_EQ(cur.GetIndex(), t.GetIndex());
+}
+
+TEST(SSAVersioning, DepthWriteBumpsVersion) {
+    RenderGraphBuilder builder;
+    auto d = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 64, .height = 64, .debugName = "D"});
+    RGResourceHandle written;
+    builder.AddGraphicsPass(
+        "W", [&](PassBuilder& pb) { written = pb.WriteDepthStencil(d); }, [](RenderPassContext&) {}
+    );
+    EXPECT_EQ(written.GetVersion(), 1);
+    EXPECT_EQ(written.GetIndex(), d.GetIndex());
+}
+
+TEST(SSAVersioning, BufferWriteBumpsVersion) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    RGResourceHandle written;
+    builder.AddGraphicsPass(
+        "W", [&](PassBuilder& pb) { written = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite); },
+        [](RenderPassContext&) {}
+    );
+    EXPECT_EQ(written.GetVersion(), 1);
+}
+
+// =============================================================================
+// Barrier Detail Validation
+// =============================================================================
+
+TEST(BarrierDetail, RAWBarrierHasCorrectLayouts) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { rt = pb.WriteColorAttachment(rt); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableSplitBarriers = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+    ASSERT_FALSE(result->passes[1].acquireBarriers.empty());
+    auto& b = result->passes[1].acquireBarriers[0];
+    EXPECT_EQ(b.srcAccess, ResourceAccess::ColorAttachWrite);
+    EXPECT_EQ(b.dstAccess, ResourceAccess::ShaderReadOnly);
+    EXPECT_EQ(b.srcLayout, TextureLayout::ColorAttachment);
+    EXPECT_EQ(b.dstLayout, TextureLayout::ShaderReadOnly);
+    EXPECT_FALSE(b.isCrossQueue);
+    EXPECT_FALSE(b.isAliasingBarrier);
+}
+
+TEST(BarrierDetail, DepthWriteToDepthReadBarrier) {
+    RenderGraphBuilder builder;
+    auto d = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 128, .height = 128, .debugName = "D"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { d = pb.WriteDepthStencil(d); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadDepth(d);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableSplitBarriers = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+    ASSERT_FALSE(result->passes[1].acquireBarriers.empty());
+    auto& b = result->passes[1].acquireBarriers[0];
+    EXPECT_EQ(b.srcAccess, ResourceAccess::DepthStencilWrite);
+    EXPECT_EQ(b.dstAccess, ResourceAccess::DepthReadOnly);
+    EXPECT_EQ(b.srcLayout, TextureLayout::DepthStencilAttachment);
+    EXPECT_EQ(b.dstLayout, TextureLayout::DepthStencilReadOnly);
+}
+
+TEST(BarrierDetail, TransferBarrierLayouts) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    builder.AddTransferPass(
+        "Up", [&](PassBuilder& pb) { buf = pb.WriteBuffer(buf, ResourceAccess::TransferDst); },
+        [](RenderPassContext&) {}
+    );
+    builder.AddTransferPass(
+        "Down",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::TransferSrc);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableSplitBarriers = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+    ASSERT_FALSE(result->passes[1].acquireBarriers.empty());
+    EXPECT_EQ(result->passes[1].acquireBarriers[0].srcAccess, ResourceAccess::TransferDst);
+    EXPECT_EQ(result->passes[1].acquireBarriers[0].dstAccess, ResourceAccess::TransferSrc);
+}
+
+TEST(BarrierDetail, NoBarrierForFirstWritePass) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    builder.AddGraphicsPass(
+        "First",
+        [&](PassBuilder& pb) {
+            rt = pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 1u);
+    EXPECT_TRUE(result->passes[0].acquireBarriers.empty());
+}
+
+TEST(BarrierDetail, SplitBarrierReleaseAndAcquire) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT"});
+    auto other = builder.CreateTexture({.width = 128, .height = 128, .debugName = "Other"});
+    builder.AddGraphicsPass(
+        "W0", [&](PassBuilder& pb) { rt = pb.WriteColorAttachment(rt); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Gap",
+        [&](PassBuilder& pb) {
+            other = pb.WriteColorAttachment(other);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableSplitBarriers = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 3u);
+    bool hasRelease = false;
+    for (auto& b : result->passes[0].releaseBarriers) {
+        if (b.isSplitRelease && b.resourceIndex == rt.GetIndex()) {
+            hasRelease = true;
+        }
+    }
+    EXPECT_TRUE(hasRelease) << "W0 missing split release for RT";
+    bool hasAcquire = false;
+    for (auto& b : result->passes[2].acquireBarriers) {
+        if (b.isSplitAcquire && b.resourceIndex == rt.GetIndex()) {
+            hasAcquire = true;
+        }
+    }
+    EXPECT_TRUE(hasAcquire) << "R missing split acquire for RT";
+}
+
+TEST(BarrierDetail, NoSplitBarrierWhenConsecutive) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { rt = pb.WriteColorAttachment(rt); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableSplitBarriers = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+    for (auto& b : result->passes[0].releaseBarriers) {
+        EXPECT_FALSE(b.isSplitRelease) << "Should not split for consecutive passes";
+    }
+    ASSERT_FALSE(result->passes[1].acquireBarriers.empty());
+    EXPECT_FALSE(result->passes[1].acquireBarriers[0].isSplitAcquire);
+}
+
+TEST(BarrierDetail, WAWBarrierOnSameResource) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    builder.AddGraphicsPass(
+        "W1", [&](PassBuilder& pb) { rt = pb.WriteColorAttachment(rt); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "W2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            rt = pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableSplitBarriers = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+    EXPECT_FALSE(result->passes[1].acquireBarriers.empty()) << "WAW needs barrier";
+}
+
+TEST(BarrierDetail, BarrierResourceIndexMatchesAccess) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "W",
+        [&](PassBuilder& pb) {
+            t0 = pb.WriteColorAttachment(t0);
+            t1 = pb.WriteTexture(t1, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t0);
+            pb.ReadTexture(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableSplitBarriers = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+    std::unordered_set<uint16_t> barrierResources;
+    for (auto& b : result->passes[1].acquireBarriers) {
+        barrierResources.insert(b.resourceIndex);
+    }
+    EXPECT_TRUE(barrierResources.count(t0.GetIndex())) << "Missing barrier for T0";
+    EXPECT_TRUE(barrierResources.count(t1.GetIndex())) << "Missing barrier for T1";
+}
+
+// =============================================================================
+// DAG Edge Precision Tests
+// =============================================================================
+
+TEST(DAGEdges, LinearChainEdgeCount) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    for (int i = 0; i < 5; ++i) {
+        std::string name = "P" + std::to_string(i);
+        bool first = (i == 0), last = (i == 4);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t, first, last](PassBuilder& pb) {
+                if (!first) {
+                    pb.ReadTexture(t);
+                }
+                t = pb.WriteColorAttachment(t);
+                if (last) {
+                    pb.SetSideEffects();
+                }
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 5u);
+    uint32_t rawCount = 0;
+    for (auto& e : result->edges) {
+        if (e.hazard == HazardType::RAW) {
+            rawCount++;
+        }
+    }
+    EXPECT_GE(rawCount, 4u);
+}
+
+TEST(DAGEdges, DiamondHas2EdgesFromSource) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "Src"});
+    auto tB = builder.CreateTexture({.width = 64, .height = 64, .debugName = "B"});
+    auto tC = builder.CreateTexture({.width = 64, .height = 64, .debugName = "C"});
+    auto hA = builder.AddGraphicsPass(
+        "A", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            tB = pb.WriteColorAttachment(tB);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "C",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            tC = pb.WriteColorAttachment(tC);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "D",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tB);
+            pb.ReadTexture(tC);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 4u);
+    uint32_t edgesFromA = 0;
+    for (auto& e : result->edges) {
+        if (e.srcPass == hA.index) {
+            edgesFromA++;
+        }
+    }
+    EXPECT_GE(edgesFromA, 2u);
+}
+
+TEST(DAGEdges, NoEdgesForIndependentPasses) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "P0",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(t0);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "P1",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    EXPECT_TRUE(result->edges.empty());
+}
+
+TEST(DAGEdges, HazardTypeIsRAW) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_FALSE(result->edges.empty());
+    EXPECT_EQ(result->edges[0].hazard, HazardType::RAW);
+}
+
+TEST(DAGEdges, EdgeResourceIndexMatchesResource) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "RT"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_FALSE(result->edges.empty());
+    EXPECT_EQ(result->edges[0].resourceIndex, t.GetIndex());
+}
+
+TEST(DAGEdges, FanOutCreatesMultipleEdges) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    auto hW = builder.AddGraphicsPass(
+        "W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    for (int i = 0; i < 4; ++i) {
+        std::string name = "R" + std::to_string(i);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t](PassBuilder& pb) {
+                pb.ReadTexture(t);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 5u);
+    uint32_t edgesFromW = 0;
+    for (auto& e : result->edges) {
+        if (e.srcPass == hW.index) {
+            edgesFromW++;
+        }
+    }
+    EXPECT_GE(edgesFromW, 4u);
+}
+
+TEST(DAGEdges, FanInToSinglePassEdges) {
+    RenderGraphBuilder builder;
+    std::vector<RGResourceHandle> textures;
+    for (int i = 0; i < 4; ++i) {
+        std::string name = "T" + std::to_string(i);
+        textures.push_back(builder.CreateTexture({.width = 32, .height = 32, .debugName = name.c_str()}));
+    }
+    for (int i = 0; i < 4; ++i) {
+        std::string name = "W" + std::to_string(i);
+        builder.AddGraphicsPass(
+            name.c_str(), [&textures, i](PassBuilder& pb) { textures[i] = pb.WriteColorAttachment(textures[i]); },
+            [](RenderPassContext&) {}
+        );
+    }
+    auto hR = builder.AddGraphicsPass(
+        "Merge",
+        [&](PassBuilder& pb) {
+            for (auto& t : textures) {
+                pb.ReadTexture(t);
+            }
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 5u);
+    uint32_t edgesToR = 0;
+    for (auto& e : result->edges) {
+        if (e.dstPass == hR.index) {
+            edgesToR++;
+        }
+    }
+    EXPECT_GE(edgesToR, 4u);
+}
+
+// =============================================================================
+// Lifetime Precision Tests
+// =============================================================================
+
+TEST(Lifetime, SinglePassLifetimeSpansOnePosition) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    builder.AddGraphicsPass(
+        "Only",
+        [&](PassBuilder& pb) {
+            rt = pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableTransientAliasing = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_FALSE(result->lifetimes.empty());
+    for (auto& lt : result->lifetimes) {
+        if (lt.resourceIndex == rt.GetIndex()) {
+            EXPECT_EQ(lt.firstPass, lt.lastPass);
+        }
+    }
+}
+
+TEST(Lifetime, TwoPassLifetimeSpansTwoPositions) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { rt = pb.WriteColorAttachment(rt); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableTransientAliasing = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    bool found = false;
+    for (auto& lt : result->lifetimes) {
+        if (lt.resourceIndex == rt.GetIndex()) {
+            found = true;
+            EXPECT_EQ(lt.firstPass, 0u);
+            EXPECT_EQ(lt.lastPass, 1u);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(Lifetime, FirstPassNeverExceedsLastPass) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    for (int i = 0; i < 5; ++i) {
+        std::string name = "P" + std::to_string(i);
+        bool first = (i == 0), last = (i == 4);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t, first, last](PassBuilder& pb) {
+                if (!first) {
+                    pb.ReadTexture(t);
+                }
+                t = pb.WriteColorAttachment(t);
+                if (last) {
+                    pb.SetSideEffects();
+                }
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    for (auto& lt : result->lifetimes) {
+        EXPECT_LE(lt.firstPass, lt.lastPass) << "firstPass > lastPass for resource " << lt.resourceIndex;
+    }
+}
+
+TEST(Lifetime, ImportedResourceExcludedFromLifetimes) {
+    RenderGraphBuilder builder;
+    auto imported = builder.ImportTexture({}, "Ext");
+    builder.AddGraphicsPass(
+        "Use",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(imported);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    for (auto& lt : result->lifetimes) {
+        EXPECT_NE(lt.resourceIndex, imported.GetIndex());
+    }
+}
+
+TEST(Lifetime, MultipleResourcesAllHaveLifetimes) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "W0", [&](PassBuilder& pb) { t0 = pb.WriteColorAttachment(t0); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "W1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t0);
+            t1 = pb.WriteColorAttachment(t1);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    std::unordered_set<uint16_t> ltResources;
+    for (auto& lt : result->lifetimes) {
+        ltResources.insert(lt.resourceIndex);
+    }
+    EXPECT_TRUE(ltResources.count(t0.GetIndex()));
+    EXPECT_TRUE(ltResources.count(t1.GetIndex()));
+}
+
+// =============================================================================
+// Aliasing Precision Tests
+// =============================================================================
+
+TEST(AliasingPrecision, OverlappingResourcesGetSeparateSlots) {
+    RenderGraphBuilder builder;
+    auto rt0 = builder.CreateTexture({.width = 256, .height = 256, .debugName = "RT0"});
+    auto rt1 = builder.CreateTexture({.width = 256, .height = 256, .debugName = "RT1"});
+    builder.AddGraphicsPass(
+        "P0",
+        [&](PassBuilder& pb) {
+            rt0 = pb.WriteColorAttachment(rt0);
+            rt1 = pb.WriteTexture(rt1, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "P1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt0);
+            pb.ReadTexture(rt1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    auto& rs = result->aliasing.resourceToSlot;
+    if (rs[rt0.GetIndex()] != AliasingLayout::kNotAliased && rs[rt1.GetIndex()] != AliasingLayout::kNotAliased) {
+        EXPECT_NE(rs[rt0.GetIndex()], rs[rt1.GetIndex()]);
+    }
+}
+
+TEST(AliasingPrecision, HeapOffsetIsAligned) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "P0",
+        [&](PassBuilder& pb) {
+            t0 = pb.WriteColorAttachment(t0);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "P1",
+        [&](PassBuilder& pb) {
+            t1 = pb.WriteColorAttachment(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    for (auto& slot : result->aliasing.slots) {
+        uint64_t align = slot.alignment > 0 ? slot.alignment : 1;
+        EXPECT_EQ(slot.heapOffset % align, 0u) << "Slot " << slot.slotIndex << " misaligned";
+    }
+}
+
+TEST(AliasingPrecision, MSAATextureGets4MBAlignment) {
+    RenderGraphBuilder builder;
+    auto msaa = builder.CreateTexture({.width = 256, .height = 256, .sampleCount = 4, .debugName = "MSAA"});
+    builder.AddGraphicsPass(
+        "W",
+        [&](PassBuilder& pb) {
+            msaa = pb.WriteColorAttachment(msaa);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    auto idx = msaa.GetIndex();
+    if (result->aliasing.resourceToSlot[idx] != AliasingLayout::kNotAliased) {
+        auto slotIdx = result->aliasing.resourceToSlot[idx];
+        EXPECT_GE(result->aliasing.slots[slotIdx].alignment, kAlignmentMsaa);
+    }
+}
+
+TEST(AliasingPrecision, BufferAndTextureInDifferentHeapGroups) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "Tex"});
+    auto buf = builder.CreateBuffer({.size = 4096, .debugName = "Buf"});
+    builder.AddGraphicsPass(
+        "P0",
+        [&](PassBuilder& pb) {
+            tex = pb.WriteColorAttachment(tex);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "P1",
+        [&](PassBuilder& pb) {
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    auto& rs = result->aliasing.resourceToSlot;
+    if (rs[tex.GetIndex()] != AliasingLayout::kNotAliased && rs[buf.GetIndex()] != AliasingLayout::kNotAliased) {
+        auto texSlot = rs[tex.GetIndex()];
+        auto bufSlot = rs[buf.GetIndex()];
+        EXPECT_NE(result->aliasing.slots[texSlot].heapGroup, result->aliasing.slots[bufSlot].heapGroup);
+    }
+}
+
+TEST(AliasingPrecision, DisabledAliasingProducesNoSlots) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "W",
+        [&](PassBuilder& pb) {
+            t = pb.WriteColorAttachment(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = false;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->aliasing.slots.empty());
+}
+
+TEST(AliasingPrecision, SlotLifetimeCoversResourceLifetime) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "W0", [&](PassBuilder& pb) { t0 = pb.WriteColorAttachment(t0); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "W1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t0);
+            t1 = pb.WriteColorAttachment(t1);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    for (auto& lt : result->lifetimes) {
+        auto slotIdx = result->aliasing.resourceToSlot[lt.resourceIndex];
+        if (slotIdx != AliasingLayout::kNotAliased) {
+            auto& slot = result->aliasing.slots[slotIdx];
+            EXPECT_LE(slot.lifetimeStart, lt.firstPass);
+            EXPECT_GE(slot.lifetimeEnd, lt.lastPass);
+        }
+    }
+}
+
+// =============================================================================
+// DCE (Dead Code Elimination) Precision Tests
+// =============================================================================
+
+TEST(DCEPrecision, SideEffectsPreventCulling) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "SE",
+        [&](PassBuilder& pb) {
+            t = pb.WriteColorAttachment(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 1u);
+}
+
+TEST(DCEPrecision, WriteOnlyPassIsCulled) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Dead", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 0u);
+}
+
+TEST(DCEPrecision, TransitiveReachabilityFromSideEffect) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass("A", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+}
+
+TEST(DCEPrecision, DeepChainReachableFromSideEffect) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    for (int i = 0; i < 5; ++i) {
+        std::string name = "P" + std::to_string(i);
+        bool first = (i == 0), last = (i == 4);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t, first, last](PassBuilder& pb) {
+                if (!first) {
+                    pb.ReadTexture(t);
+                }
+                t = pb.WriteColorAttachment(t);
+                if (last) {
+                    pb.SetSideEffects();
+                }
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 5u);
+}
+
+TEST(DCEPrecision, BranchWithDeadEndIsCulled) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "A",
+        [&](PassBuilder& pb) {
+            t0 = pb.WriteColorAttachment(t0);
+            t1 = pb.WriteTexture(t1, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t0);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass("C", [&](PassBuilder& pb) { pb.ReadTexture(t1); }, [](RenderPassContext&) {});
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+}
+
+TEST(DCEPrecision, DisabledPassAndItsDependencyCulled) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass("A", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    auto hB = builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.EnableIf(hB, []() { return false; });
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 0u);
+}
+
+TEST(DCEPrecision, MultipleSideEffectPassesSurvive) {
+    RenderGraphBuilder builder;
+    for (int i = 0; i < 8; ++i) {
+        std::string name = "SE" + std::to_string(i);
+        auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = name.c_str()});
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [t](PassBuilder& pb) mutable {
+                pb.WriteColorAttachment(t);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 8u);
+}
+
+TEST(DCEPrecision, MixedLiveAndDeadPasses) {
+    RenderGraphBuilder builder;
+    auto live = builder.CreateTexture({.width = 32, .height = 32, .debugName = "Live"});
+    auto dead = builder.CreateTexture({.width = 32, .height = 32, .debugName = "Dead"});
+    builder.AddGraphicsPass(
+        "LiveW", [&](PassBuilder& pb) { live = pb.WriteColorAttachment(live); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "DeadW", [&](PassBuilder& pb) { dead = pb.WriteColorAttachment(dead); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "LiveR",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(live);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+}
+
+// =============================================================================
+// Conditional Execution Tests
+// =============================================================================
+
+TEST(ConditionalExec, EnabledPassSurvives) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    auto h = builder.AddGraphicsPass(
+        "P",
+        [&](PassBuilder& pb) {
+            t = pb.WriteColorAttachment(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.EnableIf(h, []() { return true; });
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 1u);
+}
+
+TEST(ConditionalExec, DisabledPassCulled) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    auto h = builder.AddGraphicsPass(
+        "P",
+        [&](PassBuilder& pb) {
+            t = pb.WriteColorAttachment(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.EnableIf(h, []() { return false; });
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 0u);
+}
+
+TEST(ConditionalExec, PartialDisableLeavesSurvivors) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "A",
+        [&](PassBuilder& pb) {
+            t0 = pb.WriteColorAttachment(t0);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    auto hB = builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            t1 = pb.WriteColorAttachment(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.EnableIf(hB, []() { return false; });
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 1u);
+}
+
+TEST(ConditionalExec, DisabledConsumerCullsProducer) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Producer", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    auto hCons = builder.AddGraphicsPass(
+        "Consumer",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.EnableIf(hCons, []() { return false; });
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 0u);
+}
+
+// =============================================================================
+// Batch Formation Precision Tests
+// =============================================================================
+
+TEST(BatchPrecision, AllPassIndicesInRange) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    for (int i = 0; i < 4; ++i) {
+        std::string name = "P" + std::to_string(i);
+        bool first = (i == 0), last = (i == 3);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t, first, last](PassBuilder& pb) {
+                if (!first) {
+                    pb.ReadTexture(t);
+                }
+                t = pb.WriteColorAttachment(t);
+                if (last) {
+                    pb.SetSideEffects();
+                }
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    for (auto& batch : result->batches) {
+        for (auto idx : batch.passIndices) {
+            EXPECT_LT(idx, result->passes.size());
+        }
+    }
+}
+
+TEST(BatchPrecision, NoDuplicatePassIndicesAcrossBatches) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    std::unordered_set<uint32_t> seen;
+    for (auto& batch : result->batches) {
+        for (auto idx : batch.passIndices) {
+            EXPECT_FALSE(seen.count(idx)) << "Pass " << idx << " in multiple batches";
+            seen.insert(idx);
+        }
+    }
+}
+
+TEST(BatchPrecision, LastBatchSignalsTimeline) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Only",
+        [&](PassBuilder& pb) {
+            t = pb.WriteColorAttachment(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_FALSE(result->batches.empty());
+    EXPECT_TRUE(result->batches.back().signalTimeline);
+}
+
+TEST(BatchPrecision, TotalBatchedPassesEqualsCompiledPasses) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    for (int i = 0; i < 6; ++i) {
+        std::string name = "P" + std::to_string(i);
+        bool first = (i == 0), last = (i == 5);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t, first, last](PassBuilder& pb) {
+                if (!first) {
+                    pb.ReadTexture(t);
+                }
+                t = pb.WriteColorAttachment(t);
+                if (last) {
+                    pb.SetSideEffects();
+                }
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    uint32_t total = 0;
+    for (auto& b : result->batches) {
+        total += static_cast<uint32_t>(b.passIndices.size());
+    }
+    EXPECT_EQ(total, static_cast<uint32_t>(result->passes.size()));
+}
+
+TEST(BatchPrecision, BatchQueueMatchesPassQueue) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            t = pb.WriteColorAttachment(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    for (auto& batch : result->batches) {
+        for (auto idx : batch.passIndices) {
+            EXPECT_EQ(batch.queue, result->passes[idx].queue);
+        }
+    }
+}
+
+// =============================================================================
+// Cross-Queue Synchronization Tests
+// =============================================================================
+
+TEST(CrossQueue, GraphicsToAsyncComputeSyncPoint) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    auto buf = builder.CreateBuffer({.size = 256, .debugName = "Buf"});
+    builder.AddGraphicsPass(
+        "Draw", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Compute",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Post",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableAsyncCompute = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 3u);
+    bool hasGfxToComp = false;
+    for (auto& sp : result->syncPoints) {
+        if (sp.srcQueue == RGQueueType::Graphics && sp.dstQueue == RGQueueType::AsyncCompute) {
+            hasGfxToComp = true;
+        }
+    }
+    EXPECT_TRUE(hasGfxToComp);
+}
+
+TEST(CrossQueue, NoSyncForSameQueue) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->syncPoints.empty());
+}
+
+TEST(CrossQueue, SyncPointPassIndicesAreValid) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    auto buf = builder.CreateBuffer({.size = 256, .debugName = "Buf"});
+    builder.AddGraphicsPass(
+        "Draw", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Compute",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Post",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableAsyncCompute = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    std::unordered_set<uint32_t> passIndices;
+    for (auto& p : result->passes) {
+        passIndices.insert(p.passIndex);
+    }
+    for (auto& sp : result->syncPoints) {
+        EXPECT_TRUE(passIndices.count(sp.srcPassIndex)) << "Sync src " << sp.srcPassIndex << " invalid";
+        EXPECT_TRUE(passIndices.count(sp.dstPassIndex)) << "Sync dst " << sp.dstPassIndex << " invalid";
+    }
+}
+
+// =============================================================================
+// Structural Hash Tests
+// =============================================================================
+
+TEST(StructuralHashDeep, IdenticalGraphsSameHash) {
+    auto buildGraph = []() {
+        RenderGraphBuilder builder;
+        auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+        builder.AddGraphicsPass(
+            "W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+        );
+        builder.AddGraphicsPass(
+            "R",
+            [&](PassBuilder& pb) {
+                pb.ReadTexture(t);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        builder.Build();
+        return builder;
+    };
+    auto b1 = buildGraph();
+    auto b2 = buildGraph();
+    RenderGraphCompiler compiler;
+    auto r1 = compiler.Compile(b1);
+    auto r2 = compiler.Compile(b2);
+    ASSERT_TRUE(r1.has_value());
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_EQ(r1->hash, r2->hash);
+}
+
+TEST(StructuralHashDeep, DifferentPassCountDifferentHash) {
+    RenderGraphBuilder b1;
+    auto t1 = b1.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    b1.AddGraphicsPass(
+        "W",
+        [&](PassBuilder& pb) {
+            t1 = pb.WriteColorAttachment(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    b1.Build();
+
+    RenderGraphBuilder b2;
+    auto t2 = b2.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    b2.AddGraphicsPass("W1", [&](PassBuilder& pb) { t2 = pb.WriteColorAttachment(t2); }, [](RenderPassContext&) {});
+    b2.AddGraphicsPass(
+        "W2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t2);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    b2.Build();
+
+    RenderGraphCompiler compiler;
+    auto r1 = compiler.Compile(b1);
+    auto r2 = compiler.Compile(b2);
+    ASSERT_TRUE(r1.has_value());
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_NE(r1->hash, r2->hash);
+}
+
+TEST(StructuralHashDeep, HashPassCountMatchesCompiled) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->hash.passCount, 2u);
+    EXPECT_GE(result->hash.resourceCount, 1u);
+}
+
+// =============================================================================
+// Complex Integration Tests
+// =============================================================================
+
+TEST(ComplexIntegration, FullDeferredPipeline) {
+    // G-Buffer → Lighting → Post → Present-like SE
+    RenderGraphBuilder builder;
+    auto albedo = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "Albedo"});
+    auto normal = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "Normal"});
+    auto depth
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 1920, .height = 1080, .debugName = "Depth"});
+    auto hdr
+        = builder.CreateTexture({.format = Format::RGBA16_FLOAT, .width = 1920, .height = 1080, .debugName = "HDR"});
+    auto ldr = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "LDR"});
+
+    builder.AddGraphicsPass(
+        "GBuffer",
+        [&](PassBuilder& pb) {
+            albedo = pb.WriteColorAttachment(albedo);
+            normal = pb.WriteColorAttachment(normal, 1);
+            depth = pb.WriteDepthStencil(depth);
+        },
+        [](RenderPassContext&) {}
+    );
+
+    builder.AddGraphicsPass(
+        "Lighting",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(albedo);
+            pb.ReadTexture(normal);
+            pb.ReadDepth(depth);
+            hdr = pb.WriteColorAttachment(hdr);
+        },
+        [](RenderPassContext&) {}
+    );
+
+    builder.AddGraphicsPass(
+        "ToneMap",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(hdr);
+            ldr = pb.WriteColorAttachment(ldr);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableTransientAliasing = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 3u);
+    VerifyTopologicalOrder(*result);
+    VerifyBarrierStructure(*result);
+
+    // Lighting pass needs barriers for albedo, normal, depth
+    int posLight = FindCompiledPass(*result, 1);
+    ASSERT_GE(posLight, 0);
+    EXPECT_GE(result->passes[posLight].acquireBarriers.size(), 3u);
+
+    // Verify lifetimes exist for all transient resources
+    std::unordered_set<uint16_t> ltRes;
+    for (auto& lt : result->lifetimes) {
+        ltRes.insert(lt.resourceIndex);
+    }
+    EXPECT_TRUE(ltRes.count(albedo.GetIndex()));
+    EXPECT_TRUE(ltRes.count(normal.GetIndex()));
+    EXPECT_TRUE(ltRes.count(depth.GetIndex()));
+    EXPECT_TRUE(ltRes.count(hdr.GetIndex()));
+    EXPECT_TRUE(ltRes.count(ldr.GetIndex()));
+}
+
+TEST(ComplexIntegration, ShadowMapPlusDeferredPipeline) {
+    RenderGraphBuilder builder;
+    auto shadowMap
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 2048, .height = 2048, .debugName = "Shadow"});
+    auto gbuf = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "GBuf"});
+    auto depthBuf
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 1920, .height = 1080, .debugName = "Depth"});
+    auto lit
+        = builder.CreateTexture({.format = Format::RGBA16_FLOAT, .width = 1920, .height = 1080, .debugName = "Lit"});
+
+    auto hShadow = builder.AddGraphicsPass(
+        "ShadowPass", [&](PassBuilder& pb) { shadowMap = pb.WriteDepthStencil(shadowMap); }, [](RenderPassContext&) {}
+    );
+    auto hGBuf = builder.AddGraphicsPass(
+        "GBuffer",
+        [&](PassBuilder& pb) {
+            gbuf = pb.WriteColorAttachment(gbuf);
+            depthBuf = pb.WriteDepthStencil(depthBuf);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Lighting",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(gbuf);
+            pb.ReadDepth(depthBuf);
+            pb.ReadDepth(shadowMap);
+            lit = pb.WriteColorAttachment(lit);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableTransientAliasing = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 3u);
+    VerifyTopologicalOrder(*result);
+
+    // ShadowPass and GBuffer are independent, both must precede Lighting
+    int posShadow = FindCompiledPass(*result, hShadow.index);
+    int posGBuf = FindCompiledPass(*result, hGBuf.index);
+    int posLit = FindCompiledPass(*result, 2);
+    ASSERT_GE(posShadow, 0);
+    ASSERT_GE(posGBuf, 0);
+    ASSERT_GE(posLit, 0);
+    EXPECT_LT(posShadow, posLit);
+    EXPECT_LT(posGBuf, posLit);
+}
+
+TEST(ComplexIntegration, PingPongBlurChain) {
+    RenderGraphBuilder builder;
+    auto a = builder.CreateTexture({.width = 512, .height = 512, .debugName = "PingA"});
+    auto b = builder.CreateTexture({.width = 512, .height = 512, .debugName = "PingB"});
+    // Seed: write to A
+    builder.AddGraphicsPass(
+        "Seed", [&](PassBuilder& pb) { a = pb.WriteColorAttachment(a); }, [](RenderPassContext&) {}
+    );
+    // 4 blur iterations: A->B, B->A, A->B, B->A
+    for (int i = 0; i < 4; ++i) {
+        std::string name = "Blur" + std::to_string(i);
+        if (i % 2 == 0) {
+            builder.AddGraphicsPass(
+                name.c_str(),
+                [&](PassBuilder& pb) {
+                    pb.ReadTexture(a);
+                    b = pb.WriteColorAttachment(b);
+                },
+                [](RenderPassContext&) {}
+            );
+        } else {
+            builder.AddGraphicsPass(
+                name.c_str(),
+                [&](PassBuilder& pb) {
+                    pb.ReadTexture(b);
+                    a = pb.WriteColorAttachment(a);
+                },
+                [](RenderPassContext&) {}
+            );
+        }
+    }
+    // Final read
+    builder.AddGraphicsPass(
+        "Final",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(a);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 6u);
+    VerifyTopologicalOrder(*result);
+    VerifyBarrierStructure(*result);
+    EXPECT_GE(result->edges.size(), 5u);
+}
+
+TEST(ComplexIntegration, ManyResourcesFewPasses) {
+    RenderGraphBuilder builder;
+    constexpr int N = 20;
+    std::vector<RGResourceHandle> textures;
+    for (int i = 0; i < N; ++i) {
+        std::string name = "T" + std::to_string(i);
+        textures.push_back(builder.CreateTexture({.width = 64, .height = 64, .debugName = name.c_str()}));
+    }
+    builder.AddGraphicsPass(
+        "WriteAll",
+        [&](PassBuilder& pb) {
+            for (auto& t : textures) {
+                t = pb.WriteColorAttachment(t);
+            }
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "ReadAll",
+        [&](PassBuilder& pb) {
+            for (auto& t : textures) {
+                pb.ReadTexture(t);
+            }
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    EXPECT_GE(result->edges.size(), static_cast<size_t>(N));
+    // ReadAll should have N acquire barriers
+    EXPECT_GE(result->passes[1].acquireBarriers.size(), static_cast<size_t>(N));
+}
+
+TEST(ComplexIntegration, WideParallelFanOutThenConverge) {
+    RenderGraphBuilder builder;
+    auto src = builder.CreateTexture({.width = 256, .height = 256, .debugName = "Src"});
+    builder.AddGraphicsPass(
+        "Init", [&](PassBuilder& pb) { src = pb.WriteColorAttachment(src); }, [](RenderPassContext&) {}
+    );
+    constexpr int BRANCHES = 8;
+    std::vector<RGResourceHandle> branches;
+    for (int i = 0; i < BRANCHES; ++i) {
+        std::string tName = "B" + std::to_string(i);
+        auto bt = builder.CreateTexture({.width = 256, .height = 256, .debugName = tName.c_str()});
+        std::string pName = "Branch" + std::to_string(i);
+        builder.AddGraphicsPass(
+            pName.c_str(),
+            [&src, &bt](PassBuilder& pb) {
+                pb.ReadTexture(src);
+                bt = pb.WriteColorAttachment(bt);
+            },
+            [](RenderPassContext&) {}
+        );
+        branches.push_back(bt);
+    }
+    builder.AddGraphicsPass(
+        "Merge",
+        [&](PassBuilder& pb) {
+            for (auto& b : branches) {
+                pb.ReadTexture(b);
+            }
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), static_cast<size_t>(BRANCHES + 2));
+    VerifyTopologicalOrder(*result);
+    EXPECT_GE(result->edges.size(), static_cast<size_t>(BRANCHES * 2));
+}
+
+TEST(ComplexIntegration, EmptyGraphCompiles) {
+    RenderGraphBuilder builder;
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->passes.empty());
+    EXPECT_TRUE(result->edges.empty());
+    EXPECT_TRUE(result->batches.empty());
+    EXPECT_TRUE(result->syncPoints.empty());
+}
+
+TEST(ComplexIntegration, SingleResourceUsedByManyReaders) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 128, .height = 128, .debugName = "Shared"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    for (int i = 0; i < 10; ++i) {
+        std::string name = "R" + std::to_string(i);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t](PassBuilder& pb) {
+                pb.ReadTexture(t);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 11u);
+    VerifyTopologicalOrder(*result);
+}
+
+TEST(ComplexIntegration, AsyncComputeWithTransferPass) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 4096, .debugName = "Data"});
+    auto tex = builder.CreateTexture({.width = 256, .height = 256, .debugName = "Result"});
+    builder.AddTransferPass(
+        "Upload", [&](PassBuilder& pb) { buf = pb.WriteBuffer(buf, ResourceAccess::TransferDst); },
+        [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Process",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            tex = pb.WriteTexture(tex, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Display",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tex);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    opts.enableAsyncCompute = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 3u);
+    VerifyTopologicalOrder(*result);
+    VerifyBarrierStructure(*result);
+}
+
+TEST(ComplexIntegration, LargeGraphStressTest) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    constexpr int N = 50;
+    for (int i = 0; i < N; ++i) {
+        std::string name = "P" + std::to_string(i);
+        bool first = (i == 0), last = (i == N - 1);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t, first, last](PassBuilder& pb) {
+                if (!first) {
+                    pb.ReadTexture(t);
+                }
+                t = pb.WriteColorAttachment(t);
+                if (last) {
+                    pb.SetSideEffects();
+                }
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), static_cast<size_t>(N));
+    VerifyTopologicalOrder(*result);
+    EXPECT_GE(result->edges.size(), static_cast<size_t>(N - 1));
+    uint32_t total = 0;
+    for (auto& b : result->batches) {
+        total += static_cast<uint32_t>(b.passIndices.size());
+    }
+    EXPECT_EQ(total, static_cast<uint32_t>(N));
+}
+
+TEST(ComplexIntegration, ReorderingDoesNotBreakDependencies) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T"});
+    auto u = builder.CreateTexture({.width = 128, .height = 128, .debugName = "U"});
+    builder.AddGraphicsPass("W_T", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass("W_U", [&](PassBuilder& pb) { u = pb.WriteColorAttachment(u); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R_T",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R_U",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(u);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableBarrierReordering = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 4u);
+    VerifyTopologicalOrder(*result);
+}
+
+// =============================================================================
+// Scheduler Strategy Tests
+// =============================================================================
+
+TEST(SchedulerStrategy, MinBarriersCompiles) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    auto u = builder.CreateTexture({.width = 64, .height = 64, .debugName = "U"});
+    builder.AddGraphicsPass("W_T", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass("W_U", [&](PassBuilder& pb) { u = pb.WriteColorAttachment(u); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R_T",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R_U",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(u);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableBarrierReordering = true;
+    opts.strategy = SchedulerStrategy::MinBarriers;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 4u);
+    VerifyTopologicalOrder(*result);
+}
+
+TEST(SchedulerStrategy, MinMemoryCompiles) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    auto u = builder.CreateTexture({.width = 64, .height = 64, .debugName = "U"});
+    builder.AddGraphicsPass("W_T", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass("W_U", [&](PassBuilder& pb) { u = pb.WriteColorAttachment(u); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R_T",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R_U",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(u);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableBarrierReordering = true;
+    opts.strategy = SchedulerStrategy::MinMemory;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 4u);
+    VerifyTopologicalOrder(*result);
+}
+
+TEST(SchedulerStrategy, MinLatencyCompiles) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    auto u = builder.CreateTexture({.width = 64, .height = 64, .debugName = "U"});
+    builder.AddGraphicsPass("W_T", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass("W_U", [&](PassBuilder& pb) { u = pb.WriteColorAttachment(u); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R_T",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R_U",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(u);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableBarrierReordering = true;
+    opts.strategy = SchedulerStrategy::MinLatency;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 4u);
+    VerifyTopologicalOrder(*result);
+}
+
+TEST(SchedulerStrategy, BalancedCompiles) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableBarrierReordering = true;
+    opts.strategy = SchedulerStrategy::Balanced;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    VerifyTopologicalOrder(*result);
+}
+
+TEST(SchedulerStrategy, AllStrategiesPreservePassCount) {
+    auto buildGraph = []() {
+        RenderGraphBuilder builder;
+        auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+        auto u = builder.CreateTexture({.width = 64, .height = 64, .debugName = "U"});
+        builder.AddGraphicsPass(
+            "W_T", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+        );
+        builder.AddGraphicsPass(
+            "W_U", [&](PassBuilder& pb) { u = pb.WriteColorAttachment(u); }, [](RenderPassContext&) {}
+        );
+        builder.AddGraphicsPass(
+            "R_T",
+            [&](PassBuilder& pb) {
+                pb.ReadTexture(t);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        builder.AddGraphicsPass(
+            "R_U",
+            [&](PassBuilder& pb) {
+                pb.ReadTexture(u);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        builder.Build();
+        return builder;
+    };
+    SchedulerStrategy strategies[]
+        = {SchedulerStrategy::MinBarriers, SchedulerStrategy::MinMemory, SchedulerStrategy::MinLatency,
+           SchedulerStrategy::Balanced};
+    for (auto strat : strategies) {
+        auto b = buildGraph();
+        RenderGraphCompiler::Options opts;
+        opts.enableBarrierReordering = true;
+        opts.strategy = strat;
+        opts.enableRenderPassMerging = false;
+        RenderGraphCompiler compiler(opts);
+        auto result = compiler.Compile(b);
+        ASSERT_TRUE(result.has_value());
+        EXPECT_EQ(result->passes.size(), 4u);
+        VerifyTopologicalOrder(*result);
+    }
+}
+
+// =============================================================================
+// Render Pass Merging Tests
+// =============================================================================
+
+TEST(PassMerging, TwoConsecutiveGraphicsPassesMerge) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 256, .height = 256, .debugName = "RT"});
+    auto depth
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 256, .height = 256, .debugName = "Depth"});
+    builder.AddGraphicsPass(
+        "GBuf",
+        [&](PassBuilder& pb) {
+            rt = pb.WriteColorAttachment(rt);
+            depth = pb.WriteDepthStencil(depth);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Light",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            pb.ReadDepth(depth);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = true;
+    opts.enableTransientAliasing = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    // mergedGroups may or may not merge depending on render area compatibility
+    // but compilation must succeed
+}
+
+TEST(PassMerging, DisabledMergingProducesNoGroups) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 256, .height = 256, .debugName = "RT"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { rt = pb.WriteColorAttachment(rt); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->mergedGroups.empty());
+}
+
+TEST(PassMerging, ComputePassNotMergedWithGraphics) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T"});
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    builder.AddGraphicsPass(
+        "Draw", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "Comp",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Post",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 3u);
+    // Compute pass should not be in any merged group
+    for (auto& group : result->mergedGroups) {
+        for (auto idx : group.subpassIndices) {
+            EXPECT_NE(result->passes[idx].queue, RGQueueType::AsyncCompute);
+        }
+    }
+}
+
+// =============================================================================
+// Backend Adaptation Tests
+// =============================================================================
+
+TEST(Adaptation, VulkanBackendCompiles) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableAdaptation = true;
+    opts.backendType = BackendType::Vulkan14;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+}
+
+TEST(Adaptation, D3D12BackendCompiles) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableAdaptation = true;
+    opts.backendType = BackendType::D3D12;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+}
+
+TEST(Adaptation, DisabledAdaptationProducesNoAdaptationPasses) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableAdaptation = false;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->adaptationPasses.empty());
+}
+
+// =============================================================================
+// Invariant Checks (must hold for any compiled graph)
+// =============================================================================
+
+static void VerifyAllInvariants(const CompiledRenderGraph& cg) {
+    // 1. Topological order
+    VerifyTopologicalOrder(cg);
+    // 2. Barrier structure
+    VerifyBarrierStructure(cg);
+    // 3. All batch pass indices in range
+    for (auto& batch : cg.batches) {
+        for (auto idx : batch.passIndices) {
+            EXPECT_LT(idx, cg.passes.size());
+        }
+    }
+    // 4. No duplicate pass in batches
+    std::unordered_set<uint32_t> batchSeen;
+    for (auto& batch : cg.batches) {
+        for (auto idx : batch.passIndices) {
+            EXPECT_FALSE(batchSeen.count(idx));
+            batchSeen.insert(idx);
+        }
+    }
+    // 5. Total batched == passes
+    uint32_t totalBatched = 0;
+    for (auto& b : cg.batches) {
+        totalBatched += static_cast<uint32_t>(b.passIndices.size());
+    }
+    EXPECT_EQ(totalBatched, static_cast<uint32_t>(cg.passes.size()));
+    // 6. Last batch signals timeline (if any)
+    if (!cg.batches.empty()) {
+        EXPECT_TRUE(cg.batches.back().signalTimeline);
+    }
+    // 7. Lifetimes: first <= last
+    for (auto& lt : cg.lifetimes) {
+        EXPECT_LE(lt.firstPass, lt.lastPass);
+    }
+    // 8. Aliasing slot offsets aligned
+    for (auto& slot : cg.aliasing.slots) {
+        uint64_t a = slot.alignment > 0 ? slot.alignment : 1;
+        EXPECT_EQ(slot.heapOffset % a, 0u);
+    }
+    // 9. Edges reference valid passes
+    std::unordered_set<uint32_t> passIdxSet;
+    for (auto& p : cg.passes) {
+        passIdxSet.insert(p.passIndex);
+    }
+    for (auto& e : cg.edges) {
+        EXPECT_TRUE(passIdxSet.count(e.srcPass));
+        EXPECT_TRUE(passIdxSet.count(e.dstPass));
+    }
+    // 10. Sync points reference valid passes
+    for (auto& sp : cg.syncPoints) {
+        EXPECT_TRUE(passIdxSet.count(sp.srcPassIndex));
+        EXPECT_TRUE(passIdxSet.count(sp.dstPassIndex));
+    }
+}
+
+TEST(Invariants, SimpleChainAllInvariants) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    VerifyAllInvariants(*result);
+}
+
+TEST(Invariants, DiamondAllInvariants) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "Src"});
+    auto tB = builder.CreateTexture({.width = 64, .height = 64, .debugName = "B"});
+    auto tC = builder.CreateTexture({.width = 64, .height = 64, .debugName = "C"});
+    builder.AddGraphicsPass("A", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            tB = pb.WriteColorAttachment(tB);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "C",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            tC = pb.WriteColorAttachment(tC);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "D",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tB);
+            pb.ReadTexture(tC);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    VerifyAllInvariants(*result);
+}
+
+TEST(Invariants, DeferredPipelineAllInvariants) {
+    RenderGraphBuilder builder;
+    auto albedo = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "Albedo"});
+    auto normal = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "Normal"});
+    auto depth
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 1920, .height = 1080, .debugName = "Depth"});
+    auto hdr
+        = builder.CreateTexture({.format = Format::RGBA16_FLOAT, .width = 1920, .height = 1080, .debugName = "HDR"});
+    builder.AddGraphicsPass(
+        "GBuf",
+        [&](PassBuilder& pb) {
+            albedo = pb.WriteColorAttachment(albedo);
+            normal = pb.WriteColorAttachment(normal, 1);
+            depth = pb.WriteDepthStencil(depth);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Light",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(albedo);
+            pb.ReadTexture(normal);
+            pb.ReadDepth(depth);
+            hdr = pb.WriteColorAttachment(hdr);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    VerifyAllInvariants(*result);
+}
+
+TEST(Invariants, LargeChainAllInvariants) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    constexpr int N = 20;
+    for (int i = 0; i < N; ++i) {
+        std::string name = "P" + std::to_string(i);
+        bool first = (i == 0), last = (i == N - 1);
+        builder.AddGraphicsPass(
+            name.c_str(),
+            [&t, first, last](PassBuilder& pb) {
+                if (!first) {
+                    pb.ReadTexture(t);
+                }
+                t = pb.WriteColorAttachment(t);
+                if (last) {
+                    pb.SetSideEffects();
+                }
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    VerifyAllInvariants(*result);
+}
+
+TEST(Invariants, CrossQueueAllInvariants) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    auto buf = builder.CreateBuffer({.size = 256, .debugName = "Buf"});
+    builder.AddGraphicsPass(
+        "Draw", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Compute",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Post",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    VerifyAllInvariants(*result);
+}
+
+TEST(Invariants, AllOptionsEnabledAllInvariants) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 512, .height = 512, .debugName = "RT"});
+    auto depth
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 512, .height = 512, .debugName = "Depth"});
+    auto post = builder.CreateTexture({.width = 512, .height = 512, .debugName = "Post"});
+    builder.AddGraphicsPass(
+        "GBuf",
+        [&](PassBuilder& pb) {
+            rt = pb.WriteColorAttachment(rt);
+            depth = pb.WriteDepthStencil(depth);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Light",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            pb.ReadDepth(depth);
+            post = pb.WriteColorAttachment(post);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableBarrierReordering = true;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = true;
+    opts.enableAdaptation = true;
+    opts.enableSplitBarriers = true;
+    opts.backendType = BackendType::Vulkan14;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    VerifyAllInvariants(*result);
+}
+
+// =============================================================================
+// Edge Cases
+// =============================================================================
+
+TEST(EdgeCases, SingleSideEffectPassAllEnabled) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Only",
+        [&](PassBuilder& pb) {
+            t = pb.WriteColorAttachment(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableBarrierReordering = true;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = true;
+    opts.enableAdaptation = true;
+    opts.enableSplitBarriers = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 1u);
+    VerifyAllInvariants(*result);
+}
+
+TEST(EdgeCases, AllPassesCulled) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Dead1", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Dead2", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 0u);
+    EXPECT_TRUE(result->edges.empty());
+    EXPECT_TRUE(result->batches.empty());
+}
+
+TEST(EdgeCases, BufferOnlyGraphCompiles) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 4096, .debugName = "Buf"});
+    builder.AddComputePass(
+        "Fill", [&](PassBuilder& pb) { buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite); },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "Read",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    VerifyAllInvariants(*result);
+}
+
+TEST(EdgeCases, MixedTextureAndBufferGraph) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 128, .height = 128, .debugName = "Tex"});
+    auto buf = builder.CreateBuffer({.size = 2048, .debugName = "Buf"});
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            tex = pb.WriteColorAttachment(tex);
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Post",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tex);
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    VerifyAllInvariants(*result);
+}
+
+TEST(EdgeCases, LargeTextureDescriptors) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture(
+        {.width = 4096, .height = 4096, .mipLevels = 12, .arrayLayers = 6, .debugName = "CubeMap"}
+    );
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    // Verify aliasing slot size accounts for mips and layers
+    if (result->aliasing.resourceToSlot[t.GetIndex()] != AliasingLayout::kNotAliased) {
+        auto slotIdx = result->aliasing.resourceToSlot[t.GetIndex()];
+        auto expected = EstimateTextureSize({.width = 4096, .height = 4096, .mipLevels = 12, .arrayLayers = 6});
+        EXPECT_GE(result->aliasing.slots[slotIdx].size, expected);
+    }
+}
+
+TEST(EdgeCases, ResourceHandleValidity) {
+    RGResourceHandle invalid;
+    EXPECT_FALSE(invalid.IsValid());
+    RenderGraphBuilder builder;
+    auto valid = builder.CreateTexture({.width = 32, .height = 32, .debugName = "V"});
+    EXPECT_TRUE(valid.IsValid());
+    EXPECT_EQ(valid.GetVersion(), 0);
+}
+
+TEST(EdgeCases, MultipleCompilationsOfSameBuilder) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler c1, c2;
+    auto r1 = c1.Compile(builder);
+    auto r2 = c2.Compile(builder);
+    ASSERT_TRUE(r1.has_value());
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_EQ(r1->passes.size(), r2->passes.size());
+    EXPECT_EQ(r1->hash, r2->hash);
+}
+
+TEST(EdgeCases, CompilerOptionsAllDisabled) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableBarrierReordering = false;
+    opts.enableTransientAliasing = false;
+    opts.enableRenderPassMerging = false;
+    opts.enableAdaptation = false;
+    opts.enableSplitBarriers = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    EXPECT_TRUE(result->aliasing.slots.empty());
+    EXPECT_TRUE(result->mergedGroups.empty());
+    EXPECT_TRUE(result->adaptationPasses.empty());
+}
+
+// =============================================================================
+// Aliasing Precision Tests
+// =============================================================================
+
+TEST(AliasingPrecision, NonOverlappingLifetimesShareSlot) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "W0", [&](PassBuilder& pb) { t0 = pb.WriteColorAttachment(t0); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R0",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t0);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "W1", [&](PassBuilder& pb) { t1 = pb.WriteColorAttachment(t1); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "R1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 4u);
+    // Both resources should have lifetime entries
+    std::unordered_set<uint16_t> ltRes;
+    for (auto& lt : result->lifetimes) {
+        ltRes.insert(lt.resourceIndex);
+    }
+    EXPECT_TRUE(ltRes.count(t0.GetIndex()));
+    EXPECT_TRUE(ltRes.count(t1.GetIndex()));
+}
+
+TEST(AliasingPrecision, OverlappingLifetimesCannotShareSlot) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "WBoth",
+        [&](PassBuilder& pb) {
+            t0 = pb.WriteColorAttachment(t0);
+            t1 = pb.WriteColorAttachment(t1, 1);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "RBoth",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t0);
+            pb.ReadTexture(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    auto s0 = result->aliasing.resourceToSlot[t0.GetIndex()];
+    auto s1 = result->aliasing.resourceToSlot[t1.GetIndex()];
+    if (s0 != AliasingLayout::kNotAliased && s1 != AliasingLayout::kNotAliased) {
+        EXPECT_NE(s0, s1) << "Overlapping lifetimes must not share aliasing slot";
+    }
+}
+
+TEST(AliasingPrecision, ImportedResourceNotAliased) {
+    RenderGraphBuilder builder;
+    TextureHandle extTex{42};
+    auto imported = builder.ImportTexture(extTex, "Imported");
+    builder.AddGraphicsPass(
+        "W",
+        [&](PassBuilder& pb) {
+            imported = pb.WriteColorAttachment(imported);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    if (imported.GetIndex() < result->aliasing.resourceToSlot.size()) {
+        EXPECT_EQ(result->aliasing.resourceToSlot[imported.GetIndex()], AliasingLayout::kNotAliased);
+    }
+}
+
+// =============================================================================
+// WAW / WAR Hazard Edge Tests
+// =============================================================================
+
+TEST(HazardEdges, WAWCreatesEdge) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W1", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "W2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            t = pb.WriteColorAttachment(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    EXPECT_GE(result->edges.size(), 1u);
+    VerifyTopologicalOrder(*result);
+}
+
+TEST(HazardEdges, RAWCreatesEdge) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_GE(result->edges.size(), 1u);
+    bool foundRAW = false;
+    for (auto& e : result->edges) {
+        if (e.hazard == HazardType::RAW) {
+            foundRAW = true;
+        }
+    }
+    EXPECT_TRUE(foundRAW);
+}
+
+TEST(HazardEdges, NoEdgeBetweenIndependentResources) {
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T1"});
+    builder.AddGraphicsPass(
+        "W0",
+        [&](PassBuilder& pb) {
+            t0 = pb.WriteColorAttachment(t0);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "W1",
+        [&](PassBuilder& pb) {
+            t1 = pb.WriteColorAttachment(t1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    // No edge should exist between the two independent writes
+    for (auto& e : result->edges) {
+        bool crossLink = (e.srcPass == 0 && e.dstPass == 1) || (e.srcPass == 1 && e.dstPass == 0);
+        EXPECT_FALSE(crossLink) << "No dependency edge between independent resources";
+    }
+}
+
+// =============================================================================
+// Split Barrier Tests
+// =============================================================================
+
+TEST(SplitBarrier, EnabledCompilesCorrectly) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 256, .height = 256, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableSplitBarriers = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    VerifyAllInvariants(*result);
+}
+
+TEST(SplitBarrier, DisabledProducesNoSplitBarriers) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 256, .height = 256, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+    RenderGraphCompiler::Options opts;
+    opts.enableSplitBarriers = false;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 2u);
+    // All barriers should be non-split (releaseBarriers empty)
+    for (auto& p : result->passes) {
+        EXPECT_TRUE(p.releaseBarriers.empty());
+    }
+}

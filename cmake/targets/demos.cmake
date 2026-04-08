@@ -40,6 +40,9 @@ miki_add_demo(rhi_torus_demo          demos/rhi/rhi_torus_demo.cpp)
 miki_add_demo(rhi_torus_demo_multi    demos/rhi/rhi_torus_demo_multi.cpp)
 miki_add_demo(rhi_streaming_upload_demo demos/rhi/rhi_streaming_upload_demo.cpp)
 
+# -- RenderGraph demos --------------------------------------------------------
+miki_add_demo(rg_torus_cube_demo  demos/rendergraph/rg_torus_cube_demo.cpp)
+
 # -- Third-party demos (always built if present) ------------------------------
 if(EXISTS "${CMAKE_SOURCE_DIR}/demos/thirdparty/CMakeLists.txt")
     add_subdirectory(demos/thirdparty)
