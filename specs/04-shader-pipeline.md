@@ -12,28 +12,28 @@
 
 These decisions were locked before writing this spec. They are **non-negotiable** within this document.
 
-| # | Decision | Detail |
-|---|----------|--------|
-| 1 | **Slang consumption** | Source-compiled default (`third_party/slang/`, CMake `add_subdirectory`). Hybrid option: CI fast path can use prebuilt DLLs via `MIKI_SLANG_PREBUILT=ON`. |
-| 2 | **Shader IR cache** | Per-module incremental (Slang session reuse) + Pipeline cache (`VkPipelineCache` / `ID3D12PipelineLibrary`) dual-layer. |
-| 3 | **Descriptor strategy** | Hybrid: bindless table layout locked at compile-time (fixed `set=3`), per-pass bindings (set 0-2) use reflection-driven layout generation. |
-| 4 | **Push constant rewrite** | Dual-layer: Slang codegen rewrites `[vk::push_constant]` to UBO declarations for WGSL/GLSL targets; RHI backend validates and uploads UBO data at runtime. |
-| 5 | **Hot-reload granularity** | Per-module: Slang module dependency graph tracks `import` edges; only affected modules recompile on file change. |
-| 6 | **WASM/Emscripten** | Offline-only for shipping (all WGSL blobs pre-compiled at build time). Dev environment allows runtime Slang-in-WASM as opt-in debug option (`MIKI_WASM_RUNTIME_SLANG=ON`). |
+| #   | Decision                   | Detail                                                                                                                                                                     |
+| --- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Slang consumption**      | Source-compiled default (`third_party/slang/`, CMake `add_subdirectory`). Hybrid option: CI fast path can use prebuilt DLLs via `MIKI_SLANG_PREBUILT=ON`.                  |
+| 2   | **Shader IR cache**        | Per-module incremental (Slang session reuse) + Pipeline cache (`VkPipelineCache` / `ID3D12PipelineLibrary`) dual-layer.                                                    |
+| 3   | **Descriptor strategy**    | Hybrid: bindless table layout locked at compile-time (fixed `set=3`), per-pass bindings (set 0-2) use reflection-driven layout generation.                                 |
+| 4   | **Push constant rewrite**  | Dual-layer: Slang codegen rewrites `[vk::push_constant]` to UBO declarations for WGSL/GLSL targets; RHI backend validates and uploads UBO data at runtime.                 |
+| 5   | **Hot-reload granularity** | Per-module: Slang module dependency graph tracks `import` edges; only affected modules recompile on file change.                                                           |
+| 6   | **WASM/Emscripten**        | Offline-only for shipping (all WGSL blobs pre-compiled at build time). Dev environment allows runtime Slang-in-WASM as opt-in debug option (`MIKI_WASM_RUNTIME_SLANG=ON`). |
 
 ---
 
 ## 1. Design Goals
 
-| Goal | Metric |
-|------|--------|
-| **Single-source shading** | One `.slang` file compiles to SPIR-V, DXIL, GLSL 4.30 (via `GL_ARB_gl_spirv` SPIR-V), WGSL — zero per-backend shader forks |
-| **Compile-once per module** | Slang parses each module once; codegen to N targets reuses the same IR. Incremental: only changed modules recompile |
-| **Sub-100ms hot-reload** | File change → recompile affected module → pipeline swap in <100ms for typical shader (~500 LOC) |
-| **Zero-overhead permutations** | 64-bit bitfield key → preprocessor defines; LRU in-memory cache + content-hashed disk cache. No runtime branching |
-| **Reflection-driven per-pass layout** | `ShaderReflection` auto-generates `DescriptorSetLayout` for sets 0-2. Set 3 (bindless) is fixed at init time |
-| **Tier degradation safety** | `SlangFeatureProbe` (29 tests) catches miscompiles and unsupported features at CI time, not at runtime |
-| **Pimpl ABI stability** | `SlangCompiler`, `PermutationCache`, `ShaderWatcher` use Pimpl — Slang headers never leak to public API |
+| Goal                                  | Metric                                                                                                                     |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Single-source shading**             | One `.slang` file compiles to SPIR-V, DXIL, GLSL 4.30 (via `GL_ARB_gl_spirv` SPIR-V), WGSL — zero per-backend shader forks |
+| **Compile-once per module**           | Slang parses each module once; codegen to N targets reuses the same IR. Incremental: only changed modules recompile        |
+| **Sub-100ms hot-reload**              | File change → recompile affected module → pipeline swap in <100ms for typical shader (~500 LOC)                            |
+| **Zero-overhead permutations**        | 64-bit bitfield key → preprocessor defines; LRU in-memory cache + content-hashed disk cache. No runtime branching          |
+| **Reflection-driven per-pass layout** | `ShaderReflection` auto-generates `DescriptorSetLayout` for sets 0-2. Set 3 (bindless) is fixed at init time               |
+| **Tier degradation safety**           | `SlangFeatureProbe` (29 tests) catches miscompiles and unsupported features at CI time, not at runtime                     |
+| **Pimpl ABI stability**               | `SlangCompiler`, `PermutationCache`, `ShaderWatcher` use Pimpl — Slang headers never leak to public API                    |
 
 ---
 
@@ -247,6 +247,7 @@ struct ShaderReflection {
 ```
 
 Reflection captures:
+
 - **Bindings**: set, binding, type, count, name, user attributes (`[vk::binding]`, etc.)
 - **Vertex inputs**: location, format, offset, name (auto-mapped from Slang scalar type)
 - **Push constant size**: global constant buffer size from Slang layout
@@ -328,12 +329,12 @@ graph TD
 - One `slang::IGlobalSession` per `SlangCompiler` instance (expensive to create, reused across compilations)
 - Per-compilation `slang::ISession` created with target-specific profile:
 
-| ShaderTarget | Slang profile | Slang format | Notes |
-|-------------|--------------|-------------|-------|
-| SPIRV | `spirv_1_5` | `SLANG_SPIRV` | Vulkan 1.4, OpenGL `GL_ARB_gl_spirv` |
-| DXIL | `sm_6_6` | `SLANG_DXIL` | D3D12 FL 12.2 |
-| GLSL | `glsl_430` | `SLANG_GLSL` | Offline/debug only |
-| WGSL | `wgsl` | `SLANG_WGSL` | Dawn / Emscripten |
+| ShaderTarget | Slang profile | Slang format  | Notes                                |
+| ------------ | ------------- | ------------- | ------------------------------------ |
+| SPIRV        | `spirv_1_5`   | `SLANG_SPIRV` | Vulkan 1.4, OpenGL `GL_ARB_gl_spirv` |
+| DXIL         | `sm_6_6`      | `SLANG_DXIL`  | D3D12 FL 12.2                        |
+| GLSL         | `glsl_430`    | `SLANG_GLSL`  | Offline/debug only                   |
+| WGSL         | `wgsl`        | `SLANG_WGSL`  | Dawn / Emscripten                    |
 
 #### Per-Module Incremental Compilation (Decision #2)
 
@@ -348,6 +349,7 @@ while keeping unchanged modules hot.
 #### Permutation Handling
 
 Permutation bits are expanded to preprocessor defines:
+
 - Bit N set → `#define MIKI_PERMUTATION_BIT_N 1`
 - `ShaderCompileDesc::defines` provides additional string-valued defines
 - Both passed to `slang::SessionDesc::preprocessorMacros`
@@ -367,21 +369,22 @@ Permutation bits are expanded to preprocessor defines:
 
 Slang type → `rhi::Format` mapping for vertex inputs:
 
-| Slang scalar | Columns | Format |
-|-------------|---------|--------|
-| `float32` | 1 | `R32_FLOAT` |
-| `float32` | 2 | `RG32_FLOAT` |
-| `float32` | 3/4 | `RGBA32_FLOAT` |
-| `int32` | 1 | `R32_SINT` |
-| `uint32` | 1 | `R32_UINT` |
-| `float16` | 2 | `RG16_FLOAT` |
-| `float16` | 4 | `RGBA16_FLOAT` |
+| Slang scalar | Columns | Format         |
+| ------------ | ------- | -------------- |
+| `float32`    | 1       | `R32_FLOAT`    |
+| `float32`    | 2       | `RG32_FLOAT`   |
+| `float32`    | 3/4     | `RGBA32_FLOAT` |
+| `int32`      | 1       | `R32_SINT`     |
+| `uint32`     | 1       | `R32_UINT`     |
+| `float16`    | 2       | `RG16_FLOAT`   |
+| `float16`    | 4       | `RGBA16_FLOAT` |
 
 ### 4.3 Push Constant Emulation (Decision #4 — Dual Layer)
 
 #### Layer 1: Slang Codegen Rewrite
 
 When targeting WGSL or GLSL:
+
 - Slang automatically rewrites `[vk::push_constant]` blocks to uniform buffer declarations
 - WGSL: `@group(0) @binding(0) var<uniform> pushConstants: PushConstantsBlock;`
 - GLSL: `layout(std140, binding = 0) uniform PushConstants { ... };`
@@ -395,11 +398,11 @@ When targeting WGSL or GLSL:
 
 #### Reserved Binding Convention
 
-| Backend | Reserved Slot | Size | Mechanism |
-|---------|:-------------|:-----|:----------|
-| WebGPU | `@group(0) @binding(0)` | 256B | `var<uniform>` in WGSL |
-| OpenGL | UBO binding 0 | 128B | `layout(std140, binding = 0)` |
-| Vulkan / D3D12 | None | N/A | Native push/root constants |
+| Backend        | Reserved Slot           | Size | Mechanism                     |
+| -------------- | :---------------------- | :--- | :---------------------------- |
+| WebGPU         | `@group(0) @binding(0)` | 256B | `var<uniform>` in WGSL        |
+| OpenGL         | UBO binding 0           | 128B | `layout(std140, binding = 0)` |
+| Vulkan / D3D12 | None                    | N/A  | Native push/root constants    |
 
 User-declared descriptors in set 0 start from `binding=1` on WebGPU/OpenGL.
 `CreatePipelineLayout` asserts no user binding collides with reserved slot in debug builds.
@@ -461,11 +464,11 @@ private:
 
 Separate from `PermutationCache`, `PipelineCache` operates at the driver level:
 
-| Backend | Native Object | Persistence |
-|---------|--------------|-------------|
-| Vulkan | `VkPipelineCache` | Binary blob to disk, validated by `PipelineCacheHeader` (magic + driver version + device ID) |
-| D3D12 | `ID3D12PipelineLibrary` | Serialized pipeline library |
-| OpenGL / WebGPU / Mock | No-op | Pass-through |
+| Backend                | Native Object           | Persistence                                                                                  |
+| ---------------------- | ----------------------- | -------------------------------------------------------------------------------------------- |
+| Vulkan                 | `VkPipelineCache`       | Binary blob to disk, validated by `PipelineCacheHeader` (magic + driver version + device ID) |
+| D3D12                  | `ID3D12PipelineLibrary` | Serialized pipeline library                                                                  |
+| OpenGL / WebGPU / Mock | No-op                   | Pass-through                                                                                 |
 
 ```cpp
 class PipelineCache {
@@ -524,6 +527,7 @@ graph TD
 ### 6.2 IncludeDepGraph
 
 Internal helper class that scans `.slang` files for:
+
 - `#include "path"` → direct file path dependency
 - `import module.name;` → resolved to `{parent_dir}/{module/name}.slang`
 
@@ -543,11 +547,11 @@ When a file changes:
 
 ### 6.4 Platform-Specific File Watching
 
-| Platform | Mechanism | Latency |
-|----------|-----------|---------|
-| Windows | `ReadDirectoryChangesW` + overlapped I/O | <50ms + debounce |
-| POSIX | `std::filesystem::last_write_time` polling (200ms interval) | <400ms + debounce |
-| Future | `inotify` (Linux), `FSEvents` (macOS) — Phase 15a | <20ms |
+| Platform | Mechanism                                                   | Latency           |
+| -------- | ----------------------------------------------------------- | ----------------- |
+| Windows  | `ReadDirectoryChangesW` + overlapped I/O                    | <50ms + debounce  |
+| POSIX    | `std::filesystem::last_write_time` polling (200ms interval) | <400ms + debounce |
+| Future   | `inotify` (Linux), `FSEvents` (macOS) — Phase 15a           | <20ms             |
 
 ### 6.5 Public API
 
@@ -624,47 +628,47 @@ all targets. **Compilation-only — no GPU required**. Run on every CI build.
 
 #### Universal Probes (all targets)
 
-| # | Test Name | Feature | Tier1 only? |
-|---|-----------|---------|:-----------:|
-| 1 | `struct_array` | Nested structs with padding | No |
-| 2 | `atomics_32` | 32-bit atomic operations | No |
-| 3 | `atomics_64` | 64-bit atomics (`InterlockedAdd64`) | Yes |
-| 4 | `subgroup_ballot` | `WaveBallot` / `subgroupBallot` | No |
-| 5 | `subgroup_shuffle` | `WaveReadLaneAt` / `subgroupShuffle` | No |
-| 6 | `subgroup_clustered` | `WaveActiveSum` clustered reduce | No |
-| 7 | `push_constants` | `[vk::push_constant]` block | No |
-| 8 | `texture_array` | Texture2DArray + bindless | No |
-| 9 | `compute_shared` | `groupshared` / shared memory layout | No |
-| 10 | `barrier_semantics` | Memory vs execution barriers | No |
-| 11 | `binding_map` | `[vk::binding]` → layout mapping | No |
-| 12 | `half_precision` | `float16_t` / `half` support detection | No |
-| 13 | `image_atomics` | Image load/store + atomics | No |
-| 14 | `mesh_shader` | `[shader("mesh")]` entry point | Yes |
+| #   | Test Name            | Feature                                | Tier1 only? |
+| --- | -------------------- | -------------------------------------- | :---------: |
+| 1   | `struct_array`       | Nested structs with padding            |     No      |
+| 2   | `atomics_32`         | 32-bit atomic operations               |     No      |
+| 3   | `atomics_64`         | 64-bit atomics (`InterlockedAdd64`)    |     Yes     |
+| 4   | `subgroup_ballot`    | `WaveBallot` / `subgroupBallot`        |     No      |
+| 5   | `subgroup_shuffle`   | `WaveReadLaneAt` / `subgroupShuffle`   |     No      |
+| 6   | `subgroup_clustered` | `WaveActiveSum` clustered reduce       |     No      |
+| 7   | `push_constants`     | `[vk::push_constant]` block            |     No      |
+| 8   | `texture_array`      | Texture2DArray + bindless              |     No      |
+| 9   | `compute_shared`     | `groupshared` / shared memory layout   |     No      |
+| 10  | `barrier_semantics`  | Memory vs execution barriers           |     No      |
+| 11  | `binding_map`        | `[vk::binding]` → layout mapping       |     No      |
+| 12  | `half_precision`     | `float16_t` / `half` support detection |     No      |
+| 13  | `image_atomics`      | Image load/store + atomics             |     No      |
+| 14  | `mesh_shader`        | `[shader("mesh")]` entry point         |     Yes     |
 
 #### GLSL-Specific Probes (Phase 1b)
 
-| # | Test Name | Feature |
-|---|-----------|---------|
-| 15 | `glsl_ssbo_mapping` | BDA → SSBO array index mapping |
-| 16 | `glsl_binding_layout` | `layout(binding=N)` vs descriptor set |
-| 17 | `glsl_texture_units` | Texture unit limits |
-| 18 | `glsl_workgroup` | Workgroup size constraints |
-| 19 | `glsl_shared_memory` | Shared memory layout |
-| 20 | `glsl_image_load_store` | Image load/store ops |
-| 21 | `glsl_atomic_32` | 32-bit atomics in GLSL |
-| 22 | `glsl_push_constant_ubo` | Push constant → UBO rewrite |
+| #   | Test Name                | Feature                               |
+| --- | ------------------------ | ------------------------------------- |
+| 15  | `glsl_ssbo_mapping`      | BDA → SSBO array index mapping        |
+| 16  | `glsl_binding_layout`    | `layout(binding=N)` vs descriptor set |
+| 17  | `glsl_texture_units`     | Texture unit limits                   |
+| 18  | `glsl_workgroup`         | Workgroup size constraints            |
+| 19  | `glsl_shared_memory`     | Shared memory layout                  |
+| 20  | `glsl_image_load_store`  | Image load/store ops                  |
+| 21  | `glsl_atomic_32`         | 32-bit atomics in GLSL                |
+| 22  | `glsl_push_constant_ubo` | Push constant → UBO rewrite           |
 
 #### WGSL-Specific Probes (Phase 1b)
 
-| # | Test Name | Feature |
-|---|-----------|---------|
-| 23 | `wgsl_storage_alignment` | Storage buffer alignment rules |
-| 24 | `wgsl_workgroup_limits` | Workgroup size limits |
-| 25 | `wgsl_no_64bit_atomics` | 64-bit atomic → error (not silent miscompile) |
-| 26 | `wgsl_group_binding` | `@group(N) @binding(M)` mapping |
-| 27 | `wgsl_texture_sample` | Texture sampling ops |
-| 28 | `wgsl_array_stride` | Array stride alignment |
-| 29 | `wgsl_push_constant_ubo` | Push constant → UBO `@group(0)@binding(0)` |
+| #   | Test Name                | Feature                                       |
+| --- | ------------------------ | --------------------------------------------- |
+| 23  | `wgsl_storage_alignment` | Storage buffer alignment rules                |
+| 24  | `wgsl_workgroup_limits`  | Workgroup size limits                         |
+| 25  | `wgsl_no_64bit_atomics`  | 64-bit atomic → error (not silent miscompile) |
+| 26  | `wgsl_group_binding`     | `@group(N) @binding(M)` mapping               |
+| 27  | `wgsl_texture_sample`    | Texture sampling ops                          |
+| 28  | `wgsl_array_stride`      | Array stride alignment                        |
+| 29  | `wgsl_push_constant_ubo` | Push constant → UBO `@group(0)@binding(0)`    |
 
 ### 7.3 Tier Degradation Validation
 
@@ -725,20 +729,21 @@ graph LR
 ```
 
 `IPipelineFactory::Create(IDevice&)` inspects `GpuCapabilityProfile::GetTier()`:
+
 - `Tier1_Full` → `MainPipelineFactory`
 - All others → `CompatPipelineFactory`
 
 ### 8.2 Pass Creation Methods
 
-| Method | Main (Tier1) | Compat (Tier2/3/4) |
-|--------|-------------|-------------------|
-| `CreateGeometryPass` | Mesh shader pipeline | Vertex shader pipeline |
-| `CreateShadowPass` | VSM (virtual shadow map) | CSM (cascade shadow map) |
-| `CreateOITPass` | Linked-list OIT | Weighted OIT |
-| `CreateAOPass` | GTAO | SSAO |
-| `CreateAAPass` | TAA + FSR | FXAA / MSAA |
-| `CreatePickPass` | RT ray query | CPU BVH |
-| `CreateHLRPass` | GPU exact HLR | N/A (Phase 7b) |
+| Method               | Main (Tier1)             | Compat (Tier2/3/4)       |
+| -------------------- | ------------------------ | ------------------------ |
+| `CreateGeometryPass` | Mesh shader pipeline     | Vertex shader pipeline   |
+| `CreateShadowPass`   | VSM (virtual shadow map) | CSM (cascade shadow map) |
+| `CreateOITPass`      | Linked-list OIT          | Weighted OIT             |
+| `CreateAOPass`       | GTAO                     | SSAO                     |
+| `CreateAAPass`       | TAA + FSR                | FXAA / MSAA              |
+| `CreatePickPass`     | RT ray query             | CPU BVH                  |
+| `CreateHLRPass`      | GPU exact HLR            | N/A (Phase 7b)           |
 
 Each factory method accepts a pass-specific descriptor (`ShadowPassDesc`, `AOPassDesc`, etc.)
 and returns a `PipelineHandle`. Rendering code never contains `if (compat)` branches —
@@ -782,6 +787,7 @@ allocation of indices within this global set.
 ### 9.3 Reflection-Driven Per-Pass Layout (Sets 0-2)
 
 For each render pass:
+
 1. Compile shader → `Reflect()` → `ShaderReflection::bindings`
 2. Filter bindings by set number (0, 1, or 2)
 3. Auto-generate `DescriptorSetLayoutDesc` from reflected bindings
@@ -823,6 +829,7 @@ endif()
 ### 10.3 WASM Build (Decision #6)
 
 For Emscripten/WASM shipping:
+
 - All WGSL blobs pre-compiled at build time via `SlangCompiler::CompileQuadTarget()`
 - Offline tool: `miki-shader-compile --target wgsl --input shaders/ --output shaders/wgsl/`
 - WASM runtime loads `.wgsl` blobs directly — no Slang dependency at runtime
@@ -832,33 +839,33 @@ For Emscripten/WASM shipping:
 
 ## 11. Gap Analysis — Reference vs Target
 
-| Component | Reference (`D:\repos\miki`) | mitsuki Target | Action |
-|-----------|---------------------------|---------------|--------|
-| `SlangCompiler` | Pimpl, quad-target, session-per-compile | **Reuse** with upgrades: session reuse for incremental, module caching | Refactor Impl |
-| `ShaderTypes` | Complete: all enums, BlOb, Reflection, PermutationKey | **Reuse** as-is | Direct import |
-| `ShaderTargetForBackend` | Maps OpenGL → SPIRV (GL_ARB_gl_spirv) | **Reuse** — correct design | Direct import |
-| `PermutationCache` | LRU + disk cache, thread-safe, source hash validation | **Reuse** with upgrades: `#include`-aware hash (hash all transitively included sources) | Refactor |
-| `ShaderWatcher` | ReadDirectoryChangesW + polling, IncludeDepGraph, debounce | **Reuse** with upgrades: `std::jthread` (C++20 → C++23), transitive dep closure | Refactor |
-| `SlangFeatureProbe` | 29 probes, SPIR-V/DXIL/GLSL/WGSL targets, tier1Only flag | **Reuse** as-is — well-designed | Direct import |
-| `IPipelineFactory` | Dual factory (Main/Compat), 7 pass creation methods | **Reuse** — matches spec exactly | Direct import |
-| `PipelineCache` | VkPipelineCache + D3D12PipelineLibrary + header validation | **Reuse** as-is | Direct import |
-| `probe_*.slang` (29 files) | Comprehensive test shaders | **Reuse** — covers all target-specific edge cases | Direct import |
-| Incremental module compilation | Not implemented (new session per compile) | **New**: session reuse + module cache across frames | New code |
-| `#include`-aware disk cache hash | Hashes only root source file | **New**: hash must include all transitively `#include`'d files | New code |
-| Transitive dep graph | 1-level deep `GetAffected()` | **New**: full transitive closure via BFS/DFS | New code |
-| Offline WGSL compiler tool | Not implemented | **New**: CLI tool for WASM build pipeline | New code |
-| Slang source CMake integration | Prebuilt DLLs | **New**: `add_subdirectory` source build + hybrid option | New CMake |
+| Component                        | Reference (`D:\repos\miki`)                                | mitsuki Target                                                                          | Action        |
+| -------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------- |
+| `SlangCompiler`                  | Pimpl, quad-target, session-per-compile                    | **Reuse** with upgrades: session reuse for incremental, module caching                  | Refactor Impl |
+| `ShaderTypes`                    | Complete: all enums, BlOb, Reflection, PermutationKey      | **Reuse** as-is                                                                         | Direct import |
+| `ShaderTargetForBackend`         | Maps OpenGL → SPIRV (GL_ARB_gl_spirv)                      | **Reuse** — correct design                                                              | Direct import |
+| `PermutationCache`               | LRU + disk cache, thread-safe, source hash validation      | **Reuse** with upgrades: `#include`-aware hash (hash all transitively included sources) | Refactor      |
+| `ShaderWatcher`                  | ReadDirectoryChangesW + polling, IncludeDepGraph, debounce | **Reuse** with upgrades: `std::jthread` (C++20 → C++23), transitive dep closure         | Refactor      |
+| `SlangFeatureProbe`              | 29 probes, SPIR-V/DXIL/GLSL/WGSL targets, tier1Only flag   | **Reuse** as-is — well-designed                                                         | Direct import |
+| `IPipelineFactory`               | Dual factory (Main/Compat), 7 pass creation methods        | **Reuse** — matches spec exactly                                                        | Direct import |
+| `PipelineCache`                  | VkPipelineCache + D3D12PipelineLibrary + header validation | **Reuse** as-is                                                                         | Direct import |
+| `probe_*.slang` (29 files)       | Comprehensive test shaders                                 | **Reuse** — covers all target-specific edge cases                                       | Direct import |
+| Incremental module compilation   | Not implemented (new session per compile)                  | **New**: session reuse + module cache across frames                                     | New code      |
+| `#include`-aware disk cache hash | Hashes only root source file                               | **New**: hash must include all transitively `#include`'d files                          | New code      |
+| Transitive dep graph             | 1-level deep `GetAffected()`                               | **New**: full transitive closure via BFS/DFS                                            | New code      |
+| Offline WGSL compiler tool       | Not implemented                                            | **New**: CLI tool for WASM build pipeline                                               | New code      |
+| Slang source CMake integration   | Prebuilt DLLs                                              | **New**: `add_subdirectory` source build + hybrid option                                | New CMake     |
 
 ---
 
 ## 12. Phase Delivery Schedule
 
-| Phase | Deliverables | Test Count |
-|-------|-------------|:----------:|
-| **1a** | `SlangCompiler` (dual-target SPIR-V+DXIL), `PermutationCache` (memory+disk), `SlangFeatureProbe` (14 universal probes), `ShaderTypes`, `IPipelineFactory` (CreateGeometryPass only), `PipelineCache` | ~55 |
-| **1b** | Quad-target (+GLSL+WGSL), `ShaderWatcher` (hot-reload), GLSL probes (8), WGSL probes (7), `CompatPipelineFactory` validated | ~35 |
-| **2** | Reflection-driven descriptor layout for forward pass, `StandardPBR` permutations | ~15 |
-| **3a** | Session reuse / incremental module compilation, transitive dep graph, `#include`-aware cache hash | ~10 |
+| Phase  | Deliverables                                                                                                                                                                                         | Test Count |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------: |
+| **1a** | `SlangCompiler` (dual-target SPIR-V+DXIL), `PermutationCache` (memory+disk), `SlangFeatureProbe` (14 universal probes), `ShaderTypes`, `IPipelineFactory` (CreateGeometryPass only), `PipelineCache` |    ~55     |
+| **1b** | Quad-target (+GLSL+WGSL), `ShaderWatcher` (hot-reload), GLSL probes (8), WGSL probes (7), `CompatPipelineFactory` validated                                                                          |    ~35     |
+| **2**  | Reflection-driven descriptor layout for forward pass, `StandardPBR` permutations                                                                                                                     |    ~15     |
+| **3a** | Session reuse / incremental module compilation, transitive dep graph, `#include`-aware cache hash                                                                                                    |    ~10     |
 
 ---
 
@@ -866,25 +873,94 @@ For Emscripten/WASM shipping:
 
 ### 13.1 Unit Tests
 
-| Test Group | Count | Key Tests |
-|-----------|:-----:|-----------|
-| ShaderTypes | 5 | PermutationKey bit ops, ShaderTargetForBackend mapping, ShaderCompileDesc construction |
-| SlangCompiler | 12 | Create, Compile SPIR-V, Compile DXIL, CompileDualTarget, CompileQuadTarget, Reflect bindings, Reflect vertex inputs, Reflect push constants, Reflect struct layouts, Reflect module constants, AddSearchPath, invalid source error |
-| PermutationCache | 10 | GetOrCompile cache miss, cache hit, LRU eviction, disk cache write, disk cache read, stale hash rejection, Insert, Clear, Size, thread-safety (concurrent GetOrCompile) |
-| ShaderWatcher | 8 | Create, Start valid dir, Start invalid dir, Poll empty, file change detection, generation increment, GetLastErrors on compile failure, Stop idempotent |
-| SlangFeatureProbe (SPIR-V) | 14 | All universal probes compiled to SPIR-V |
-| SlangFeatureProbe (DXIL) | 14 | All universal probes compiled to DXIL |
-| SlangFeatureProbe (GLSL) | 8 | GLSL-specific probes (Phase 1b) |
-| SlangFeatureProbe (WGSL) | 7 | WGSL-specific probes (Phase 1b) |
-| IPipelineFactory | 5 | Create dispatch (Tier1→Main, Tier2→Compat), CreateGeometryPass, GetTier, NotImplemented for unimplemented passes |
-| PipelineCache | 5 | Load empty, Load valid, Load stale header, Save, GetNativeHandle |
+| Test Group                 | Count | Key Tests                                                                                                                                                                                                                          |
+| -------------------------- | :---: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ShaderTypes                |   5   | PermutationKey bit ops, ShaderTargetForBackend mapping, ShaderCompileDesc construction                                                                                                                                             |
+| SlangCompiler              |  12   | Create, Compile SPIR-V, Compile DXIL, CompileDualTarget, CompileQuadTarget, Reflect bindings, Reflect vertex inputs, Reflect push constants, Reflect struct layouts, Reflect module constants, AddSearchPath, invalid source error |
+| PermutationCache           |  10   | GetOrCompile cache miss, cache hit, LRU eviction, disk cache write, disk cache read, stale hash rejection, Insert, Clear, Size, thread-safety (concurrent GetOrCompile)                                                            |
+| ShaderWatcher              |   8   | Create, Start valid dir, Start invalid dir, Poll empty, file change detection, generation increment, GetLastErrors on compile failure, Stop idempotent                                                                             |
+| SlangFeatureProbe (SPIR-V) |  14   | All universal probes compiled to SPIR-V                                                                                                                                                                                            |
+| SlangFeatureProbe (DXIL)   |  14   | All universal probes compiled to DXIL                                                                                                                                                                                              |
+| SlangFeatureProbe (GLSL)   |   8   | GLSL-specific probes (Phase 1b)                                                                                                                                                                                                    |
+| SlangFeatureProbe (WGSL)   |   7   | WGSL-specific probes (Phase 1b)                                                                                                                                                                                                    |
+| IPipelineFactory           |   5   | Create dispatch (Tier1→Main, Tier2→Compat), CreateGeometryPass, GetTier, NotImplemented for unimplemented passes                                                                                                                   |
+| PipelineCache              |   5   | Load empty, Load valid, Load stale header, Save, GetNativeHandle                                                                                                                                                                   |
 
 ### 13.2 Integration Tests
 
-| Test | Description |
-|------|-------------|
-| Dual-target E2E | Compile triangle.slang → SPIR-V + DXIL → create pipelines on Vulkan + D3D12 |
-| Quad-target E2E | Compile → all 4 targets → create pipelines on all 5 backends (Phase 1b) |
-| Hot-reload E2E | Start watcher → modify .slang → Poll → verify pipeline swap |
-| Permutation E2E | Same shader with 4 permutation variants → verify distinct blobs |
-| Reflection E2E | Compile PBR shader → verify bindings match expected layout → auto-generate DescriptorSetLayout |
+| Test            | Description                                                                                    |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| Dual-target E2E | Compile triangle.slang → SPIR-V + DXIL → create pipelines on Vulkan + D3D12                    |
+| Quad-target E2E | Compile → all 4 targets → create pipelines on all 5 backends (Phase 1b)                        |
+| Hot-reload E2E  | Start watcher → modify .slang → Poll → verify pipeline swap                                    |
+| Permutation E2E | Same shader with 4 permutation variants → verify distinct blobs                                |
+| Reflection E2E  | Compile PBR shader → verify bindings match expected layout → auto-generate DescriptorSetLayout |
+
+---
+
+## 14. Logging & Output Validation
+
+### 14.1 Logging Strategy
+
+The shader subsystem uses `LogCategory::Shader` via the structured logger (`StructuredLogger`).
+All log calls go through `MIKI_LOG_*` macros — zero-contention hot path (thread-local SPSC ring).
+
+| Component           | Event                     | Level            | Content                                                               |
+| ------------------- | ------------------------- | ---------------- | --------------------------------------------------------------------- |
+| `SlangCompiler`     | Global session created    | Info             | Initialization confirmation                                           |
+| `SlangCompiler`     | Compile entry             | Debug            | Source path, target type, shader stage                                |
+| `SlangCompiler`     | Compile success           | Info             | Source path, target type, blob size (bytes), wall-clock time (ms)     |
+| `SlangCompiler`     | Compile failure           | Error            | Source path, target type, wall-clock time (ms)                        |
+| `SlangCompiler`     | Slang diagnostic          | Error/Warn/Debug | Full diagnostic message from Slang (also stored in `lastDiagnostics`) |
+| `SlangCompiler`     | Session pool hit          | Trace            | Target type                                                           |
+| `SlangCompiler`     | Session pool miss         | Debug            | Target type + version                                                 |
+| `SlangCompiler`     | Session creation failure  | Error            | Target type                                                           |
+| `SlangCompiler`     | Session cache invalidated | Debug            | Number of evicted sessions                                            |
+| `SlangCompiler`     | GLSL post-process         | Trace            | Vulkan→OpenGL builtin replacement applied                             |
+| `SlangCompiler`     | Blob validation failure   | Error            | Target type, source path, validation error detail                     |
+| `SlangCompiler`     | Search path added         | Debug            | Path string                                                           |
+| `PermutationCache`  | Memory cache hit          | Debug            | Source path, entry point                                              |
+| `PermutationCache`  | Disk cache hit            | Debug            | Source path, blob size                                                |
+| `PermutationCache`  | Cache miss → compile      | Debug            | Source path, entry point                                              |
+| `PermutationCache`  | Disk cache write          | Trace            | Disk file path                                                        |
+| `PermutationCache`  | Cache cleared             | Debug            | Number of evicted entries                                             |
+| `ShaderWatcher`     | Watch started             | Info             | Canonical watch directory path                                        |
+| `ShaderWatcher`     | Watch stopped             | Info             | —                                                                     |
+| `ShaderWatcher`     | Files changed             | Debug            | Changed file count, affected file count (transitive)                  |
+| `ShaderWatcher`     | Recompile entry           | Debug            | File path                                                             |
+| `ShaderWatcher`     | Hot-reload success        | Info             | File path, generation counter                                         |
+| `ShaderWatcher`     | Hot-reload failure        | Warn             | File path, error message                                              |
+| `ShaderWatcher`     | Invalid watch directory   | Error            | Directory path                                                        |
+| `SlangFeatureProbe` | RunAll start              | Info             | Target count, probe count                                             |
+| `SlangFeatureProbe` | RunAll summary            | Info             | Pass/fail/skip counts                                                 |
+| `SlangFeatureProbe` | Probe pass                | Trace            | Probe name, blob size                                                 |
+| `SlangFeatureProbe` | Probe fail                | Trace            | Probe name                                                            |
+| `SlangFeatureProbe` | Probe empty blob          | Warn             | Probe name, target                                                    |
+
+### 14.2 Performance Guarantees
+
+| Concern                | Guarantee                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Release build**      | `MIKI_MIN_LOG_LEVEL=2` (Info) — all Trace/Debug calls eliminated at compile time by `if constexpr`            |
+| **Hot path cost**      | `MIKI_LOG` writes to thread-local SPSC ring (~50ns). Shader compilation is 1–100ms — logging overhead < 0.05% |
+| **Blob validation**    | Guarded by `#ifndef NDEBUG` — zero cost in Release builds                                                     |
+| **No heap allocation** | Log messages formatted into 512-byte stack buffer via `std::format_to_n`                                      |
+
+### 14.3 Output Blob Validation (Debug Only)
+
+After successful compilation, `ValidateOutputBlob()` performs lightweight structural checks.
+**Enabled only in debug builds** (`#ifndef NDEBUG`). Validation failure returns `ShaderCompilationFailed` error.
+
+| Target     | Checks                                                                            |
+| ---------- | --------------------------------------------------------------------------------- |
+| **SPIR-V** | Magic number `0x07230203`, minimum 20 bytes (5 × uint32 header), 4-byte alignment |
+| **DXIL**   | DXBC container magic `0x43425844`, minimum 24 bytes (container header)            |
+| **GLSL**   | Non-empty, contains `#version` directive                                          |
+| **WGSL**   | Non-empty, minimum 8 bytes                                                        |
+
+### 14.4 Design Rationale
+
+- **Diagnostics flow to both systems**: Slang diagnostics are stored in `lastDiagnostics` (for programmatic access via `GetLastDiagnostics()`) **and** piped to `MIKI_LOG` (for crash dumps, file sinks, and console output).
+- **No `spirv-val` at compile time**: Full SPIR-V semantic validation adds 10–50ms/shader. Reserved for offline CI validation tool, not runtime compilation.
+- **No source code in logs**: Shader source is not logged (512-byte ring entry overflow risk + security).
+- **Tag prefix convention**: All shader log messages use `[ComponentName]` prefix (e.g., `[SlangCompiler]`, `[PermutationCache]`) for grep-ability.
