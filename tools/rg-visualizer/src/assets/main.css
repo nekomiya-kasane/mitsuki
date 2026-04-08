@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #6366f1;
+  --color-primary-hover: #818cf8;
+  --color-surface: #18181b;
+  --color-surface-alt: #27272a;
+  --color-border: #3f3f46;
+  --color-accent-graphics: #6366f1;
+  --color-accent-compute: #f59e0b;
+  --color-accent-transfer: #10b981;
+  --color-hazard-raw: #ef4444;
+  --color-hazard-war: #f59e0b;
+  --color-hazard-waw: #8b5cf6;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
