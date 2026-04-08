@@ -86,6 +86,7 @@ namespace miki::rhi {
             return;
         }
 
+        auto pcBindGroup = device_->GetPushConstantBindGroup();
         if (data->isCompute) {
             // Auto-begin compute pass if not already in one
             if (!inComputePass_) {
@@ -98,9 +99,15 @@ namespace miki::rhi {
             }
             if (inComputePass_ && computePass_) {
                 wgpuComputePassEncoderSetPipeline(computePass_, data->computePipeline);
+                if (pcBindGroup) {
+                    wgpuComputePassEncoderSetBindGroup(computePass_, kPushConstantGroupIndex, pcBindGroup, 0, nullptr);
+                }
             }
         } else if (!data->isCompute && inRenderPass_ && renderPass_) {
             wgpuRenderPassEncoderSetPipeline(renderPass_, data->renderPipeline);
+            if (pcBindGroup) {
+                wgpuRenderPassEncoderSetBindGroup(renderPass_, kPushConstantGroupIndex, pcBindGroup, 0, nullptr);
+            }
         }
     }
 
@@ -112,8 +119,8 @@ namespace miki::rhi {
             return;
         }
 
-        // User set N maps to WebGPU group(N+1), because group(0) is reserved for push constants
-        uint32_t groupIndex = set + 1;
+        // User set N maps to WebGPU group(N + kPushConstantGroupIndex + 1)
+        uint32_t groupIndex = set + kPushConstantGroupIndex + 1;
 
         if (inRenderPass_ && renderPass_) {
             wgpuRenderPassEncoderSetBindGroup(renderPass_, groupIndex, dsData->bindGroup, 0, nullptr);
@@ -125,17 +132,15 @@ namespace miki::rhi {
     void WebGPUCommandBuffer::CmdPushConstantsImpl(
         [[maybe_unused]] ShaderStage stages, uint32_t offset, uint32_t size, const void* data
     ) {
-        // Write to the push constant UBO via queue write, then bind group(0)
         auto queue = device_->GetWGPUQueue();
         auto pcBuffer = device_->GetPushConstantBuffer();
         wgpuQueueWriteBuffer(queue, pcBuffer, offset, data, size);
 
-        // Bind the push constant bind group at group(0)
         auto pcBindGroup = device_->GetPushConstantBindGroup();
         if (inRenderPass_ && renderPass_) {
-            wgpuRenderPassEncoderSetBindGroup(renderPass_, 0, pcBindGroup, 0, nullptr);
+            wgpuRenderPassEncoderSetBindGroup(renderPass_, kPushConstantGroupIndex, pcBindGroup, 0, nullptr);
         } else if (inComputePass_ && computePass_) {
-            wgpuComputePassEncoderSetBindGroup(computePass_, 0, pcBindGroup, 0, nullptr);
+            wgpuComputePassEncoderSetBindGroup(computePass_, kPushConstantGroupIndex, pcBindGroup, 0, nullptr);
         }
     }
 

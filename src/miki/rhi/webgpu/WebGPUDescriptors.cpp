@@ -129,9 +129,9 @@ namespace miki::rhi {
             return std::unexpected(RhiError::TooManyObjects);
         }
 
-        // Build bind group layout array: group(0) = push constant BGL, then user BGLs shifted
+        // Build bind group layout array: group(kPushConstantGroupIndex) = push constant BGL, then user BGLs
         std::vector<WGPUBindGroupLayout> bgls;
-        bgls.push_back(pushConstantBindGroupLayout_);  // group(0) reserved for push constants
+        bgls.push_back(pushConstantBindGroupLayout_);  // reserved for push constants
 
         for (auto setLayout : desc.setLayouts) {
             auto* layoutData = descriptorLayouts_.Lookup(setLayout);

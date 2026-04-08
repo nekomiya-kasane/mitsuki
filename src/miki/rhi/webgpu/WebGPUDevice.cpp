@@ -210,6 +210,7 @@ namespace miki::rhi {
     void WebGPUDevice::PopulateCapabilities() {
         auto& cap = capabilities_;
         cap.tier = CapabilityTier::Tier3_WebGPU;
+        cap.backendType = BackendType::WebGPU;
 
         WGPULimits lim{};
         wgpuDeviceGetLimits(device_, &lim);
@@ -225,7 +226,7 @@ namespace miki::rhi {
         cap.descriptorModel = DescriptorModel::BindGroup;
         cap.hasBindless = false;
         cap.hasPushDescriptors = false;
-        cap.maxPushConstantSize = 256;  // Emulated via UBO
+        cap.maxPushConstantSize = kPushConstantBufferSize;  // Emulated via UBO
         cap.maxBoundDescriptorSets = lim.maxBindGroups;
         cap.maxStorageBufferSize = lim.maxStorageBufferBindingSize;
 
@@ -371,21 +372,19 @@ namespace miki::rhi {
     // =========================================================================
 
     void WebGPUDevice::CreatePushConstantResources() {
-        // 256-byte uniform buffer at group(0), binding(0)
         WGPUBufferDescriptor bufDesc{};
         bufDesc.label = {.data = "miki_push_constants", .length = WGPU_STRLEN};
         bufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        bufDesc.size = 256;
+        bufDesc.size = kPushConstantBufferSize;
         bufDesc.mappedAtCreation = false;
         pushConstantBuffer_ = wgpuDeviceCreateBuffer(device_, &bufDesc);
 
-        // Bind group layout: single uniform buffer at binding 0
         WGPUBindGroupLayoutEntry entry{};
-        entry.binding = 0;
+        entry.binding = kPushConstantBindingIndex;
         entry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment | WGPUShaderStage_Compute;
         entry.buffer.type = WGPUBufferBindingType_Uniform;
         entry.buffer.hasDynamicOffset = false;
-        entry.buffer.minBindingSize = 256;
+        entry.buffer.minBindingSize = kPushConstantBufferSize;
 
         WGPUBindGroupLayoutDescriptor bglDesc{};
         bglDesc.label = {.data = "miki_push_constant_layout", .length = WGPU_STRLEN};
@@ -393,12 +392,11 @@ namespace miki::rhi {
         bglDesc.entries = &entry;
         pushConstantBindGroupLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &bglDesc);
 
-        // Bind group
         WGPUBindGroupEntry bgEntry{};
-        bgEntry.binding = 0;
+        bgEntry.binding = kPushConstantBindingIndex;
         bgEntry.buffer = pushConstantBuffer_;
         bgEntry.offset = 0;
-        bgEntry.size = 256;
+        bgEntry.size = kPushConstantBufferSize;
 
         WGPUBindGroupDescriptor bgDesc{};
         bgDesc.label = {.data = "miki_push_constant_bind_group", .length = WGPU_STRLEN};

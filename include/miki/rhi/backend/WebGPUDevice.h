@@ -25,6 +25,20 @@
 namespace miki::rhi {
 
     // =========================================================================
+    // Push-constant emulation layout constants
+    // =========================================================================
+
+    /// WebGPU bind-group index reserved for the push-constant UBO.
+    /// All user bind groups are shifted by +1 (user set N → WebGPU group N+1).
+    static constexpr uint32_t kPushConstantGroupIndex = 0;
+
+    /// Binding slot within the push-constant bind group.
+    static constexpr uint32_t kPushConstantBindingIndex = 0;
+
+    /// Size (bytes) of the emulated push-constant UBO (derived from cross-platform max).
+    static constexpr uint32_t kPushConstantBufferSize = kMaxPushConstantSize;
+
+    // =========================================================================
     // Per-resource backend payloads (stored in HandlePool slots)
     // =========================================================================
 
