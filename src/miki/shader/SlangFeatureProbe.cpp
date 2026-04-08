@@ -1,8 +1,10 @@
 /** @brief SlangFeatureProbe implementation -- compiles probe shaders and collects results. */
 
 #include "miki/shader/SlangFeatureProbe.h"
-#include "miki/shader/SlangCompiler.h"
+
 #include "miki/core/ErrorCode.h"
+#include "miki/debug/StructuredLogger.h"
+#include "miki/shader/SlangCompiler.h"
 
 #include <algorithm>
 #include <array>
@@ -22,37 +24,176 @@ namespace miki::shader {
     };
 
     static constexpr std::array kProbes = {
-        ProbeDesc{"struct_array", "probe_struct_array.slang", ShaderStage::Compute, false},
-        ProbeDesc{"atomics_32", "probe_atomics_32.slang", ShaderStage::Compute, false},
-        ProbeDesc{"atomics_64", "probe_atomics_64.slang", ShaderStage::Compute, true},
-        ProbeDesc{"subgroup_ballot", "probe_subgroup_ballot.slang", ShaderStage::Compute, false},
-        ProbeDesc{"subgroup_shuffle", "probe_subgroup_shuffle.slang", ShaderStage::Compute, false},
-        ProbeDesc{"subgroup_clustered", "probe_subgroup_clustered.slang", ShaderStage::Compute, false},
-        ProbeDesc{"push_constants", "probe_push_constants.slang", ShaderStage::Compute, false},
-        ProbeDesc{"texture_array", "probe_texture_array.slang", ShaderStage::Compute, false},
-        ProbeDesc{"compute_shared", "probe_compute_shared.slang", ShaderStage::Compute, false},
-        ProbeDesc{"barrier_semantics", "probe_barrier_semantics.slang", ShaderStage::Compute, false},
-        ProbeDesc{"binding_map", "probe_binding_map.slang", ShaderStage::Compute, false},
-        ProbeDesc{"half_precision", "probe_half_precision.slang", ShaderStage::Compute, false},
-        ProbeDesc{"image_atomics", "probe_image_atomics.slang", ShaderStage::Compute, false},
-        ProbeDesc{"mesh_shader", "probe_mesh_shader.slang", ShaderStage::Mesh, true},
+        ProbeDesc{
+            .name = "struct_array",
+            .filename = "probe_struct_array.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "atomics_32",
+            .filename = "probe_atomics_32.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "atomics_64", .filename = "probe_atomics_64.slang", .stage = ShaderStage::Compute, .tier1Only = true
+        },
+        ProbeDesc{
+            .name = "subgroup_ballot",
+            .filename = "probe_subgroup_ballot.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "subgroup_shuffle",
+            .filename = "probe_subgroup_shuffle.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "subgroup_clustered",
+            .filename = "probe_subgroup_clustered.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "push_constants",
+            .filename = "probe_push_constants.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "texture_array",
+            .filename = "probe_texture_array.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "compute_shared",
+            .filename = "probe_compute_shared.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "barrier_semantics",
+            .filename = "probe_barrier_semantics.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "binding_map",
+            .filename = "probe_binding_map.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "half_precision",
+            .filename = "probe_half_precision.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "image_atomics",
+            .filename = "probe_image_atomics.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "mesh_shader", .filename = "probe_mesh_shader.slang", .stage = ShaderStage::Mesh, .tier1Only = true
+        },
         // --- GLSL-specific probes ---
-        ProbeDesc{"glsl_ssbo_mapping", "probe_glsl_ssbo_mapping.slang", ShaderStage::Compute, false},
-        ProbeDesc{"glsl_binding_layout", "probe_glsl_binding_layout.slang", ShaderStage::Compute, false},
-        ProbeDesc{"glsl_texture_units", "probe_glsl_texture_units.slang", ShaderStage::Compute, false},
-        ProbeDesc{"glsl_workgroup", "probe_glsl_workgroup.slang", ShaderStage::Compute, false},
-        ProbeDesc{"glsl_shared_memory", "probe_glsl_shared_memory.slang", ShaderStage::Compute, false},
-        ProbeDesc{"glsl_image_load_store", "probe_glsl_image_load_store.slang", ShaderStage::Compute, false},
-        ProbeDesc{"glsl_atomic_32", "probe_glsl_atomic_32.slang", ShaderStage::Compute, false},
-        ProbeDesc{"glsl_push_constant_ubo", "probe_glsl_push_constant_ubo.slang", ShaderStage::Compute, false},
+        ProbeDesc{
+            .name = "glsl_ssbo_mapping",
+            .filename = "probe_glsl_ssbo_mapping.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "glsl_binding_layout",
+            .filename = "probe_glsl_binding_layout.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "glsl_texture_units",
+            .filename = "probe_glsl_texture_units.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "glsl_workgroup",
+            .filename = "probe_glsl_workgroup.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "glsl_shared_memory",
+            .filename = "probe_glsl_shared_memory.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "glsl_image_load_store",
+            .filename = "probe_glsl_image_load_store.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "glsl_atomic_32",
+            .filename = "probe_glsl_atomic_32.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "glsl_push_constant_ubo",
+            .filename = "probe_glsl_push_constant_ubo.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
         // --- WGSL-specific probes ---
-        ProbeDesc{"wgsl_storage_alignment", "probe_wgsl_storage_alignment.slang", ShaderStage::Compute, false},
-        ProbeDesc{"wgsl_workgroup_limits", "probe_wgsl_workgroup_limits.slang", ShaderStage::Compute, false},
-        ProbeDesc{"wgsl_no_64bit_atomics", "probe_wgsl_no_64bit_atomics.slang", ShaderStage::Compute, true},
-        ProbeDesc{"wgsl_group_binding", "probe_wgsl_group_binding.slang", ShaderStage::Compute, false},
-        ProbeDesc{"wgsl_texture_sample", "probe_wgsl_texture_sample.slang", ShaderStage::Compute, false},
-        ProbeDesc{"wgsl_array_stride", "probe_wgsl_array_stride.slang", ShaderStage::Compute, false},
-        ProbeDesc{"wgsl_push_constant_ubo", "probe_wgsl_push_constant_ubo.slang", ShaderStage::Compute, false},
+        ProbeDesc{
+            .name = "wgsl_storage_alignment",
+            .filename = "probe_wgsl_storage_alignment.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "wgsl_workgroup_limits",
+            .filename = "probe_wgsl_workgroup_limits.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "wgsl_no_64bit_atomics",
+            .filename = "probe_wgsl_no_64bit_atomics.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = true
+        },
+        ProbeDesc{
+            .name = "wgsl_group_binding",
+            .filename = "probe_wgsl_group_binding.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "wgsl_texture_sample",
+            .filename = "probe_wgsl_texture_sample.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "wgsl_array_stride",
+            .filename = "probe_wgsl_array_stride.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
+        ProbeDesc{
+            .name = "wgsl_push_constant_ubo",
+            .filename = "probe_wgsl_push_constant_ubo.slang",
+            .stage = ShaderStage::Compute,
+            .tier1Only = false
+        },
     };
 
     // ===========================================================================
@@ -85,10 +226,19 @@ namespace miki::shader {
             result.passed = !blob->data.empty();
             if (!result.passed) {
                 result.diagnostic = "Compilation produced empty blob";
+                MIKI_LOG_WARN(
+                    debug::LogCategory::Shader, "[FeatureProbe] {} EMPTY for target {}", iProbe.name,
+                    static_cast<int>(iTarget.type)
+                );
+            } else {
+                MIKI_LOG_TRACE(
+                    debug::LogCategory::Shader, "[FeatureProbe] {} PASS ({} bytes)", iProbe.name, blob->data.size()
+                );
             }
         } else {
             result.passed = false;
             result.diagnostic = "Compilation failed";
+            MIKI_LOG_TRACE(debug::LogCategory::Shader, "[FeatureProbe] {} FAIL", iProbe.name);
         }
         return result;
     }
@@ -104,6 +254,11 @@ namespace miki::shader {
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }
 
+        MIKI_LOG_INFO(
+            debug::LogCategory::Shader, "[FeatureProbe] RunAll: {} target(s), {} probe(s)", iTargets.size(),
+            kProbes.size()
+        );
+
         ProbeReport report;
         for (auto target : iTargets) {
             for (auto const& probe : kProbes) {
@@ -118,6 +273,11 @@ namespace miki::shader {
                 report.results.push_back(std::move(testResult));
             }
         }
+
+        MIKI_LOG_INFO(
+            debug::LogCategory::Shader, "[FeatureProbe] Results: {} passed, {} failed, {} skipped", report.totalPassed,
+            report.totalFailed, report.totalSkipped
+        );
         return report;
     }
 
