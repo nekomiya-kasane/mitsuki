@@ -490,7 +490,8 @@ namespace miki::rhi {
             return;
         }
 #ifndef EMSCRIPTEN
-        // Dawn-specific: poll until idle
+        // Dawn-specific: poll until idle with timeout to prevent infinite hang
+        static constexpr int kMaxTickIterations = 10000;
         bool workDone = false;
         WGPUQueueWorkDoneCallbackInfo workDoneCbInfo{};
         workDoneCbInfo.mode = WGPUCallbackMode_AllowProcessEvents;
@@ -500,7 +501,7 @@ namespace miki::rhi {
         };
         workDoneCbInfo.userdata1 = &workDone;
         wgpuQueueOnSubmittedWorkDone(queue_, workDoneCbInfo);
-        while (!workDone) {
+        for (int i = 0; i < kMaxTickIterations && !workDone; ++i) {
             wgpuDeviceTick(device_);
         }
 #endif

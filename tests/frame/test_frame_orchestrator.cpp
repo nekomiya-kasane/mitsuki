@@ -13,6 +13,7 @@
 
 #include "RhiTestFixture.h"
 #include "miki/frame/AsyncTaskManager.h"
+#include "miki/frame/ComputeQueueLevel.h"
 #include "miki/frame/DeferredDestructor.h"
 #include "miki/frame/FrameOrchestrator.h"
 #include "miki/frame/SyncScheduler.h"
@@ -40,6 +41,9 @@ class FrameOrchestratorTest : public RhiTest {
         // FrameOrchestrator requires timeline semaphores for SyncScheduler init
         if (GetParam() == BackendType::Mock) {
             GTEST_SKIP() << "FrameOrchestrator requires real sync primitives";
+        }
+        if (!Caps().hasTimelineSemaphore) {
+            GTEST_SKIP() << "Backend lacks timeline semaphores";
         }
     }
 };
@@ -223,6 +227,32 @@ TEST_P(FrameOrchestratorTest, Shutdown02_DoubleShutdown) {
     result->Shutdown();
     result->Shutdown();
     SUCCEED();
+}
+
+// ============================================================================
+// §2.1.5 FO-CQL — ComputeQueueLevel
+// ============================================================================
+
+// FO-CQL-01: GIVEN orch WHEN GetComputeQueueLevel THEN matches DetectComputeQueueLevel
+TEST_P(FrameOrchestratorTest, CQL01_MatchesDetection) {
+    auto result = FrameOrchestrator::Create(Dev(), 2);
+    ASSERT_TRUE(result.has_value());
+
+    auto expected = DetectComputeQueueLevel(Caps());
+    EXPECT_EQ(result->GetComputeQueueLevel(), expected);
+}
+
+// FO-CQL-02: GIVEN orch WHEN GetComputeQueueLevel THEN Vulkan/D3D12 >= Level C
+TEST_P(FrameOrchestratorTest, CQL02_Tier1AtLeastC) {
+    auto bt = GetParam();
+    if (bt != BackendType::Vulkan14 && bt != BackendType::D3D12) {
+        GTEST_SKIP() << "Only Tier1 backends guaranteed async compute";
+    }
+    auto result = FrameOrchestrator::Create(Dev(), 2);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_LE(
+        static_cast<int>(result->GetComputeQueueLevel()), static_cast<int>(ComputeQueueLevel::C_SingleQueueBatch)
+    );
 }
 
 // ============================================================================
