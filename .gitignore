@@ -60,3 +60,5 @@ tools/RenderDocMCP/
 *.swp
 *~
 third_party
+node_modules
+dist
