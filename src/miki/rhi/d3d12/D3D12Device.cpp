@@ -426,7 +426,7 @@ namespace miki::rhi {
         capabilities_.maxTextureSizeCube = D3D12_REQ_TEXTURECUBE_DIMENSION;
         capabilities_.maxColorAttachments = D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT;
         capabilities_.maxViewports = D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-        capabilities_.maxPushConstantSize = 64 * sizeof(uint32_t);  // 64 DWORDs root constants
+        capabilities_.maxPushConstantSize = kMaxPushConstantSize;  // 64 DWORDs root constants
         capabilities_.maxBoundDescriptorSets = 4;
         capabilities_.maxDrawIndirectCount = UINT32_MAX;
         capabilities_.maxStorageBufferSize = UINT64_MAX;

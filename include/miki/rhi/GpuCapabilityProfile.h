@@ -46,6 +46,40 @@ namespace miki::rhi {
         Tier4_OpenGL,  ///< OpenGL 4.3+ fallback
     };
 
+    // =========================================================================
+    // Push constant size limits (compile-time)
+    // =========================================================================
+
+    /// Cross-platform guaranteed minimum push constant size (bytes).
+    /// This is the intersection of all backend limits:
+    ///   Vulkan ≥128B (spec minimum), D3D12 = 256B, WebGPU = 256B (UBO), OpenGL = 128B (UBO).
+    static constexpr uint32_t kMinPushConstantSize = 128;
+
+    /// Maximum push constant size supported by any single backend (bytes).
+    /// D3D12 Root Constants = 256B, WebGPU UBO = 256B, Vulkan typically 256B+.
+    static constexpr uint32_t kMaxPushConstantSize = 256;
+
+    /// Compile-time check: does a push-constant struct fit within the cross-platform minimum?
+    /// Use this when you need the struct to work on ALL backends without runtime checks.
+    /// @tparam T  The push-constant struct type (must be trivially copyable).
+    /// @return true if sizeof(T) <= kMinPushConstantSize.
+    template <typename T>
+    consteval auto PushConstantFitsAllBackends() -> bool {
+        static_assert(std::is_trivially_copyable_v<T>, "Push constant struct must be trivially copyable");
+        return sizeof(T) <= kMinPushConstantSize;
+    }
+
+    /// Compile-time check: does a push-constant struct fit within a specific byte limit?
+    /// Use this for backend-specific validation (e.g. 256B for D3D12/WebGPU).
+    /// @tparam T     The push-constant struct type.
+    /// @tparam Limit Maximum allowed size in bytes.
+    /// @return true if sizeof(T) <= Limit.
+    template <typename T, uint32_t Limit>
+    consteval auto PushConstantFits() -> bool {
+        static_assert(std::is_trivially_copyable_v<T>, "Push constant struct must be trivially copyable");
+        return sizeof(T) <= Limit;
+    }
+
     /** @brief GPU capability profile — immutable after device creation.
      *
      *  Populated by backend-specific device init code. Exposed via
@@ -80,7 +114,7 @@ namespace miki::rhi {
                                                                            ///< DescriptorSet, BindGroup, DirectBind
         bool hasBindless = false;
         bool hasPushDescriptors = false;
-        uint32_t maxPushConstantSize = 128;  ///< 128-256 bytes
+        uint32_t maxPushConstantSize = kMinPushConstantSize;  ///< 128-256 bytes
         uint32_t maxBoundDescriptorSets = 4;
         uint64_t maxStorageBufferSize = 128ULL * 1024 * 1024;  ///< 128MB (WebGPU) to unlimited
 

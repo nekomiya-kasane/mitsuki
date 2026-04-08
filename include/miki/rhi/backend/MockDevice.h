@@ -35,7 +35,7 @@ namespace miki::rhi {
             caps_.maxFramebufferWidth = 16384;
             caps_.maxFramebufferHeight = 16384;
             caps_.maxViewports = 16;
-            caps_.maxPushConstantSize = 128;
+            caps_.maxPushConstantSize = kMinPushConstantSize;
             caps_.maxBoundDescriptorSets = 4;
             caps_.formatSupport = GpuCapabilityProfile::BuildDefaultFormatSupport();
             return {};

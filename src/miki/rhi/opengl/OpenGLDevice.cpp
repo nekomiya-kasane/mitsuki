@@ -320,7 +320,7 @@ namespace miki::rhi {
         gl_->GetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
         capabilities_.maxViewports = static_cast<uint32_t>(maxViewports);
 
-        capabilities_.maxPushConstantSize = 128;  // Emulated via UBO
+        capabilities_.maxPushConstantSize = kMinPushConstantSize;  // Emulated via UBO
         capabilities_.maxBoundDescriptorSets = 4;
         capabilities_.maxDrawIndirectCount = UINT32_MAX;
 
