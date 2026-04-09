@@ -102,6 +102,14 @@ namespace miki::resource {
         // ── Memory management ───────────────────────────────────────
 
         auto ShrinkToFit(uint64_t iTargetTotalBytes) -> uint64_t;
+
+        /// @brief Evict free chunks that have been idle for more than iMaxIdleFrames.
+        /// Symmetric with StagingRing::EvictStaleChunks(). Call from BeginFrame after ReclaimCompleted.
+        /// @param iCurrentFrame  Monotonic frame counter.
+        /// @param iMaxIdleFrames Frames a free chunk may idle before eviction (default 60).
+        /// @return Bytes freed.
+        auto EvictStaleChunks(uint64_t iCurrentFrame, uint32_t iMaxIdleFrames = 60) -> uint64_t;
+
         [[nodiscard]] auto GetUtilization() const noexcept -> float;
 
         // ── Metrics ─────────────────────────────────────────────────

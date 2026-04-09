@@ -31,6 +31,14 @@ namespace miki::resource {
 
     static constexpr uint64_t kStagingRingThreshold = 256ULL * 1024;  // 256KB
 
+    /// @brief Thresholds that trigger a flush-recommended hint in UploadResult.
+    /// Callers (FrameManager, application) should flush pending copies when the hint fires.
+    /// All thresholds use >= comparison. Set to 0 to disable a given threshold.
+    struct UploadPolicy {
+        uint64_t maxPendingBytes = 8ULL << 20;  ///< Accumulated staging bytes before hint (default 8 MB)
+        uint32_t maxPendingCopies = 128;        ///< Pending copy command count before hint
+    };
+
     /// @brief Describes which upload path was used.
     enum class UploadPath : uint8_t {
         StagingRing,       ///< Path A: small data, ring buffer
@@ -44,6 +52,9 @@ namespace miki::resource {
         rhi::BufferHandle stagingBuffer;  ///< Path A/B: staging ring buffer. Path C: dedicated buffer. Path D: invalid.
         uint64_t stagingOffset = 0;       ///< Offset into staging buffer (Path A/B only)
         uint64_t size = 0;
+        bool flushRecommended = false;  ///< True when pending copies exceed UploadPolicy thresholds.
+                                        ///< Caller should call FrameManager::FlushTransfers() or
+                                        ///< DrainPendingTransfers() soon to avoid cmd buffer bloat.
     };
 
     class UploadManager {
@@ -81,6 +92,13 @@ namespace miki::resource {
         [[nodiscard]] auto UploadTexture(
             std::span<const std::byte> iData, rhi::TextureHandle iDst, const TextureUploadRegion& iRegion
         ) -> core::Result<void>;
+
+        /// @brief Check whether pending staging copies exceed UploadPolicy thresholds.
+        /// Use after UploadTexture() (which returns Result<void> and cannot carry the hint).
+        [[nodiscard]] auto ShouldFlush() const noexcept -> bool;
+
+        auto SetUploadPolicy(const UploadPolicy& iPolicy) noexcept -> void;
+        [[nodiscard]] auto GetUploadPolicy() const noexcept -> const UploadPolicy&;
 
        private:
         struct Impl;

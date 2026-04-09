@@ -119,14 +119,21 @@ namespace miki::frame {
         // ── Transfer queue integration ──────────────────────────────
 
         /// @brief Eagerly dispatch pending StagingRing/ReadbackRing copies NOW.
-        /// Call after CPU-side memcpy is done but BEFORE EndFrame — the transfer
-        /// queue runs in parallel with command buffer recording (~2ms overlap).
-        /// If not called, EndFrame will dispatch transfers itself (zero overlap).
-        /// Safe to call multiple times per frame (no-op if already flushed).
-        /// T1 + hasAsyncTransfer: submits to dedicated transfer queue.
-        /// Fallback: defers to EndFrame (cannot eagerly dispatch on graphics queue
-        /// because the user's cmd buffers aren't recorded yet).
+        /// Call after CPU-side memcpy is done but BEFORE EndFrame — the transfer queue runs in parallel with command
+        /// buffer recording (~2ms overlap). If not called, EndFrame will dispatch transfers itself (zero overlap). Safe
+        /// to call multiple times per frame (no-op if already flushed). T1 + hasAsyncTransfer: submits to dedicated
+        /// transfer queue. Fallback: defers to EndFrame (cannot eagerly dispatch on graphics queue because the user's
+        /// cmd buffers aren't recorded yet).
         auto FlushTransfers() -> void;
+
+        /// @brief Submit any pending staging/readback copies immediately.
+        /// For use OUTSIDE the BeginFrame/EndFrame cycle (e.g., bulk asset loading, headless batch).
+        /// Internally: FlushFrame -> Acquire cmd -> RecordTransfers -> Submit -> advance timeline.
+        /// Does NOT rotate frame slots or affect frame pacing.
+        /// No-op if no pending copies exist.
+        /// Safe to call between frames or before the first BeginFrame.
+        /// @return Number of copy commands submitted, or 0 if nothing to drain.
+        [[nodiscard]] auto DrainPendingTransfers() -> uint32_t;
 
         /// @brief Register a transfer completion for this frame.
         /// Graphics queue will wait at the appropriate stage.

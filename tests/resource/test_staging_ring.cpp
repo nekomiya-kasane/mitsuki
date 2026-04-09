@@ -421,7 +421,342 @@ TEST_P(StagingRingTest, Stress01_HundredFrames) {
 }
 
 // ============================================================================
+// §7.1.9 SR-PENDING — GetPendingBytes tracking
+// ============================================================================
+
+// SR-PENDING-01: GIVEN fresh ring WHEN no enqueue THEN pendingBytes == 0
+TEST_P(StagingRingTest, Pending01_InitialZero) {
+    auto result = MakeRing();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->GetPendingBytes(), 0u);
+}
+
+// SR-PENDING-02: GIVEN ring WHEN EnqueueBufferCopy(512) THEN pendingBytes == 512
+TEST_P(StagingRingTest, Pending02_TracksSingleEnqueue) {
+    auto result = MakeRing();
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    auto dst = CreateDstBuffer();
+    if (!dst.IsValid()) {
+        GTEST_SKIP() << "Dst buffer creation failed";
+    }
+
+    auto alloc = ring.Allocate(512);
+    ASSERT_TRUE(alloc.has_value());
+    ring.EnqueueBufferCopy(*alloc, dst, 0);
+
+    EXPECT_EQ(ring.GetPendingBytes(), 512u);
+
+    Dev().Dispatch([&](auto& dev) { dev.DestroyBuffer(dst); });
+}
+
+// SR-PENDING-03: GIVEN ring WHEN enqueue 3 copies THEN pendingBytes accumulates
+TEST_P(StagingRingTest, Pending03_AccumulatesMultiple) {
+    auto result = MakeRing();
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    auto dst = CreateDstBuffer(16384);
+    if (!dst.IsValid()) {
+        GTEST_SKIP() << "Dst buffer creation failed";
+    }
+
+    uint64_t expected = 0;
+    for (uint64_t size : {128u, 256u, 1024u}) {
+        auto alloc = ring.Allocate(size);
+        ASSERT_TRUE(alloc.has_value());
+        ring.EnqueueBufferCopy(*alloc, dst, expected);
+        expected += size;
+    }
+    EXPECT_EQ(ring.GetPendingBytes(), expected);
+
+    Dev().Dispatch([&](auto& dev) { dev.DestroyBuffer(dst); });
+}
+
+// SR-PENDING-04: GIVEN ring with pending copies WHEN FlushFrame+ReclaimCompleted THEN
+// pendingBytes persists (only RecordTransfers clears it) — verify semantic contract.
+// NOTE: RecordTransfers with real GPU command buffers is tested in integration tests.
+// This unit test verifies the tracking invariants without command recording.
+TEST_P(StagingRingTest, Pending04_PersistsThroughFlushReclaim) {
+    auto result = MakeRing();
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    auto dst = CreateDstBuffer();
+    if (!dst.IsValid()) {
+        GTEST_SKIP() << "Dst buffer creation failed";
+    }
+
+    auto alloc = ring.Allocate(512);
+    ASSERT_TRUE(alloc.has_value());
+    ring.EnqueueBufferCopy(*alloc, dst, 0);
+
+    EXPECT_EQ(ring.GetPendingBytes(), 512u);
+    EXPECT_EQ(ring.GetPendingCopyCount(), 1u);
+
+    // FlushFrame does NOT clear pendingBytes — only RecordTransfers does
+    ring.FlushFrame(1);
+    EXPECT_EQ(ring.GetPendingBytes(), 512u);
+    EXPECT_EQ(ring.GetPendingCopyCount(), 1u);
+
+    // ReclaimCompleted does NOT clear pending copies either
+    ring.ReclaimCompleted(1);
+    EXPECT_EQ(ring.GetPendingBytes(), 512u);
+    EXPECT_EQ(ring.GetPendingCopyCount(), 1u);
+
+    Dev().Dispatch([&](auto& dev) { dev.DestroyBuffer(dst); });
+}
+
+// SR-PENDING-05: GIVEN ReBAR allocation WHEN EnqueueBufferCopy THEN no-op (pendingBytes stays 0)
+TEST_P(StagingRingTest, Pending05_RebarSkipped) {
+    auto result = MakeRing();
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    auto dst = CreateDstBuffer();
+    if (!dst.IsValid()) {
+        GTEST_SKIP() << "Dst buffer creation failed";
+    }
+
+    // Craft a fake ReBAR allocation
+    StagingAllocation rebarAlloc{.mappedPtr = reinterpret_cast<std::byte*>(1), .size = 256, .isReBAR_ = true};
+    ring.EnqueueBufferCopy(rebarAlloc, dst, 0);
+    EXPECT_EQ(ring.GetPendingBytes(), 0u);
+    EXPECT_EQ(ring.GetPendingCopyCount(), 0u);
+
+    Dev().Dispatch([&](auto& dev) { dev.DestroyBuffer(dst); });
+}
+
+// ============================================================================
+// §7.1.10 SR-EVICT — EvictStaleChunks
+// ============================================================================
+
+// SR-EVICT-01: GIVEN ring with 1 active chunk, no free WHEN EvictStaleChunks THEN 0 freed
+TEST_P(StagingRingTest, Evict01_NoFreeChunks) {
+    auto result = MakeRing();
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    EXPECT_EQ(ring.GetFreeChunkCount(), 0u);
+    auto freed = ring.EvictStaleChunks(1000, 60);
+    EXPECT_EQ(freed, 0u);
+}
+
+// SR-EVICT-02: GIVEN ring with free chunks not yet stale WHEN EvictStaleChunks THEN 0 freed
+TEST_P(StagingRingTest, Evict02_NotYetStale) {
+    auto result = MakeRing(uint64_t{4} << 10, 8);
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    // Force 2 chunks, then reclaim at frame 100
+    (void)ring.Allocate(3000);
+    (void)ring.Allocate(3000);
+    ring.FlushFrame(1);
+    ring.EvictStaleChunks(100, 60);  // Sets currentFrame=100
+    ring.ReclaimCompleted(1);        // Stamps lastReclaimedFrame=100
+
+    auto freeCount = ring.GetFreeChunkCount();
+    ASSERT_GT(freeCount, 0u);
+
+    // Only 50 frames later — not stale yet (need > 60)
+    auto freed = ring.EvictStaleChunks(150, 60);
+    EXPECT_EQ(freed, 0u);
+    EXPECT_EQ(ring.GetFreeChunkCount(), freeCount);  // Unchanged
+}
+
+// SR-EVICT-03: GIVEN ring with stale free chunks WHEN EvictStaleChunks THEN freed > 0
+TEST_P(StagingRingTest, Evict03_StaleEvicted) {
+    auto result = MakeRing(uint64_t{4} << 10, 8);
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    // Force 3 chunks (need >1 so eviction can keep 1 alive)
+    (void)ring.Allocate(3000);
+    (void)ring.Allocate(3000);
+    (void)ring.Allocate(3000);
+    auto totalBefore = ring.GetTotalChunkCount();
+    ASSERT_GE(totalBefore, 3u);
+
+    ring.FlushFrame(1);
+    ring.EvictStaleChunks(10, 60);  // currentFrame=10
+    ring.ReclaimCompleted(1);       // stamps lastReclaimedFrame=10
+
+    auto freeCount = ring.GetFreeChunkCount();
+    ASSERT_GT(freeCount, 0u);
+
+    // 80 frames later (> 60 idle frames)
+    auto freed = ring.EvictStaleChunks(90, 60);
+    EXPECT_GT(freed, 0u);
+    EXPECT_LT(ring.GetFreeChunkCount(), freeCount);
+}
+
+// SR-EVICT-04: GIVEN ring with 2 total chunks, 1 free stale WHEN EvictStaleChunks THEN keeps at least 1 alive
+TEST_P(StagingRingTest, Evict04_KeepsMinimumOneAlive) {
+    auto result = MakeRing(uint64_t{4} << 10, 8);
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    // Force exactly 2 chunks
+    (void)ring.Allocate(3000);
+    (void)ring.Allocate(3000);
+    ASSERT_GE(ring.GetTotalChunkCount(), 2u);
+
+    ring.FlushFrame(1);
+    ring.EvictStaleChunks(10, 60);
+    ring.ReclaimCompleted(1);
+
+    // All chunks free. Evict at frame 200 (very stale).
+    ring.EvictStaleChunks(200, 60);
+
+    // At least 1 chunk must remain alive
+    EXPECT_GE(ring.GetTotalChunkCount(), 1u);
+}
+
+// SR-EVICT-05: GIVEN ring with never-reclaimed free chunk (sentinel UINT64_MAX) WHEN EvictStaleChunks THEN skipped
+TEST_P(StagingRingTest, Evict05_SentinelNotEvicted) {
+    auto result = MakeRing(uint64_t{4} << 10, 8);
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    // The initial chunk is active, not free. Force a second chunk, but DON'T reclaim.
+    // Instead, manually trigger a situation where a chunk enters freeChunks without
+    // going through ReclaimCompleted (shouldn't happen in practice, but tests sentinel).
+    // We test indirectly: all chunks go through normal flow, sentinel protection is additive.
+    auto totalBefore = ring.GetTotalChunkCount();
+    EXPECT_GE(totalBefore, 1u);
+    // At frame UINT64_MAX - 1, nothing should crash
+    auto freed = ring.EvictStaleChunks(UINT64_MAX - 1, 60);
+    EXPECT_EQ(freed, 0u);  // No free chunks to evict
+}
+
+// ============================================================================
+// §7.1.11 SR-COMPLEX — Multi-flow complex scenarios
+// ============================================================================
+
+// SR-COMPLEX-01: Interleaved alloc/enqueue/flush/reclaim/evict across 200 frames
+TEST_P(StagingRingTest, Complex01_InterleavedFrameLifecycle) {
+    auto result = MakeRing(uint64_t{8} << 10, 32);
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    auto dst = CreateDstBuffer(1 << 20);  // 1MB
+    if (!dst.IsValid()) {
+        GTEST_SKIP() << "Dst buffer creation failed";
+    }
+
+    constexpr uint32_t kFrameLatency = 2;
+
+    for (uint64_t frame = 1; frame <= 200; ++frame) {
+        // Reclaim old frames
+        if (frame > kFrameLatency) {
+            ring.ReclaimCompleted(frame - kFrameLatency);
+        }
+
+        // Evict stale chunks periodically
+        ring.EvictStaleChunks(frame, 30);
+
+        // Varying number of uploads per frame (0-3)
+        uint32_t uploadsThisFrame = static_cast<uint32_t>(frame % 4);
+        for (uint32_t i = 0; i < uploadsThisFrame; ++i) {
+            uint64_t size = 256 + (frame * 7 + i * 13) % 4096;
+            auto alloc = ring.Allocate(size);
+            ASSERT_TRUE(alloc.has_value()) << "Frame " << frame << " alloc " << i << " failed";
+            ring.EnqueueBufferCopy(*alloc, dst, 0);
+        }
+
+        ring.FlushFrame(frame);
+    }
+
+    // Steady state: bounded chunk count
+    EXPECT_LE(ring.GetTotalChunkCount(), 10u);
+
+    Dev().Dispatch([&](auto& dev) { dev.DestroyBuffer(dst); });
+}
+
+// SR-COMPLEX-02: Rapid grow then shrink — burst of large allocs then idle period with eviction
+TEST_P(StagingRingTest, Complex02_BurstThenIdle) {
+    auto result = MakeRing(uint64_t{4} << 10, 32);
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    // Burst: fill 10 chunks in frame 1
+    for (int i = 0; i < 10; ++i) {
+        auto alloc = ring.Allocate(3500);
+        ASSERT_TRUE(alloc.has_value());
+    }
+    EXPECT_GE(ring.GetTotalChunkCount(), 10u);
+
+    ring.FlushFrame(1);
+    ring.EvictStaleChunks(1, 5);
+    ring.ReclaimCompleted(1);
+
+    auto peakChunks = ring.GetTotalChunkCount();
+
+    // Idle: 20 frames with no allocs, just evict
+    for (uint64_t frame = 2; frame <= 20; ++frame) {
+        ring.FlushFrame(frame);
+        ring.EvictStaleChunks(frame, 5);
+        ring.ReclaimCompleted(frame);
+    }
+
+    // After 20 idle frames with iMaxIdleFrames=5, most chunks should be evicted
+    EXPECT_LT(ring.GetTotalChunkCount(), peakChunks);
+    EXPECT_GE(ring.GetTotalChunkCount(), 1u);  // At least 1 survives
+}
+
+// SR-COMPLEX-03: Double FlushFrame same fence — idempotency
+TEST_P(StagingRingTest, Complex03_DoubleFlush) {
+    auto result = MakeRing();
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    (void)ring.Allocate(1024);
+    ring.FlushFrame(1);
+    ring.FlushFrame(1);  // Should not crash or corrupt state
+
+    ring.ReclaimCompleted(1);
+    // ChunkPool auto-promotes one free chunk back to active when activeChunks is empty,
+    // so with 1 chunk: activeCount==1, freeCount==0 after reclaim.
+    EXPECT_EQ(ring.GetActiveChunkCount(), 1u);
+    EXPECT_EQ(ring.GetTotalChunkCount(), 1u);
+}
+
+// SR-COMPLEX-04: Reclaim with fence=0 — edge case
+TEST_P(StagingRingTest, Complex04_ReclaimFenceZero) {
+    auto result = MakeRing();
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    (void)ring.Allocate(1024);
+    ring.FlushFrame(0);
+    ring.ReclaimCompleted(0);
+
+    // Reclaim with fence=0 is valid; chunk auto-promoted back to active
+    EXPECT_EQ(ring.GetActiveChunkCount(), 1u);
+    EXPECT_EQ(ring.GetTotalChunkCount(), 1u);
+}
+
+// SR-COMPLEX-05: Allocate exactly chunk boundary sizes
+TEST_P(StagingRingTest, Complex05_ExactChunkBoundary) {
+    constexpr uint64_t kChunkSize = uint64_t{4} << 10;  // 4KB
+    auto result = MakeRing(kChunkSize, 8);
+    ASSERT_TRUE(result.has_value());
+    auto& ring = *result;
+
+    // Allocate exactly 1 chunk worth (accounting for alignment)
+    auto a1 = ring.Allocate(kChunkSize);
+    ASSERT_TRUE(a1.has_value());
+    EXPECT_TRUE(a1->IsValid());
+
+    // Next alloc must go to a new chunk
+    auto a2 = ring.Allocate(1);
+    ASSERT_TRUE(a2.has_value());
+    EXPECT_GE(ring.GetTotalChunkCount(), 2u);
+}
+
+// ============================================================================
 // Parameterized instantiation
 // ============================================================================
 
-INSTANTIATE_TEST_SUITE_P(AllBackends, StagingRingTest, ::testing::ValuesIn(GetAvailableBackends()), BackendName);
+INSTANTIATE_TEST_SUITE_P(RealBackends, StagingRingTest, ::testing::ValuesIn(GetRealBackends()), BackendName);

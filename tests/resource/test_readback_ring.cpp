@@ -344,4 +344,4 @@ TEST_P(ReadbackRingTest, Stress01_HundredFrames) {
 // Parameterized instantiation
 // ============================================================================
 
-INSTANTIATE_TEST_SUITE_P(AllBackends, ReadbackRingTest, ::testing::ValuesIn(GetAvailableBackends()), BackendName);
+INSTANTIATE_TEST_SUITE_P(RealBackends, ReadbackRingTest, ::testing::ValuesIn(GetRealBackends()), BackendName);

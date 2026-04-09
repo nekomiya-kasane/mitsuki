@@ -912,6 +912,40 @@ Total per frame:                            ~8 MB << 64 MB
 
 64MB ring 在正常帧内有 8× 余量。仅 bulk import 场景需要 Path C/D。
 
+#### 7.1.2 UploadPolicy & Flush Hint
+
+UploadManager 通过 `UploadPolicy` 结构控制 flush 推荐阈值，避免小 buffer 无限累积：
+
+```cpp
+struct UploadPolicy {
+    uint64_t maxPendingBytes  = 8ULL << 20;  // 8 MB 累积阈值
+    uint32_t maxPendingCopies = 128;          // 待处理 copy 命令数阈值
+};
+```
+
+- `Upload()` 返回 `UploadResult::flushRecommended`：当 `pendingBytes >= maxPendingBytes` 或 `pendingCopies >= maxPendingCopies` 时置 true。
+- `UploadTexture()` 返回 `Result<void>`，无法携带 hint。调用方应使用 `UploadManager::ShouldFlush()` 查询。
+- 两个阈值设为 0 表示禁用该维度检查。
+- `pendingBytes` 仅在 `RecordTransfers()` 时清零，`FlushFrame` / `ReclaimCompleted` 不影响。
+
+#### 7.1.3 EvictStaleChunks — Idle Chunk Garbage Collection
+
+StagingRing 和 ReadbackRing 均实现 `EvictStaleChunks(currentFrame, maxIdleFrames=60)`，回收空闲超过 `maxIdleFrames` 帧的 free chunk：
+
+- 每个 chunk 记录 `lastReclaimedFrame`（初始为 `UINT64_MAX` 哨兵值，表示从未被回收）。
+- `ReclaimCompleted()` 将新回收的 chunk 打上当前帧戳。
+- `EvictStaleChunks()` 遍历 freeChunks，销毁满足 `currentFrame - lastReclaimedFrame > maxIdleFrames` 的 chunk。
+- **始终保留至少 1 个活跃 chunk**（`aliveCount_ <= 1` 时跳过）。
+- FrameManager 在 `BeginFrame` 中 `ReclaimCompleted` 之后调用。
+
+#### 7.1.4 DrainPendingTransfers — Out-of-Frame Flush
+
+`FrameManager::DrainPendingTransfers()` 提供帧循环外的显式 flush 入口：
+
+- **T1 (async transfer)**：直接提交到 transfer queue，复用 `SubmitTransferCopies()` 路径。
+- **T2/T3/T4 fallback**：从 `commandPoolAllocator` 获取 graphics command buffer，通过 `RecordTransfersOnGraphics()` 录制并提交。
+- 返回实际录制的 copy 命令数。适用于 bulk import 后需要立即刷新的场景。
+
 ### 7.2 ReadbackRing (GPU→CPU Readback)
 
 ```

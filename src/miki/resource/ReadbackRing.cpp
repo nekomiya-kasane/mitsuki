@@ -28,6 +28,7 @@ namespace miki::resource {
         uint64_t retiredAtFence = ~0ull;
         uint32_t generation = 0;           ///< Incremented on each reuse; tickets carry a snapshot for stale detection
         mutable bool invalidated = false;  ///< True after InvalidateMappedRange called for this retirement cycle
+        uint64_t lastReclaimedFrame = UINT64_MAX;  ///< Frame when reclaimed to free list (UINT64_MAX = never reclaimed)
     };
 
     struct PendingBufferReadback {
@@ -59,6 +60,7 @@ namespace miki::resource {
 
         uint64_t bytesReadbackThisFrame = 0;
         uint64_t lastCompletedFence = 0;
+        uint64_t currentFrame = 0;  ///< Updated by EvictStaleChunks caller
 
         auto CreateReadbackChunk(uint64_t iCapacity) -> core::Result<uint32_t> {
             return pool.CreateChunk(iCapacity, rhi::BufferUsage::TransferDst, rhi::MemoryLocation::GpuToCpu);
@@ -248,7 +250,12 @@ namespace miki::resource {
 
     auto ReadbackRing::ReclaimCompleted(uint64_t iCompletedFenceValue) -> void {
         impl_->lastCompletedFence = iCompletedFenceValue;
+        auto prevFreeCount = impl_->pool.freeChunks.size();
         impl_->pool.ReclaimCompleted(iCompletedFenceValue);
+        // Stamp newly reclaimed chunks with current frame for EvictStaleChunks tracking
+        for (size_t i = prevFreeCount; i < impl_->pool.freeChunks.size(); ++i) {
+            impl_->pool.chunks[impl_->pool.freeChunks[i]].lastReclaimedFrame = impl_->currentFrame;
+        }
     }
 
     // =========================================================================
@@ -294,6 +301,30 @@ namespace miki::resource {
 
     auto ReadbackRing::ShrinkToFit(uint64_t iTargetTotalBytes) -> uint64_t {
         return impl_->pool.ShrinkToFit(iTargetTotalBytes);
+    }
+
+    auto ReadbackRing::EvictStaleChunks(uint64_t iCurrentFrame, uint32_t iMaxIdleFrames) -> uint64_t {
+        if (!impl_) {
+            return 0;
+        }
+        impl_->currentFrame = iCurrentFrame;
+
+        uint64_t freed = 0;
+        for (size_t i = impl_->pool.freeChunks.size(); i > 0; --i) {
+            auto ci = impl_->pool.freeChunks[i - 1];
+            auto& c = impl_->pool.chunks[ci];
+            if (c.alive && c.lastReclaimedFrame != UINT64_MAX && iCurrentFrame > c.lastReclaimedFrame
+                && (iCurrentFrame - c.lastReclaimedFrame) > iMaxIdleFrames) {
+                if (impl_->pool.aliveCount_ <= 1) {
+                    break;
+                }
+                freed += c.capacity;
+                impl_->pool.DestroyChunk(ci);
+                impl_->pool.freeChunks[i - 1] = impl_->pool.freeChunks.back();
+                impl_->pool.freeChunks.pop_back();
+            }
+        }
+        return freed;
     }
     auto ReadbackRing::GetUtilization() const noexcept -> float {
         return impl_ ? impl_->pool.GetUtilization() : 0.0f;

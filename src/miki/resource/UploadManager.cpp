@@ -21,6 +21,20 @@ namespace miki::resource {
         bool rebarAvailable = false;
         uint64_t rebarBudget = 0;
         uint64_t frameNumber = 0;
+        UploadPolicy policy;
+
+        [[nodiscard]] auto ShouldRecommendFlush() const noexcept -> bool {
+            if (!stagingRing) {
+                return false;
+            }
+            if (policy.maxPendingCopies > 0 && stagingRing->GetPendingCopyCount() >= policy.maxPendingCopies) {
+                return true;
+            }
+            if (policy.maxPendingBytes > 0 && stagingRing->GetPendingBytes() >= policy.maxPendingBytes) {
+                return true;
+            }
+            return false;
+        }
     };
 
     UploadManager::~UploadManager() = default;
@@ -108,7 +122,13 @@ namespace miki::resource {
         impl_->stagingRing->EnqueueBufferCopy(*allocResult, iDst, iDstOffset);
 
         UploadPath path = (iSize <= kStagingRingThreshold) ? UploadPath::StagingRing : UploadPath::StagingRingLarge;
-        return UploadResult{.path = path, .stagingBuffer = {}, .stagingOffset = 0, .size = iSize};
+        return UploadResult{
+            .path = path,
+            .stagingBuffer = {},
+            .stagingOffset = 0,
+            .size = iSize,
+            .flushRecommended = impl_->ShouldRecommendFlush(),
+        };
     }
 
     auto UploadManager::UploadTexture(
@@ -118,9 +138,24 @@ namespace miki::resource {
         if (iData.empty()) {
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }
-        // Texture uploads always route through StagingRing — layout transitions
-        // require graphics queue, so dedicated buffer or ReBAR paths don't apply.
+        // Texture uploads always route through StagingRing — layout transitions require graphics queue, so dedicated
+        // buffer or ReBAR paths don't apply.
         return impl_->stagingRing->UploadTexture(iData, iDst, iRegion);
+    }
+
+    auto UploadManager::ShouldFlush() const noexcept -> bool {
+        assert(impl_ && "UploadManager used after move");
+        return impl_->ShouldRecommendFlush();
+    }
+
+    auto UploadManager::SetUploadPolicy(const UploadPolicy& iPolicy) noexcept -> void {
+        assert(impl_ && "UploadManager used after move");
+        impl_->policy = iPolicy;
+    }
+
+    auto UploadManager::GetUploadPolicy() const noexcept -> const UploadPolicy& {
+        assert(impl_ && "UploadManager used after move");
+        return impl_->policy;
     }
 
 }  // namespace miki::resource

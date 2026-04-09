@@ -146,6 +146,12 @@ if(TARGET test_staging_ring)
     set_tests_properties(test_staging_ring PROPERTIES TIMEOUT 300)
 endif()
 
+miki_add_test(test_upload_manager tests/resource/test_upload_manager.cpp)
+if(TARGET test_upload_manager)
+    target_include_directories(test_upload_manager PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)
+    set_tests_properties(test_upload_manager PROPERTIES TIMEOUT 300)
+endif()
+
 miki_add_test(test_readback_ring tests/resource/test_readback_ring.cpp)
 if(TARGET test_readback_ring)
     target_include_directories(test_readback_ring PRIVATE ${CMAKE_SOURCE_DIR}/tests/rhi)

@@ -42,6 +42,25 @@ namespace miki::rhi::test {
         return backends;
     }
 
+    /// @brief Returns only real GPU backends (excludes Mock).
+    /// Use for tests that require actual buffer/texture creation (StagingRing, UploadManager, etc.).
+    inline auto GetRealBackends() -> std::vector<BackendType> {
+        std::vector<BackendType> backends;
+#if MIKI_BUILD_VULKAN
+        backends.push_back(BackendType::Vulkan14);
+#endif
+#if MIKI_BUILD_D3D12
+        backends.push_back(BackendType::D3D12);
+#endif
+#if MIKI_BUILD_OPENGL
+        backends.push_back(BackendType::OpenGL43);
+#endif
+#if MIKI_BUILD_WEBGPU
+        backends.push_back(BackendType::WebGPU);
+#endif
+        return backends;
+    }
+
     inline auto BackendName(const ::testing::TestParamInfo<BackendType>& info) -> std::string {
         switch (info.param) {
             case BackendType::Vulkan14: return "Vulkan14";

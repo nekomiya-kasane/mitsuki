@@ -478,6 +478,14 @@ namespace miki::frame {
             }
         }
 
+        // 1d. Evict stale free chunks (Filament gc() pattern — reclaim idle VRAM)
+        if (impl_->stagingRing) {
+            impl_->stagingRing->EvictStaleChunks(impl_->frameNumber);
+        }
+        if (impl_->readbackRing) {
+            impl_->readbackRing->EvictStaleChunks(impl_->frameNumber);
+        }
+
         // 2. Advance frame number
         impl_->frameNumber++;
 
@@ -918,6 +926,60 @@ namespace miki::frame {
         uint64_t fenceValue = impl_->IsTimeline() ? (impl_->currentTimelineValue + 1) : impl_->frameNumber;
         impl_->SubmitTransferCopies(fenceValue);
         impl_->transfersFlushed = true;
+    }
+
+    auto FrameManager::DrainPendingTransfers() -> uint32_t {
+        assert(impl_ && "FrameManager used after move");
+        if (!impl_->HasPendingTransfers()) {
+            return 0;
+        }
+
+        uint64_t fenceValue = impl_->IsTimeline() ? (impl_->currentTimelineValue + 1) : impl_->frameNumber;
+
+        if (impl_->hasAsyncTransfer) {
+            // T1: submit on dedicated transfer queue
+            auto count = impl_->SubmitTransferCopies(fenceValue);
+            impl_->transfersFlushed = true;
+            return count;
+        }
+
+        // Fallback: submit on graphics queue (T2/T3/T4)
+        auto acqResult = impl_->commandPoolAllocator.Acquire(impl_->frameIndex, rhi::QueueType::Graphics);
+        if (!acqResult) {
+            return 0;
+        }
+
+        auto& acq = acqResult->acquisition;
+        // RecordTransfersOnGraphics handles FlushFrame + RecordTransfers internally
+        acq.listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
+        uint32_t count = impl_->RecordTransfersOnGraphics(acq.listHandle, fenceValue);
+        acq.listHandle.Dispatch([](auto& cmd) { cmd.End(); });
+
+        // Submit with timeline signal (T1) or fence (T2) or plain submit (T3/T4)
+        if (impl_->IsTimeline()) {
+            uint64_t nextValue = ++impl_->currentTimelineValue;
+            std::array<rhi::SemaphoreSubmitInfo, 1> signals = {{
+                {.semaphore = impl_->graphicsTimeline, .value = nextValue, .stageMask = rhi::PipelineStage::Transfer},
+            }};
+            rhi::SubmitDesc desc{
+                .commandBuffers = std::span(&acq.bufferHandle, 1),
+                .waitSemaphores = {},
+                .signalSemaphores = signals,
+                .signalFence = {},
+            };
+            impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, desc); });
+        } else {
+            rhi::SubmitDesc desc{
+                .commandBuffers = std::span(&acq.bufferHandle, 1),
+                .waitSemaphores = {},
+                .signalSemaphores = {},
+                .signalFence = {},
+            };
+            impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, desc); });
+        }
+
+        impl_->transfersFlushed = true;
+        return count;
     }
 
     // =========================================================================

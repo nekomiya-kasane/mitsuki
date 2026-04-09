@@ -120,12 +120,22 @@ namespace miki::resource {
         // ── Memory management ───────────────────────────────────────
 
         auto ShrinkToFit(uint64_t iTargetTotalBytes) -> uint64_t;
+
+        /// @brief Evict free chunks that have been idle for more than iMaxIdleFrames.
+        /// Call from FrameManager::BeginFrame() after ReclaimCompleted().
+        /// Follows Filament VulkanStagePool::gc() pattern — pure memory reclaim, no copy submit.
+        /// @param iCurrentFrame  Monotonic frame counter (FrameManager::FrameNumber()).
+        /// @param iMaxIdleFrames Frames a free chunk may idle before eviction (default 60 ~ 1s@60fps).
+        /// @return Bytes freed.
+        auto EvictStaleChunks(uint64_t iCurrentFrame, uint32_t iMaxIdleFrames = 60) -> uint64_t;
+
         [[nodiscard]] auto GetUtilization() const noexcept -> float;
 
         // ── Metrics ─────────────────────────────────────────────────
 
         [[nodiscard]] auto Capacity() const noexcept -> uint64_t;
         [[nodiscard]] auto GetBytesUploadedThisFrame() const noexcept -> uint64_t;
+        [[nodiscard]] auto GetPendingBytes() const noexcept -> uint64_t;
         [[nodiscard]] auto GetActiveChunkCount() const noexcept -> uint32_t;
         [[nodiscard]] auto GetFreeChunkCount() const noexcept -> uint32_t;
         [[nodiscard]] auto GetTotalChunkCount() const noexcept -> uint32_t;

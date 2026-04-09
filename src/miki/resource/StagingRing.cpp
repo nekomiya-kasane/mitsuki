@@ -29,6 +29,7 @@ namespace miki::resource {
         uint64_t writePos = 0;
         bool alive = true;
         bool isReBAR = false;
+        uint64_t lastReclaimedFrame = UINT64_MAX;  ///< Frame when reclaimed to free list (UINT64_MAX = never reclaimed)
     };
 
     struct PendingBufferCopy {
@@ -59,6 +60,8 @@ namespace miki::resource {
         std::vector<PendingTextureCopy> pendingTextureCopies;
 
         uint64_t bytesUploadedThisFrame = 0;
+        uint64_t pendingBytes = 0;
+        uint64_t currentFrame = 0;  ///< Updated by EvictStaleChunks caller
         bool rebarAvailable = false;
 
         auto CreateStagingChunk(uint64_t iCapacity) -> core::Result<uint32_t> {
@@ -218,6 +221,7 @@ namespace miki::resource {
              .dst = iDst,
              .dstOffset = iDstOffset}
         );
+        impl_->pendingBytes += iAlloc.size;
     }
 
     void StagingRing::EnqueueTextureCopy(
@@ -233,6 +237,7 @@ namespace miki::resource {
              .dst = iDst,
              .region = iRegion}
         );
+        impl_->pendingBytes += iAlloc.size;
     }
 
     // =========================================================================
@@ -304,6 +309,7 @@ namespace miki::resource {
 
         impl_->pendingBufferCopies.clear();
         impl_->pendingTextureCopies.clear();
+        impl_->pendingBytes = 0;
         return count;
     }
 
@@ -324,7 +330,12 @@ namespace miki::resource {
     }
 
     auto StagingRing::ReclaimCompleted(uint64_t iCompletedFenceValue) -> void {
+        auto prevFreeCount = impl_->pool.freeChunks.size();
         impl_->pool.ReclaimCompleted(iCompletedFenceValue);
+        // Stamp newly reclaimed chunks with current frame for EvictStaleChunks tracking
+        for (size_t i = prevFreeCount; i < impl_->pool.freeChunks.size(); ++i) {
+            impl_->pool.chunks[impl_->pool.freeChunks[i]].lastReclaimedFrame = impl_->currentFrame;
+        }
     }
 
     // =========================================================================
@@ -334,6 +345,32 @@ namespace miki::resource {
     auto StagingRing::ShrinkToFit(uint64_t iTargetTotalBytes) -> uint64_t {
         return impl_->pool.ShrinkToFit(iTargetTotalBytes);
     }
+
+    auto StagingRing::EvictStaleChunks(uint64_t iCurrentFrame, uint32_t iMaxIdleFrames) -> uint64_t {
+        if (!impl_) {
+            return 0;
+        }
+        impl_->currentFrame = iCurrentFrame;
+
+        uint64_t freed = 0;
+        // Walk free list backwards for safe swap-and-pop removal
+        for (size_t i = impl_->pool.freeChunks.size(); i > 0; --i) {
+            auto ci = impl_->pool.freeChunks[i - 1];
+            auto& c = impl_->pool.chunks[ci];
+            if (c.alive && c.lastReclaimedFrame != UINT64_MAX && iCurrentFrame > c.lastReclaimedFrame
+                && (iCurrentFrame - c.lastReclaimedFrame) > iMaxIdleFrames) {
+                // Keep at least one chunk alive to avoid re-creation churn
+                if (impl_->pool.aliveCount_ <= 1) {
+                    break;
+                }
+                freed += c.capacity;
+                impl_->pool.DestroyChunk(ci);
+                impl_->pool.freeChunks[i - 1] = impl_->pool.freeChunks.back();
+                impl_->pool.freeChunks.pop_back();
+            }
+        }
+        return freed;
+    }
     auto StagingRing::GetUtilization() const noexcept -> float {
         return impl_ ? impl_->pool.GetUtilization() : 0.0f;
     }
@@ -342,6 +379,9 @@ namespace miki::resource {
     }
     auto StagingRing::GetBytesUploadedThisFrame() const noexcept -> uint64_t {
         return impl_ ? impl_->bytesUploadedThisFrame : 0;
+    }
+    auto StagingRing::GetPendingBytes() const noexcept -> uint64_t {
+        return impl_ ? impl_->pendingBytes : 0;
     }
     auto StagingRing::GetActiveChunkCount() const noexcept -> uint32_t {
         return impl_ ? impl_->pool.GetActiveChunkCount() : 0;
