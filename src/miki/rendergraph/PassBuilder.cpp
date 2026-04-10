@@ -41,12 +41,41 @@ namespace miki::rg {
         return RecordWrite(handle, access);
     }
 
-    auto PassBuilder::WriteColorAttachment(RGResourceHandle handle, uint32_t /*index*/) -> RGResourceHandle {
-        return RecordWrite(handle, ResourceAccess::ColorAttachWrite);
+    auto PassBuilder::WriteColorAttachment(
+        RGResourceHandle handle, uint32_t index, rhi::AttachmentLoadOp loadOp, rhi::AttachmentStoreOp storeOp,
+        rhi::ClearValue clearValue
+    ) -> RGResourceHandle {
+        auto newHandle = RecordWrite(handle, ResourceAccess::ColorAttachWrite);
+        auto& pass = builder_.GetPasses()[passIndex_];
+        pass.colorAttachments.push_back(
+            RGAttachmentInfo{
+                .handle = newHandle,
+                .slotIndex = index,
+                .loadOp = loadOp,
+                .storeOp = storeOp,
+                .clearValue = clearValue,
+                .isDepthStencil = false,
+            }
+        );
+        return newHandle;
     }
 
-    auto PassBuilder::WriteDepthStencil(RGResourceHandle handle) -> RGResourceHandle {
-        return RecordWrite(handle, ResourceAccess::DepthStencilWrite);
+    auto PassBuilder::WriteDepthStencil(
+        RGResourceHandle handle, rhi::AttachmentLoadOp loadOp, rhi::AttachmentStoreOp storeOp,
+        rhi::ClearValue clearValue
+    ) -> RGResourceHandle {
+        auto newHandle = RecordWrite(handle, ResourceAccess::DepthStencilWrite);
+        auto& pass = builder_.GetPasses()[passIndex_];
+        pass.hasDepthStencil = true;
+        pass.depthStencilAttachment = RGAttachmentInfo{
+            .handle = newHandle,
+            .slotIndex = 0,
+            .loadOp = loadOp,
+            .storeOp = storeOp,
+            .clearValue = clearValue,
+            .isDepthStencil = true,
+        };
+        return newHandle;
     }
 
     auto PassBuilder::WriteBuffer(RGResourceHandle handle, ResourceAccess access) -> RGResourceHandle {

@@ -444,6 +444,26 @@ namespace miki::rg {
     using ConditionFn = core::InlineFunction<bool(), kPassFnCapacity>;
 
     // =========================================================================
+    // Attachment info — per-attachment load/store/clear configuration
+    // =========================================================================
+
+    /// @brief Per-attachment rendering configuration declared by pass authors.
+    /// Stored in RGPassNode for each color and depth/stencil attachment.
+    /// The executor uses this to build RenderingAttachment descriptors with
+    /// correct load/store ops instead of hardcoded Clear/Store.
+    struct RGAttachmentInfo {
+        RGResourceHandle handle;
+        uint32_t slotIndex = 0;  ///< Color attachment slot (0-7), ignored for depth
+        rhi::AttachmentLoadOp loadOp = rhi::AttachmentLoadOp::Clear;
+        rhi::AttachmentStoreOp storeOp = rhi::AttachmentStoreOp::Store;
+        rhi::ClearValue clearValue = {};
+        bool isDepthStencil = false;
+    };
+
+    /// @brief Maximum color attachments per pass (matches GPU spec minimum).
+    inline constexpr uint32_t kMaxColorAttachments = 8;
+
+    // =========================================================================
     // Pass node — internal storage for a declared pass
     // =========================================================================
 
@@ -461,6 +481,11 @@ namespace miki::rg {
         // Resource accesses — spans into LinearAllocator-owned memory
         std::span<RGResourceAccess> reads;
         std::span<RGResourceAccess> writes;
+
+        // Attachment configuration — populated by PassBuilder::WriteColorAttachment / WriteDepthStencil
+        std::vector<RGAttachmentInfo> colorAttachments;
+        RGAttachmentInfo depthStencilAttachment = {};
+        bool hasDepthStencil = false;
     };
 
     // =========================================================================

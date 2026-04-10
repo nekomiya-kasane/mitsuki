@@ -11,7 +11,8 @@
  */
 #pragma once
 
-#include "miki/rhi/backend/BackendStub.h"
+#include "miki/rhi/Device.h"
+#include "miki/rhi/GpuCapabilityProfile.h"
 
 #ifndef NOMINMAX
 #    define NOMINMAX
@@ -173,17 +174,20 @@ namespace miki::rhi {
     };
 
     struct D3D12CommandPoolData {
-        ComPtr<ID3D12CommandAllocator> allocator;
         D3D12_COMMAND_LIST_TYPE listType = D3D12_COMMAND_LIST_TYPE_DIRECT;
         QueueType queueType = QueueType::Graphics;
-        // Cached D3D12 command lists + C++ wrappers for pool-reset reuse (spec §19)
+        // Per-entry allocator model: each CachedEntry owns its own ID3D12CommandAllocator.
+        // D3D12 spec requires at most one recording command list per allocator, so concurrent
+        // multi-batch recording (AcquireCommandList x N) needs N separate allocators.
         struct CachedEntry {
+            ComPtr<ID3D12CommandAllocator> allocator;
             ComPtr<ID3D12GraphicsCommandList7> list;
             CommandBufferHandle bufHandle;
             std::unique_ptr<D3D12CommandBuffer> wrapper;
         };
         std::vector<CachedEntry> cachedEntries;
         uint32_t nextFreeIndex = 0;
+        ComPtr<ID3D12Device10> ownerDevice;  // for creating new allocators on demand
     };
 
     struct D3D12DeviceMemoryData {

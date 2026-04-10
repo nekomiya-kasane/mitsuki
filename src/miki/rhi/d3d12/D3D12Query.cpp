@@ -133,20 +133,14 @@ namespace miki::rhi {
             type = D3D12_COMMAND_LIST_TYPE_COPY;
         }
 
-        ComPtr<ID3D12CommandAllocator> allocator;
-        HRESULT hr = device_->CreateCommandAllocator(type, IID_PPV_ARGS(&allocator));
-        if (FAILED(hr)) {
-            return std::unexpected(RhiError::OutOfDeviceMemory);
-        }
-
         auto [handle, data] = commandPools_.Allocate();
         if (!data) {
             return std::unexpected(RhiError::TooManyObjects);
         }
-        data->allocator = std::move(allocator);
         data->listType = type;
         data->queueType = desc.queue;
         data->nextFreeIndex = 0;
+        data->ownerDevice = device_;
         return handle;
     }
 
@@ -161,7 +155,6 @@ namespace miki::rhi {
             }
         }
         data->cachedEntries.clear();
-        data->allocator.Reset();
         commandPools_.Free(h);
     }
 
@@ -170,7 +163,12 @@ namespace miki::rhi {
         if (!data) {
             return;
         }
-        data->allocator->Reset();
+        // Reset each entry's own allocator (per-entry model — D3D12 spec §3.3)
+        for (auto& entry : data->cachedEntries) {
+            if (entry.allocator) {
+                entry.allocator->Reset();
+            }
+        }
         if (static_cast<uint8_t>(flags) & static_cast<uint8_t>(CommandPoolResetFlags::ReleaseResources)) {
             for (auto& entry : data->cachedEntries) {
                 if (entry.bufHandle.IsValid()) {
@@ -185,11 +183,13 @@ namespace miki::rhi {
     auto D3D12Device::AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary)
         -> RhiResult<CommandListAcquisition> {
         // -------------------------------------------------------------------------
-        // Pool-reset reuse model (spec §19):
-        //   - ResetCommandPool resets allocator + nextFreeIndex to 0
-        //   - AllocateFromPool picks cachedEntries[nextFreeIndex++]
-        //   - Steady-state: zero allocation, zero CreateCommandList calls
-        //   - Warm-up: first few frames create new command lists until cache fills
+        // Per-entry allocator model (spec §19):
+        //   - Each CachedEntry owns its own ID3D12CommandAllocator
+        //   - D3D12 requires at most one recording command list per allocator
+        //   - ResetCommandPool resets all per-entry allocators + nextFreeIndex to 0
+        //   - AllocateFromPool picks cachedEntries[nextFreeIndex++], resets entry's list
+        //   - Steady-state: zero allocation, zero Create calls
+        //   - Warm-up: first few frames create new allocators + command lists
         // -------------------------------------------------------------------------
         auto* poolData = commandPools_.Lookup(pool);
         if (!poolData) {
@@ -197,34 +197,43 @@ namespace miki::rhi {
         }
 
         // Helper: populate HandlePool data and build acquisition result
-        auto buildAcquisition = [&](CommandBufferHandle bufHandle, ID3D12GraphicsCommandList7* list,
-                                    const ComPtr<ID3D12GraphicsCommandList7>& listPtr,
-                                    D3D12CommandBuffer* wrapper) -> CommandListAcquisition {
+        auto buildAcquisition
+            = [&](CommandBufferHandle bufHandle, ID3D12GraphicsCommandList7* list,
+                  const ComPtr<ID3D12GraphicsCommandList7>& listPtr, const ComPtr<ID3D12CommandAllocator>& allocator,
+                  D3D12CommandBuffer* wrapper) -> CommandListAcquisition {
             auto* bufData = commandBuffers_.Lookup(bufHandle);
-            bufData->allocator = poolData->allocator;
+            bufData->allocator = allocator;
             bufData->list = listPtr;
             bufData->queueType = poolData->queueType;
             bufData->isSecondary = secondary;
-            wrapper->Init(this, list, poolData->allocator.Get(), poolData->queueType);
+            wrapper->Init(this, list, allocator.Get(), poolData->queueType);
             return {.bufferHandle = bufHandle, .listHandle = CommandListHandle(wrapper, BackendType::D3D12)};
         };
 
         // ----- Fast path: reuse cached entry (steady-state, zero-alloc) -----
         if (poolData->nextFreeIndex < poolData->cachedEntries.size()) {
             auto& entry = poolData->cachedEntries[poolData->nextFreeIndex++];
-            if (FAILED(entry.list->Reset(poolData->allocator.Get(), nullptr))) {
+            if (FAILED(entry.list->Reset(entry.allocator.Get(), nullptr))) {
                 return std::unexpected(RhiError::OutOfDeviceMemory);
             }
-            return buildAcquisition(entry.bufHandle, entry.list.Get(), entry.list, entry.wrapper.get());
+            return buildAcquisition(
+                entry.bufHandle, entry.list.Get(), entry.list, entry.allocator, entry.wrapper.get()
+            );
         }
 
-        // ----- Cold path: create new command list (warm-up only) -----
+        // ----- Cold path: create new allocator + command list (warm-up only) -----
         auto type = secondary ? D3D12_COMMAND_LIST_TYPE_BUNDLE : poolData->listType;
+
+        ComPtr<ID3D12CommandAllocator> newAllocator;
+        if (FAILED(device_->CreateCommandAllocator(type, IID_PPV_ARGS(&newAllocator)))) {
+            return std::unexpected(RhiError::OutOfDeviceMemory);
+        }
+
         ComPtr<ID3D12GraphicsCommandList7> cmdList;
         if (FAILED(device_->CreateCommandList1(0, type, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&cmdList)))) {
             return std::unexpected(RhiError::OutOfDeviceMemory);
         }
-        if (FAILED(cmdList->Reset(poolData->allocator.Get(), nullptr))) {
+        if (FAILED(cmdList->Reset(newAllocator.Get(), nullptr))) {
             return std::unexpected(RhiError::OutOfDeviceMemory);
         }
 
@@ -234,11 +243,14 @@ namespace miki::rhi {
         }
 
         auto wrapper = std::make_unique<D3D12CommandBuffer>();
-        auto acq = buildAcquisition(bufHandle, cmdList.Get(), cmdList, wrapper.get());
+        auto acq = buildAcquisition(bufHandle, cmdList.Get(), cmdList, newAllocator, wrapper.get());
 
-        poolData->cachedEntries.push_back(
-            {.list = std::move(cmdList), .bufHandle = bufHandle, .wrapper = std::move(wrapper)}
-        );
+        poolData->cachedEntries.push_back({
+            .allocator = std::move(newAllocator),
+            .list = std::move(cmdList),
+            .bufHandle = bufHandle,
+            .wrapper = std::move(wrapper),
+        });
         poolData->nextFreeIndex++;
         return acq;
     }

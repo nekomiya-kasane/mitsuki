@@ -2307,6 +2307,32 @@ gantt
 | Queue submit        | `vkQueueSubmit2`             | `ExecuteCommandLists` + `Signal`    | `vkQueueSubmit`                  | `queue.submit`      | implicit           |
 | Present             | `vkQueuePresentKHR`          | `IDXGISwapChain::Present`           | `vkQueuePresentKHR`              | surface present     | `glfwSwapBuffers`  |
 
+### A.1 Sync Model Taxonomy
+
+All backends are classified into one of three physical sync models. The upper layers (SyncScheduler, FrameManager, RenderGraph) operate exclusively on **timeline semaphore semantics** — the device layer maps these to the physical model.
+
+| Sync Model                          | Backends                                    | Physical Primitives                      | Timeline Mapping                                              |
+| ----------------------------------- | ------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------- |
+| **Model A: Native Timeline**        | Vulkan 1.4, D3D12, Vulkan Compat (with ext) | `VkSemaphore` (TIMELINE) / `ID3D12Fence` | Direct 1:1 — GPU hardware tracks monotonic counter            |
+| **Model B: Binary Sem + Fence**     | Vulkan Compat (without timeline ext)        | `VkSemaphore` (BINARY) + `VkFence`       | CPU-emulated counter; GPU sync via fence wait before reuse    |
+| **Model C: Implicit + CPU Counter** | WebGPU, OpenGL                              | `glFenceSync` / single-queue FIFO        | CPU-side counter; GPU ordering via implicit single-queue FIFO |
+
+#### Device-Layer Emulation Strategy
+
+The emulation is handled entirely within each backend's `Device` implementation:
+
+- **Vulkan Tier1 / D3D12**: `CreateTimelineSemaphores()` creates native timeline semaphores for `queueTimelines_`. `SignalSemaphoreImpl`, `WaitSemaphoreImpl`, `GetSemaphoreValueImpl` delegate directly to GPU.
+- **Vulkan Tier2 (with `VK_KHR_timeline_semaphore`)**: Extension is enabled during `CreateLogicalDevice()`. Same native path as Tier1.
+- **Vulkan Tier2 (without ext)**: `CreateEmulatedTimelineSemaphores()` allocates handle-pool entries with `VK_NULL_HANDLE` semaphore + `SemaphoreType::Timeline`. All `Signal/Wait/GetValue` calls are no-ops on GPU. `SubmitImpl` skips `VK_NULL_HANDLE` semaphores in wait/signal arrays. SyncScheduler tracks values CPU-side.
+- **OpenGL**: `CreateSemaphoreImpl` allocates CPU-side counter + `glFenceSync` slot. `SignalSemaphoreImpl` creates a new `glFenceSync` and updates CPU value. `WaitSemaphoreImpl` checks CPU value against target — skips `glClientWaitSync` if already reached.
+- **WebGPU**: CPU-side counter only. `WaitSemaphoreImpl` is a no-op (single-queue FIFO ordering).
+
+This design ensures:
+
+1. **Zero overhead** on native timeline backends — no abstraction layer tax.
+2. **Correct semantics** on emulated backends — CPU counters + fence/sync objects enforce ordering.
+3. **Uniform API** — SyncScheduler, FrameManager, and RenderGraph never branch on backend tier.
+
 ## Appendix B: Glossary
 
 | Term                      | Definition                                                                                                                                                       |
@@ -2471,20 +2497,29 @@ FM-TL-04  GIVEN T1 FM, after EndFrame(frame N)
           AND   NOT on any transfer or compute timeline
 ```
 
-### 17.5 FrameManager — Fence-Based (T2)
+### 17.5 FrameManager — Tier2 (Vulkan Compat)
+
+Tier2 uses **native timeline semaphores** if `VK_KHR_timeline_semaphore` is available, otherwise **CPU-emulated timelines** (Model B/C from Appendix A.1). In both cases, FrameManager operates on timeline semantics via SyncScheduler.
 
 ```
-FM-T2-01  GIVEN T2 FrameManager (Vulkan Compat)
+FM-T2-01  GIVEN T2 FrameManager (Vulkan Compat, with timeline ext)
           WHEN  Create() succeeds
-          THEN  per-slot fences are created (signaled initially)
+          THEN  device-global timeline semaphores retrieved from GetQueueTimelines()
           AND   per-slot binary semaphores are created (imageAvail)
           AND   per-swapchain-image binary semaphores are created (renderDone)
-          AND   no timeline semaphore is used
+          AND   timeline operations delegate to native VkSemaphore (TIMELINE)
+
+FM-T2-01b GIVEN T2 FrameManager (Vulkan Compat, without timeline ext)
+          WHEN  Create() succeeds
+          THEN  device-global emulated timeline handles retrieved from GetQueueTimelines()
+          AND   per-slot binary semaphores are created (imageAvail)
+          AND   per-swapchain-image binary semaphores are created (renderDone)
+          AND   timeline Signal/Wait are CPU no-ops; SubmitImpl skips VK_NULL_HANDLE semaphores
 
 FM-T2-02  GIVEN T2 FM, after EndFrame()
           WHEN  submit log is inspected
-          THEN  signalFence == slot[current].fence
-          AND   no timeline signal in signals[]
+          THEN  SyncScheduler timeline value is incremented
+          AND   submit signals timeline semaphore (native) or skips signal (emulated)
 
 FM-T2-03  GIVEN T2 FM, second loop around frame ring
           WHEN  BeginFrame() runs

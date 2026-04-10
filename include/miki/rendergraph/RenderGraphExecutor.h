@@ -71,6 +71,7 @@ namespace miki::rg {
         uint32_t maxRecordingThreads = 1;              ///< 1 = single-threaded, >1 = parallel (T1 only)
         bool enableParallelRecording = false;          ///< Use secondary cmd bufs for parallel recording
         bool enableAsyncExecution = false;             ///< Offload allocation + recording to worker threads
+        bool enableDebugLabels = true;                 ///< Emit per-pass debug labels for PIX/RenderDoc/NSight
         uint64_t frameAllocatorCapacity = 256 * 1024;  ///< Per-frame arena capacity (bytes)
     };
 
@@ -84,6 +85,7 @@ namespace miki::rg {
         uint32_t transientTextureViewsCreated = 0;
         uint32_t heapsCreated = 0;
         uint32_t barriersEmitted = 0;
+        uint32_t aliasingBarriersEmitted = 0;
         uint32_t batchesSubmitted = 0;
         uint32_t passesRecorded = 0;
         uint32_t secondaryCmdBufsUsed = 0;
@@ -156,10 +158,21 @@ namespace miki::rg {
             rhi::DeviceHandle device, frame::CommandPoolAllocator& poolAllocator
         ) -> core::Result<void>;
 
+        // Merged group membership info for a compiled pass
+        struct MergedGroupMembership {
+            uint32_t groupIndex = UINT32_MAX;  ///< Index into CompiledRenderGraph::mergedGroups
+            uint32_t subpassPosition = 0;      ///< 0-based position within the merged group
+            bool isFirst = false;              ///< true if this is the first subpass
+            bool isLast = false;               ///< true if this is the last subpass
+        };
+
         // Record a single pass into a command list (shared by single/parallel paths)
+        // If mergedMembership is non-null and the pass is inside a merged group, per-pass
+        // CmdBeginRendering/CmdEndRendering is skipped — the caller must bracket the group.
         void RecordSinglePass(
-            rhi::CommandListHandle& cmdList, const CompiledPassInfo& compiledPass, RGPassNode& passNode,
-            const frame::FrameContext& frame, bool emitBarriers, RenderGraphBuilder& builder
+            rhi::CommandListHandle& cmdList, const CompiledRenderGraph& graph, uint32_t compiledPassIndex,
+            const CompiledPassInfo& compiledPass, RGPassNode& passNode, const frame::FrameContext& frame,
+            bool emitBarriers, RenderGraphBuilder& builder, const MergedGroupMembership* mergedMembership = nullptr
         );
 
         // Phase 3: Submit batches to queues with sync metadata
@@ -178,6 +191,15 @@ namespace miki::rg {
         void BuildRenderingAttachments(
             const RGPassNode& passNode, RenderGraphBuilder& builder, std::vector<rhi::RenderingAttachment>& outColor,
             rhi::RenderingAttachment& outDepth, bool& hasDepth
+        );
+
+        // Build a lookup table: compiledPassIndex -> merged group membership
+        auto BuildMergedGroupLookup(const CompiledRenderGraph& graph) const -> std::vector<MergedGroupMembership>;
+
+        // Build combined rendering attachments for a merged group (union of all subpass attachments)
+        void BuildMergedGroupAttachments(
+            const MergedRenderPassGroup& group, const CompiledRenderGraph& graph, RenderGraphBuilder& builder,
+            std::vector<rhi::RenderingAttachment>& outColor, rhi::RenderingAttachment& outDepth, bool& hasDepth
         );
 
         // --- State ---

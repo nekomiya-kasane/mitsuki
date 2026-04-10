@@ -13,7 +13,8 @@
  */
 #pragma once
 
-#include "miki/rhi/backend/BackendStub.h"
+#include "miki/rhi/Device.h"
+#include "miki/rhi/GpuCapabilityProfile.h"
 
 #include <volk.h>
 
@@ -446,6 +447,7 @@ namespace miki::rhi {
         auto CreateLogicalDevice() -> RhiResult<void>;
         auto CreateVmaAllocator() -> RhiResult<void>;
         auto CreateTimelineSemaphores() -> RhiResult<void>;
+        void CreateEmulatedTimelineSemaphores();
         void PopulateCapabilities();
         void PopulateCapabilities_Tier1(
             const VkPhysicalDeviceFeatures& deviceFeatures, const std::vector<VkExtensionProperties>& availableExts

@@ -514,7 +514,7 @@ namespace miki::rhi {
         } else {
             // -----------------------------------------------------------------
             // Tier2: VulkanCompat — Vulkan 1.1 core + KHR extensions
-            // Sync model: VkFence (CPU↔GPU) + Binary semaphore (GPU↔GPU)
+            // Sync model: native timeline (if VK_KHR_timeline_semaphore) or CPU-emulated
             // -----------------------------------------------------------------
             if (!hasExt(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
                 MIKI_LOG_ERROR(Rhi, "[Vulkan] VulkanCompat requires VK_KHR_dynamic_rendering; use OpenGL (Tier4)");
@@ -534,6 +534,16 @@ namespace miki::rhi {
             }
             if (hasExt(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME)) {
                 deviceExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+            }
+
+            // Optional: timeline semaphore (enables unified timeline sync model for Tier2)
+            VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineSemFeature{};
+            if (hasExt(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+                timelineSemFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+                timelineSemFeature.timelineSemaphore = VK_TRUE;
+                *pNextTail = &timelineSemFeature;
+                pNextTail = &timelineSemFeature.pNext;
             }
 
             // Optional extensions with feature structs
@@ -688,6 +698,36 @@ namespace miki::rhi {
         computeTimelineValue_ = 0;
         transferTimelineValue_ = 0;
         return {};
+    }
+
+    // =========================================================================
+    // Emulated timeline semaphores (Tier2 without VK_KHR_timeline_semaphore)
+    // Uses binary VkSemaphores + CPU-side counters. SignalSemaphoreImpl/WaitSemaphoreImpl
+    // on these handles are CPU-only value updates (no GPU timeline), matching OpenGL/WebGPU.
+    // =========================================================================
+
+    void VulkanDevice::CreateEmulatedTimelineSemaphores() {
+        using enum ::miki::debug::LogCategory;
+        MIKI_LOG_WARN(Rhi, "[Vulkan] Timeline semaphore not available; using CPU-emulated timelines (Tier2 compat)");
+
+        auto createEmulated = [&](SemaphoreHandle& outHandle) {
+            auto [handle, data] = semaphores_.Allocate();
+            if (!data) {
+                MIKI_LOG_ERROR(Rhi, "[Vulkan] Failed to allocate emulated timeline semaphore");
+                return;
+            }
+            data->semaphore = VK_NULL_HANDLE;  // no GPU semaphore — CPU-only counter
+            data->type = SemaphoreType::Timeline;
+            outHandle = handle;
+        };
+
+        createEmulated(queueTimelines_.graphics);
+        createEmulated(queueTimelines_.compute);
+        createEmulated(queueTimelines_.transfer);
+
+        graphicsTimelineValue_ = 0;
+        computeTimelineValue_ = 0;
+        transferTimelineValue_ = 0;
     }
 
     // =========================================================================
@@ -1111,15 +1151,19 @@ namespace miki::rhi {
             return r4;
         }
 
-        // Tier1 uses timeline semaphores; Tier2 uses VkFence + binary semaphores
-        if (tier_ == BackendType::Vulkan14) {
+        PopulateCapabilities();
+
+        // Create timeline semaphores for any tier that supports them (native).
+        // Tier2 with VK_KHR_timeline_semaphore gets native timelines just like Tier1.
+        // Tier2 without the extension gets CPU-emulated timelines (see CreateEmulatedTimelineSemaphores).
+        if (capabilities_.hasTimelineSemaphore) {
             auto r5 = CreateTimelineSemaphores();
             if (!r5) {
                 return r5;
             }
+        } else {
+            CreateEmulatedTimelineSemaphores();
         }
-
-        PopulateCapabilities();
 
         return {};
     }
@@ -1257,7 +1301,9 @@ namespace miki::rhi {
     void VulkanDevice::DestroySemaphoreImpl(SemaphoreHandle h) {
         auto* data = semaphores_.Lookup(h);
         if (data) {
-            vkDestroySemaphore(device_, data->semaphore, nullptr);
+            if (data->semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device_, data->semaphore, nullptr);
+            }
             semaphores_.Free(h);
         }
     }
@@ -1266,6 +1312,9 @@ namespace miki::rhi {
         auto* data = semaphores_.Lookup(h);
         if (!data) {
             return;
+        }
+        if (data->semaphore == VK_NULL_HANDLE) {
+            return;  // emulated timeline — CPU-only, no GPU signal
         }
 
         VkSemaphoreSignalInfo signalInfo{};
@@ -1280,6 +1329,9 @@ namespace miki::rhi {
         if (!data) {
             return;
         }
+        if (data->semaphore == VK_NULL_HANDLE) {
+            return;  // emulated timeline — CPU-only, no GPU wait
+        }
 
         VkSemaphoreWaitInfo waitInfo{};
         waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
@@ -1293,6 +1345,9 @@ namespace miki::rhi {
         auto* data = semaphores_.Lookup(h);
         if (!data) {
             return 0;
+        }
+        if (data->semaphore == VK_NULL_HANDLE) {
+            return 0;  // emulated timeline — value tracked by SyncScheduler, not queryable via GPU
         }
         uint64_t value = 0;
         vkGetSemaphoreCounterValue(device_, data->semaphore, &value);
@@ -1339,12 +1394,12 @@ namespace miki::rhi {
             cmdInfos.push_back(info);
         }
 
-        // Marshal wait semaphores
+        // Marshal wait semaphores (skip emulated timeline handles with VK_NULL_HANDLE)
         std::vector<VkSemaphoreSubmitInfo> waitInfos;
         waitInfos.reserve(desc.waitSemaphores.size());
         for (auto& w : desc.waitSemaphores) {
             auto* semData = semaphores_.Lookup(w.semaphore);
-            if (!semData) {
+            if (!semData || semData->semaphore == VK_NULL_HANDLE) {
                 continue;
             }
             VkSemaphoreSubmitInfo info{};
@@ -1355,12 +1410,12 @@ namespace miki::rhi {
             waitInfos.push_back(info);
         }
 
-        // Marshal signal semaphores
+        // Marshal signal semaphores (skip emulated timeline handles with VK_NULL_HANDLE)
         std::vector<VkSemaphoreSubmitInfo> signalInfos;
         signalInfos.reserve(desc.signalSemaphores.size());
         for (auto& s : desc.signalSemaphores) {
             auto* semData = semaphores_.Lookup(s.semaphore);
-            if (!semData) {
+            if (!semData || semData->semaphore == VK_NULL_HANDLE) {
                 continue;
             }
             VkSemaphoreSubmitInfo info{};

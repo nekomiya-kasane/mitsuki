@@ -13,7 +13,8 @@
  */
 #pragma once
 
-#include "miki/rhi/backend/BackendStub.h"
+#include "miki/rhi/Device.h"
+#include "miki/rhi/GpuCapabilityProfile.h"
 #include "miki/rhi/adaptation/ShadowBuffer.h"
 
 #include <dawn/webgpu.h>

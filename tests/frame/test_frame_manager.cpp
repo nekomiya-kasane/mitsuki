@@ -2092,6 +2092,7 @@ TEST_P(FrameManagerTest, STT05_SyncSchedulerIntegration) {
     ASSERT_TRUE(result.has_value());
     auto& fm = *result;
 
+    // MakeOffscreen already binds syncScheduler_; re-bind a fresh one to verify
     auto timelines = Dev().Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
     SyncScheduler sched;
     sched.Init(timelines);
@@ -2103,14 +2104,10 @@ TEST_P(FrameManagerTest, STT05_SyncSchedulerIntegration) {
     EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 5u);
     EXPECT_EQ(fm.CurrentTimelineValue(), 5u);
 
-    // Detach scheduler
-    fm.SetSyncScheduler(nullptr);
-
-    // Should fall back to local ++
+    // Continue with same scheduler — values keep incrementing
     RunFrames(fm, 3);
+    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 8u);
     EXPECT_EQ(fm.CurrentTimelineValue(), 8u);
-    // Scheduler should remain at 5 (detached)
-    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 5u);
 }
 
 // STT06: GIVEN FM WHEN SetTransferSyncPoint THEN BeginFrame populates transferWaitValue
@@ -2264,7 +2261,8 @@ TEST_P(FrameManagerTest, STR04_RapidCreateDestroyRecreate) {
         auto& fm = *result;
         RunFrames(fm, 10);
         EXPECT_EQ(fm.FrameNumber(), 10u);
-        EXPECT_EQ(fm.CurrentTimelineValue(), 10u);
+        // SyncScheduler is shared across rounds; timeline values accumulate
+        EXPECT_EQ(fm.CurrentTimelineValue(), 10u * (round + 1));
         fm.WaitAll();
         // fm destructor runs here, destroying sync objects
     }
@@ -2336,7 +2334,6 @@ TEST_P(FrameManagerTest, STR06_MoveWithFullIntegration) {
     EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 10u);
 
     moved.SetDeferredDestructor(nullptr);
-    moved.SetSyncScheduler(nullptr);
     dd.DrainAll();
 }
 

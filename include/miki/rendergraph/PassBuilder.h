@@ -19,7 +19,7 @@ namespace miki::rg {
     /// Constructed by RenderGraphBuilder for each AddPass call.
     /// Records resource accesses and maintains SSA version tracking.
     class PassBuilder {
-    public:
+       public:
         PassBuilder(RenderGraphBuilder& builder, uint32_t passIndex) noexcept
             : builder_(builder), passIndex_(passIndex) {}
 
@@ -44,28 +44,42 @@ namespace miki::rg {
 
         /// @brief Declare a write dependency on a texture.
         /// Returns a new SSA-versioned handle representing the written state.
-        [[nodiscard]] auto WriteTexture(RGResourceHandle handle, ResourceAccess access = ResourceAccess::ShaderWrite) -> RGResourceHandle;
+        [[nodiscard]] auto WriteTexture(RGResourceHandle handle, ResourceAccess access = ResourceAccess::ShaderWrite)
+            -> RGResourceHandle;
 
-        /// @brief Declare a color attachment write.
-        [[nodiscard]] auto WriteColorAttachment(RGResourceHandle handle, uint32_t index = 0) -> RGResourceHandle;
+        /// @brief Declare a color attachment write with explicit load/store ops.
+        [[nodiscard]] auto WriteColorAttachment(
+            RGResourceHandle handle, uint32_t index = 0, rhi::AttachmentLoadOp loadOp = rhi::AttachmentLoadOp::Clear,
+            rhi::AttachmentStoreOp storeOp = rhi::AttachmentStoreOp::Store, rhi::ClearValue clearValue = {}
+        ) -> RGResourceHandle;
 
-        /// @brief Declare a depth/stencil attachment write.
-        [[nodiscard]] auto WriteDepthStencil(RGResourceHandle handle) -> RGResourceHandle;
+        /// @brief Declare a depth/stencil attachment write with explicit load/store ops.
+        [[nodiscard]] auto WriteDepthStencil(
+            RGResourceHandle handle, rhi::AttachmentLoadOp loadOp = rhi::AttachmentLoadOp::Clear,
+            rhi::AttachmentStoreOp storeOp = rhi::AttachmentStoreOp::Store, rhi::ClearValue clearValue = {{}, {1.0f, 0}}
+        ) -> RGResourceHandle;
 
         // -- Buffer writes --
 
         /// @brief Declare a write dependency on a buffer.
         /// Returns a new SSA-versioned handle.
-        [[nodiscard]] auto WriteBuffer(RGResourceHandle handle, ResourceAccess access = ResourceAccess::ShaderWrite) -> RGResourceHandle;
+        [[nodiscard]] auto WriteBuffer(RGResourceHandle handle, ResourceAccess access = ResourceAccess::ShaderWrite)
+            -> RGResourceHandle;
 
         // -- Read-Write (aliased read + write) --
 
         /// @brief Declare a read-write dependency on a texture (UAV / storage image).
         /// Returns a new SSA-versioned handle.
-        [[nodiscard]] auto ReadWriteTexture(RGResourceHandle handle, ResourceAccess readAccess = ResourceAccess::ShaderReadOnly, ResourceAccess writeAccess = ResourceAccess::ShaderWrite) -> RGResourceHandle;
+        [[nodiscard]] auto ReadWriteTexture(
+            RGResourceHandle handle, ResourceAccess readAccess = ResourceAccess::ShaderReadOnly,
+            ResourceAccess writeAccess = ResourceAccess::ShaderWrite
+        ) -> RGResourceHandle;
 
         /// @brief Declare a read-write dependency on a buffer (SSBO / UAV).
-        [[nodiscard]] auto ReadWriteBuffer(RGResourceHandle handle, ResourceAccess readAccess = ResourceAccess::ShaderReadOnly, ResourceAccess writeAccess = ResourceAccess::ShaderWrite) -> RGResourceHandle;
+        [[nodiscard]] auto ReadWriteBuffer(
+            RGResourceHandle handle, ResourceAccess readAccess = ResourceAccess::ShaderReadOnly,
+            ResourceAccess writeAccess = ResourceAccess::ShaderWrite
+        ) -> RGResourceHandle;
 
         // -- Per-pass resource creation --
 
@@ -78,10 +92,12 @@ namespace miki::rg {
         // -- History resources (cross-frame temporal) --
 
         /// @brief Read the previous frame's version of a texture.
-        [[nodiscard]] auto ReadHistoryTexture(RGResourceHandle handle, const char* historyName = nullptr) -> RGResourceHandle;
+        [[nodiscard]] auto ReadHistoryTexture(RGResourceHandle handle, const char* historyName = nullptr)
+            -> RGResourceHandle;
 
         /// @brief Read the previous frame's version of a buffer.
-        [[nodiscard]] auto ReadHistoryBuffer(RGResourceHandle handle, const char* historyName = nullptr) -> RGResourceHandle;
+        [[nodiscard]] auto ReadHistoryBuffer(RGResourceHandle handle, const char* historyName = nullptr)
+            -> RGResourceHandle;
 
         // -- Async task integration --
 
@@ -99,14 +115,22 @@ namespace miki::rg {
         // -- Subresource-level access --
 
         /// @brief Read a specific mip level of a texture.
-        void ReadTextureMip(RGResourceHandle handle, uint32_t mipLevel, ResourceAccess access = ResourceAccess::ShaderReadOnly);
+        void ReadTextureMip(
+            RGResourceHandle handle, uint32_t mipLevel, ResourceAccess access = ResourceAccess::ShaderReadOnly
+        );
 
         /// @brief Write a specific mip level of a texture. Returns new version.
-        [[nodiscard]] auto WriteTextureMip(RGResourceHandle handle, uint32_t mipLevel, ResourceAccess access = ResourceAccess::ShaderWrite) -> RGResourceHandle;
+        [[nodiscard]] auto WriteTextureMip(
+            RGResourceHandle handle, uint32_t mipLevel, ResourceAccess access = ResourceAccess::ShaderWrite
+        ) -> RGResourceHandle;
 
-    private:
-        void RecordRead(RGResourceHandle handle, ResourceAccess access, uint32_t mip = kAllMips, uint32_t layer = kAllLayers);
-        auto RecordWrite(RGResourceHandle handle, ResourceAccess access, uint32_t mip = kAllMips, uint32_t layer = kAllLayers) -> RGResourceHandle;
+       private:
+        void RecordRead(
+            RGResourceHandle handle, ResourceAccess access, uint32_t mip = kAllMips, uint32_t layer = kAllLayers
+        );
+        auto RecordWrite(
+            RGResourceHandle handle, ResourceAccess access, uint32_t mip = kAllMips, uint32_t layer = kAllLayers
+        ) -> RGResourceHandle;
 
         RenderGraphBuilder& builder_;
         uint32_t passIndex_;

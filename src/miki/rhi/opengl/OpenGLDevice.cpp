@@ -680,9 +680,13 @@ namespace miki::rhi {
         data->value = value;
     }
 
-    void OpenGLDevice::WaitSemaphoreImpl(SemaphoreHandle h, uint64_t /*value*/, uint64_t timeout) {
+    void OpenGLDevice::WaitSemaphoreImpl(SemaphoreHandle h, uint64_t value, uint64_t timeout) {
         auto* data = semaphores_.Lookup(h);
         if (!data || !data->sync) {
+            return;
+        }
+        // Timeline emulation: if the CPU-tracked value already reached the target, skip GPU wait
+        if (data->value >= value) {
             return;
         }
         gl_->ClientWaitSync(data->sync, GL_SYNC_FLUSH_COMMANDS_BIT, timeout);

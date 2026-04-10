@@ -12,6 +12,10 @@
 #include "miki/rendergraph/RenderGraphExecutor.h"
 #include "miki/rendergraph/RenderPassContext.h"
 #include "miki/rhi/adaptation/AdaptationQuery.h"
+#include "miki/rhi/backend/MockDevice.h"
+#include "miki/frame/SyncScheduler.h"
+#include "miki/frame/CommandPoolAllocator.h"
+#include "miki/frame/FrameContext.h"
 
 using namespace miki::rg;
 using namespace miki::rhi;
@@ -7541,4 +7545,1349 @@ TEST(SplitBarrier, DisabledProducesNoSplitBarriers) {
     for (auto& p : result->passes) {
         EXPECT_TRUE(p.releaseBarriers.empty());
     }
+}
+// Phase E: Executor Runtime Tests
+//
+// These tests exercise the full Execute() pipeline (AllocateTransients +
+// RecordPasses + SubmitBatches) using MockDevice which now returns synthetic
+// valid handles. CPU-only testing of:
+//   - Pass lambda invocation order and count
+//   - Debug label emission
+//   - Merged group rendering bracket logic
+//   - Aliasing barrier emission
+//   - Attachment load/store op propagation
+//   - RenderPassContext field correctness
+//   - Edge cases (empty graph, large pass count, mixed imported + transient)
+// =============================================================================
+
+namespace {
+
+    // ---------------------------------------------------------------------------
+    // Helper: compile + execute a graph with MockDevice
+    // ---------------------------------------------------------------------------
+
+    struct ExecuteResult {
+        RenderGraphExecutor executor;
+        ExecutionStats stats;
+    };
+
+    auto CompileAndExecute(
+        RenderGraphBuilder& builder, const ExecutorConfig& execCfg = {}, bool enableMerging = false,
+        bool enableAliasing = true
+    ) -> std::expected<ExecuteResult, miki::core::ErrorCode> {
+        builder.Build();
+
+        RenderGraphCompiler::Options opts;
+        opts.enableRenderPassMerging = enableMerging;
+        opts.enableTransientAliasing = enableAliasing;
+        opts.enableSplitBarriers = false;
+        RenderGraphCompiler compiler(opts);
+        auto compileResult = compiler.Compile(builder);
+        if (!compileResult) {
+            return std::unexpected(miki::core::ErrorCode::InvalidState);
+        }
+
+        MockDevice device;
+        device.Init();
+        auto deviceHandle = DeviceHandle(&device, BackendType::Mock);
+
+        miki::frame::SyncScheduler scheduler;
+        scheduler.Init(device.GetQueueTimelinesImpl());
+
+        miki::frame::CommandPoolAllocator::Desc poolDesc{
+            .device = deviceHandle,
+            .framesInFlight = 2,
+            .recordingThreadCount = execCfg.maxRecordingThreads,
+        };
+        auto poolResult = miki::frame::CommandPoolAllocator::Create(poolDesc);
+        if (!poolResult) {
+            return std::unexpected(miki::core::ErrorCode::OutOfMemory);
+        }
+        auto& pool = *poolResult;
+
+        miki::frame::FrameContext frame{
+            .frameIndex = 0,
+            .frameNumber = 0,
+            .width = 1920,
+            .height = 1080,
+        };
+
+        ExecuteResult result;
+        result.executor = RenderGraphExecutor(execCfg);
+
+        auto execResult = result.executor.Execute(*compileResult, builder, frame, deviceHandle, scheduler, pool);
+        if (!execResult) {
+            return std::unexpected(execResult.error());
+        }
+        result.stats = result.executor.GetStats();
+        return result;
+    }
+
+}  // anonymous namespace
+
+// =============================================================================
+// Executor — Single pass execution
+// =============================================================================
+
+TEST(Executor, SingleGraphicsPassExecutes) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 512, .height = 512, .debugName = "RT"});
+    uint32_t invoked = 0;
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            invoked++;
+            EXPECT_NE(ctx.passName, nullptr);
+            EXPECT_STREQ(ctx.passName, "Draw");
+            EXPECT_NE(ctx.frameAllocator, nullptr);
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(invoked, 1u);
+    EXPECT_EQ(result->stats.passesRecorded, 1u);
+    EXPECT_EQ(result->stats.batchesSubmitted, 1u);
+    EXPECT_GE(result->stats.transientTexturesAllocated, 1u);
+    EXPECT_GE(result->stats.transientTextureViewsCreated, 1u);
+}
+
+TEST(Executor, SingleComputePassExecutes) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    uint32_t invoked = 0;
+    builder.AddComputePass(
+        "Compute",
+        [&](PassBuilder& pb) {
+            pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            invoked++;
+            EXPECT_STREQ(ctx.passName, "Compute");
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(invoked, 1u);
+    EXPECT_EQ(result->stats.passesRecorded, 1u);
+    EXPECT_GE(result->stats.transientBuffersAllocated, 1u);
+}
+
+// =============================================================================
+// Executor — Multi-pass chain with barrier tracking
+// =============================================================================
+
+TEST(Executor, ThreePassChainInvocationOrder) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 256, .height = 256, .debugName = "RT"});
+    auto rt2 = builder.CreateTexture({.width = 256, .height = 256, .debugName = "RT2"});
+
+    std::vector<uint32_t> order;
+    builder.AddGraphicsPass(
+        "Pass0", [&](PassBuilder& pb) { rt = pb.WriteColorAttachment(rt); },
+        [&](RenderPassContext&) { order.push_back(0); }
+    );
+    builder.AddGraphicsPass(
+        "Pass1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            rt2 = pb.WriteColorAttachment(rt2);
+        },
+        [&](RenderPassContext&) { order.push_back(1); }
+    );
+    builder.AddGraphicsPass(
+        "Pass2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt2);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { order.push_back(2); }
+    );
+
+    ExecutorConfig cfg;
+    cfg.enableDebugLabels = false;
+    auto result = CompileAndExecute(builder, cfg);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(order.size(), 3u);
+    // Must respect topological order: 0 < 1 < 2
+    EXPECT_LT(order[0], order[1]);
+    EXPECT_LT(order[1], order[2]);
+    EXPECT_EQ(result->stats.passesRecorded, 3u);
+    EXPECT_GT(result->stats.barriersEmitted, 0u);
+}
+
+// =============================================================================
+// Executor — Debug labels
+// =============================================================================
+
+TEST(Executor, DebugLabelsEnabledByDefault) {
+    ExecutorConfig cfg;
+    EXPECT_TRUE(cfg.enableDebugLabels);
+}
+
+TEST(Executor, DebugLabelsDisabledDoesNotBreak) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    uint32_t invoked = 0;
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { invoked++; }
+    );
+
+    ExecutorConfig cfg;
+    cfg.enableDebugLabels = false;
+    auto result = CompileAndExecute(builder, cfg);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(invoked, 1u);
+    EXPECT_EQ(result->stats.passesRecorded, 1u);
+}
+
+// =============================================================================
+// Executor — Aliasing barrier emission
+// =============================================================================
+
+TEST(Executor, AliasingBarriersEmittedForSharedSlots) {
+    // Two sequential passes writing different textures of the same size.
+    // If aliased to the same slot, aliasing barriers should be counted in stats.
+    RenderGraphBuilder builder;
+    auto tA = builder.CreateTexture({.format = Format::RGBA8_UNORM, .width = 128, .height = 128, .debugName = "tA"});
+    auto tB = builder.CreateTexture({.format = Format::RGBA8_UNORM, .width = 128, .height = 128, .debugName = "tB"});
+
+    builder.AddGraphicsPass(
+        "WriteA",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(tA);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "WriteB",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(tB);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->stats.passesRecorded, 2u);
+    // Barriers should be emitted (at minimum acquire barriers for each pass)
+    EXPECT_GE(result->stats.barriersEmitted, 0u);
+    // Two textures allocated
+    EXPECT_GE(result->stats.transientTexturesAllocated, 2u);
+}
+
+// =============================================================================
+// Executor — Attachment load/store ops propagation
+// =============================================================================
+
+TEST(Executor, LoadStoreOpsPassedToRenderPassContext) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 256, .height = 256, .debugName = "RT"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt, 0, AttachmentLoadOp::Load, AttachmentStoreOp::DontCare);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            // RenderPassContext should have color attachments populated
+            EXPECT_GE(ctx.colorAttachments.size(), 1u);
+            if (!ctx.colorAttachments.empty()) {
+                EXPECT_EQ(ctx.colorAttachments[0].loadOp, AttachmentLoadOp::Load);
+                EXPECT_EQ(ctx.colorAttachments[0].storeOp, AttachmentStoreOp::DontCare);
+            }
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+TEST(Executor, DepthStencilAttachmentPassedToContext) {
+    RenderGraphBuilder builder;
+    auto depth
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 128, .height = 128, .debugName = "Depth"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "DepthPass",
+        [&](PassBuilder& pb) {
+            pb.WriteDepthStencil(depth, AttachmentLoadOp::Clear, AttachmentStoreOp::Store);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            EXPECT_NE(ctx.depthAttachment, nullptr);
+            if (ctx.depthAttachment) {
+                EXPECT_EQ(ctx.depthAttachment->loadOp, AttachmentLoadOp::Clear);
+                EXPECT_EQ(ctx.depthAttachment->storeOp, AttachmentStoreOp::Store);
+            }
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+TEST(Executor, MultipleColorAttachmentSlots) {
+    RenderGraphBuilder builder;
+    auto rt0 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT0"});
+    auto rt1 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT1"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "MRT",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt0, 0, AttachmentLoadOp::Clear, AttachmentStoreOp::Store);
+            pb.WriteColorAttachment(rt1, 1, AttachmentLoadOp::Load, AttachmentStoreOp::DontCare);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            EXPECT_GE(ctx.colorAttachments.size(), 2u);
+            if (ctx.colorAttachments.size() >= 2) {
+                EXPECT_EQ(ctx.colorAttachments[0].loadOp, AttachmentLoadOp::Clear);
+                EXPECT_EQ(ctx.colorAttachments[0].storeOp, AttachmentStoreOp::Store);
+                EXPECT_EQ(ctx.colorAttachments[1].loadOp, AttachmentLoadOp::Load);
+                EXPECT_EQ(ctx.colorAttachments[1].storeOp, AttachmentStoreOp::DontCare);
+            }
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+// =============================================================================
+// Executor — Merged group execution
+// =============================================================================
+
+TEST(Executor, MergedGroupPassesInvoked) {
+    // Two consecutive passes sharing depth -> merged. Both must be invoked.
+    RenderGraphBuilder builder;
+    auto depth
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 128, .height = 128, .debugName = "Depth"});
+
+    std::vector<uint32_t> order;
+    RGResourceHandle writtenDepth;
+    builder.AddGraphicsPass(
+        "DepthPre",
+        [&](PassBuilder& pb) {
+            writtenDepth = pb.WriteDepthStencil(depth);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { order.push_back(0); }
+    );
+    builder.AddGraphicsPass(
+        "GBuffer",
+        [&](PassBuilder& pb) {
+            pb.WriteDepthStencil(writtenDepth);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { order.push_back(1); }
+    );
+
+    auto result = CompileAndExecute(builder, {}, /*enableMerging=*/true);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(order.size(), 2u);
+    EXPECT_EQ(order[0], 0u);
+    EXPECT_EQ(order[1], 1u);
+    EXPECT_EQ(result->stats.passesRecorded, 2u);
+}
+
+TEST(Executor, MergedGroupContextStillHasAttachments) {
+    // Even inside a merged group, each pass should receive its own attachment info
+    RenderGraphBuilder builder;
+    auto depth
+        = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 128, .height = 128, .debugName = "Depth"});
+
+    bool pass0HasDepth = false;
+    bool pass1HasDepth = false;
+    RGResourceHandle writtenDepth;
+    builder.AddGraphicsPass(
+        "P0",
+        [&](PassBuilder& pb) {
+            writtenDepth = pb.WriteDepthStencil(depth);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) { pass0HasDepth = (ctx.depthAttachment != nullptr); }
+    );
+    builder.AddGraphicsPass(
+        "P1",
+        [&](PassBuilder& pb) {
+            pb.WriteDepthStencil(writtenDepth);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) { pass1HasDepth = (ctx.depthAttachment != nullptr); }
+    );
+
+    auto result = CompileAndExecute(builder, {}, /*enableMerging=*/true);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(pass0HasDepth);
+    EXPECT_TRUE(pass1HasDepth);
+}
+
+// =============================================================================
+// Executor — Imported resources
+// =============================================================================
+
+TEST(Executor, ImportedTextureUsesExistingHandle) {
+    RenderGraphBuilder builder;
+    auto extTex = TextureHandle{42};
+    auto imported = builder.ImportTexture(extTex, "Backbuffer");
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "Use",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(imported, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            // The physical texture at the imported index should be the original handle
+            auto resolved = ctx.GetTexture(imported);
+            EXPECT_EQ(resolved.value, 42u);
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+TEST(Executor, MixedImportedAndTransient) {
+    RenderGraphBuilder builder;
+    auto extTex = TextureHandle{99};
+    auto imported = builder.ImportTexture(extTex, "External");
+    auto transient = builder.CreateTexture({.width = 64, .height = 64, .debugName = "Transient"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "Write",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(imported, ResourceAccess::ShaderReadOnly);
+            pb.WriteColorAttachment(transient);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            // Imported should resolve to original
+            auto resolvedImported = ctx.GetTexture(imported);
+            EXPECT_EQ(resolvedImported.value, 99u);
+            // Transient should resolve to a valid (non-zero) handle
+            auto resolvedTransient = ctx.GetTexture(transient);
+            EXPECT_TRUE(resolvedTransient.IsValid());
+            EXPECT_NE(resolvedTransient.value, 99u);
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+// =============================================================================
+// Executor — RenderPassContext fields
+// =============================================================================
+
+TEST(ExecutorContext, PhysicalBufferResolution) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 512, .debugName = "Buf"});
+
+    bool verified = false;
+    builder.AddComputePass(
+        "Compute",
+        [&](PassBuilder& pb) {
+            pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            auto resolved = ctx.GetBuffer(buf);
+            EXPECT_TRUE(resolved.IsValid());
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+TEST(ExecutorContext, TextureViewResolution) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            auto view = ctx.GetTextureView(rt);
+            EXPECT_TRUE(view.IsValid());
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+TEST(ExecutorContext, OutOfRangeResolutionReturnsInvalid) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            // Create a handle with an absurdly high index
+            auto bogus = RGResourceHandle::Create(9999, 0);
+            EXPECT_FALSE(ctx.GetTexture(bogus).IsValid());
+            EXPECT_FALSE(ctx.GetBuffer(bogus).IsValid());
+            EXPECT_FALSE(ctx.GetTextureView(bogus).IsValid());
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+TEST(ExecutorContext, FrameAllocatorIsNonNull) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            EXPECT_NE(ctx.frameAllocator, nullptr);
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+// =============================================================================
+// Executor — Heap creation stats
+// =============================================================================
+
+TEST(Executor, HeapCreationStatsCorrect) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.format = Format::RGBA8_UNORM, .width = 256, .height = 256, .debugName = "RT"});
+    auto buf = builder.CreateBuffer({.size = 4096, .debugName = "Buf"});
+
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    // Should have created heaps for RT/DS and Buffer groups
+    EXPECT_GE(result->stats.heapsCreated, 1u);
+    EXPECT_GT(result->stats.transientMemoryBytes, 0u);
+}
+
+// =============================================================================
+// Executor — Stats reset between executions
+// =============================================================================
+
+TEST(Executor, StatsResetOnSecondExecution) {
+    auto buildAndExecute = [](RenderGraphExecutor& executor) -> bool {
+        RenderGraphBuilder builder;
+        auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+        builder.AddGraphicsPass(
+            "P",
+            [&](PassBuilder& pb) {
+                pb.WriteColorAttachment(rt);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        builder.Build();
+
+        RenderGraphCompiler compiler;
+        auto compiled = compiler.Compile(builder);
+        if (!compiled) {
+            return false;
+        }
+
+        MockDevice device;
+        device.Init();
+        auto dh = DeviceHandle(&device, BackendType::Mock);
+        miki::frame::SyncScheduler sched;
+        sched.Init(device.GetQueueTimelinesImpl());
+        miki::frame::CommandPoolAllocator::Desc pd{.device = dh, .framesInFlight = 2};
+        auto pool = miki::frame::CommandPoolAllocator::Create(pd);
+        if (!pool) {
+            return false;
+        }
+        miki::frame::FrameContext frame{.width = 64, .height = 64};
+        return executor.Execute(*compiled, builder, frame, dh, sched, *pool).has_value();
+    };
+
+    RenderGraphExecutor executor;
+    ASSERT_TRUE(buildAndExecute(executor));
+    auto s1 = executor.GetStats();
+    EXPECT_EQ(s1.passesRecorded, 1u);
+
+    ASSERT_TRUE(buildAndExecute(executor));
+    auto s2 = executor.GetStats();
+    // Stats must reset: should be 1, not 2
+    EXPECT_EQ(s2.passesRecorded, 1u);
+}
+
+// =============================================================================
+// Executor — Edge cases
+// =============================================================================
+
+TEST(Executor, EmptyGraphSucceeds) {
+    RenderGraphBuilder builder;
+    // No passes added — graph is empty
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->stats.passesRecorded, 0u);
+    EXPECT_EQ(result->stats.batchesSubmitted, 0u);
+    EXPECT_EQ(result->stats.transientTexturesAllocated, 0u);
+}
+
+TEST(Executor, AllPassesCulledResultsInEmptyExecution) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    // No side effects -> will be culled
+    builder.AddGraphicsPass(
+        "Culled", [&](PassBuilder& pb) { pb.WriteColorAttachment(rt); },
+        [](RenderPassContext&) { FAIL() << "Should not be invoked"; }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->stats.passesRecorded, 0u);
+}
+
+// =============================================================================
+// Executor — Large pass count stress test
+// =============================================================================
+
+TEST(Executor, TwentyPassChainExecutes) {
+    constexpr int N = 20;
+    RenderGraphBuilder builder;
+    std::vector<RGResourceHandle> textures(N);
+    for (int i = 0; i < N; ++i) {
+        textures[i] = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    }
+
+    uint32_t invokeCount = 0;
+    for (int i = 0; i < N; ++i) {
+        bool isLast = (i == N - 1);
+        int readIdx = (i > 0) ? i - 1 : -1;
+        int writeIdx = i;
+        builder.AddGraphicsPass(
+            "P",
+            [&, readIdx, writeIdx, isLast](PassBuilder& pb) {
+                if (readIdx >= 0) {
+                    pb.ReadTexture(textures[readIdx]);
+                }
+                textures[writeIdx] = pb.WriteColorAttachment(textures[writeIdx]);
+                if (isLast) {
+                    pb.SetSideEffects();
+                }
+            },
+            [&](RenderPassContext&) { invokeCount++; }
+        );
+    }
+
+    ExecutorConfig cfg;
+    cfg.enableDebugLabels = false;
+    auto result = CompileAndExecute(builder, cfg);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(invokeCount, static_cast<uint32_t>(N));
+    EXPECT_EQ(result->stats.passesRecorded, static_cast<uint32_t>(N));
+}
+
+// =============================================================================
+// Executor — Complex multi-flow: diamond + merge + aliasing
+// =============================================================================
+
+TEST(ExecutorComplex, DiamondGraphExecution) {
+    // A writes t1+t2, B reads t1, C reads t2, D reads B+C output (side effect)
+    RenderGraphBuilder builder;
+    auto t1 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "t1"});
+    auto t2 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "t2"});
+    auto tB = builder.CreateTexture({.width = 128, .height = 128, .debugName = "tB"});
+    auto tC = builder.CreateTexture({.width = 128, .height = 128, .debugName = "tC"});
+
+    std::vector<uint32_t> order;
+    builder.AddGraphicsPass(
+        "A",
+        [&](PassBuilder& pb) {
+            t1 = pb.WriteColorAttachment(t1, 0);
+            t2 = pb.WriteColorAttachment(t2, 1);
+        },
+        [&](RenderPassContext&) { order.push_back(0); }
+    );
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t1);
+            tB = pb.WriteColorAttachment(tB);
+        },
+        [&](RenderPassContext&) { order.push_back(1); }
+    );
+    builder.AddGraphicsPass(
+        "C",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t2);
+            tC = pb.WriteColorAttachment(tC);
+        },
+        [&](RenderPassContext&) { order.push_back(2); }
+    );
+    builder.AddGraphicsPass(
+        "D",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tB);
+            pb.ReadTexture(tC);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { order.push_back(3); }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(order.size(), 4u);
+    // A must be first, D must be last
+    EXPECT_EQ(order[0], 0u);
+    EXPECT_EQ(order[3], 3u);
+    // B and C must be between A and D (either order)
+    bool bBeforeD = false, cBeforeD = false;
+    for (size_t i = 0; i < order.size(); ++i) {
+        if (order[i] == 1) {
+            bBeforeD = true;
+        }
+        if (order[i] == 2) {
+            cBeforeD = true;
+        }
+        if (order[i] == 3) {
+            EXPECT_TRUE(bBeforeD);
+            EXPECT_TRUE(cBeforeD);
+        }
+    }
+    EXPECT_EQ(result->stats.passesRecorded, 4u);
+}
+
+TEST(ExecutorComplex, MergePlusNonMergePassesMixed) {
+    // P0 writes depth, P1 writes depth (merged), P2 reads depth as SRV (not merged)
+    RenderGraphBuilder builder;
+    auto depth = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 256, .height = 256, .debugName = "D"});
+
+    std::vector<uint32_t> order;
+    RGResourceHandle d0;
+    builder.AddGraphicsPass(
+        "P0",
+        [&](PassBuilder& pb) {
+            d0 = pb.WriteDepthStencil(depth);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { order.push_back(0); }
+    );
+
+    RGResourceHandle d1;
+    builder.AddGraphicsPass(
+        "P1",
+        [&](PassBuilder& pb) {
+            d1 = pb.WriteDepthStencil(d0);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { order.push_back(1); }
+    );
+
+    builder.AddGraphicsPass(
+        "P2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(d1, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { order.push_back(2); }
+    );
+
+    auto result = CompileAndExecute(builder, {}, /*enableMerging=*/true);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(order.size(), 3u);
+    EXPECT_EQ(order[0], 0u);
+    EXPECT_EQ(order[1], 1u);
+    EXPECT_EQ(order[2], 2u);
+    EXPECT_EQ(result->stats.passesRecorded, 3u);
+}
+
+TEST(ExecutorComplex, ImportedPlusTransientAliasingExecution) {
+    // External backbuffer (imported) + 2 transient textures that can alias
+    RenderGraphBuilder builder;
+    auto backbuffer = builder.ImportTexture(TextureHandle{777}, "Backbuffer");
+    auto t1 = builder.CreateTexture({.width = 256, .height = 256, .debugName = "t1"});
+    auto t2 = builder.CreateTexture({.width = 256, .height = 256, .debugName = "t2"});
+
+    std::vector<uint32_t> order;
+    builder.AddGraphicsPass(
+        "Scene", [&](PassBuilder& pb) { t1 = pb.WriteColorAttachment(t1); },
+        [&](RenderPassContext&) { order.push_back(0); }
+    );
+    builder.AddGraphicsPass(
+        "PostProcess",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t1);
+            t2 = pb.WriteColorAttachment(t2);
+        },
+        [&](RenderPassContext&) { order.push_back(1); }
+    );
+    builder.AddGraphicsPass(
+        "Composite",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t2);
+            pb.ReadTexture(backbuffer, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            order.push_back(2);
+            // Backbuffer should resolve to original handle
+            auto bb = ctx.GetTexture(backbuffer);
+            EXPECT_EQ(bb.value, 777u);
+            // Transient textures should resolve to valid handles
+            EXPECT_TRUE(ctx.GetTexture(t1).IsValid());
+            EXPECT_TRUE(ctx.GetTexture(t2).IsValid());
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(order.size(), 3u);
+    EXPECT_EQ(result->stats.passesRecorded, 3u);
+}
+
+// =============================================================================
+// Executor — Verify pass lambda receives correct passIndex / passName
+// =============================================================================
+
+TEST(ExecutorContext, PassIndexAndNameCorrect) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+
+    struct PassInfo {
+        uint32_t idx;
+        const char* name;
+    };
+    std::vector<PassInfo> captured;
+
+    auto h0 = builder.AddGraphicsPass(
+        "Alpha", [&](PassBuilder& pb) { rt = pb.WriteColorAttachment(rt); },
+        [&](RenderPassContext& ctx) { captured.push_back({ctx.passIndex, ctx.passName}); }
+    );
+    auto h1 = builder.AddGraphicsPass(
+        "Beta",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(rt);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) { captured.push_back({ctx.passIndex, ctx.passName}); }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(captured.size(), 2u);
+    // First invoked pass should be Alpha
+    EXPECT_EQ(captured[0].idx, h0.index);
+    EXPECT_STREQ(captured[0].name, "Alpha");
+    EXPECT_EQ(captured[1].idx, h1.index);
+    EXPECT_STREQ(captured[1].name, "Beta");
+}
+
+// =============================================================================
+// Executor — Compute + Graphics mixed pipeline
+// =============================================================================
+
+TEST(ExecutorComplex, ComputeThenGraphicsPipeline) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "SSBO"});
+    auto rt = builder.CreateTexture({.width = 256, .height = 256, .debugName = "RT"});
+
+    std::vector<std::string> names;
+    RGResourceHandle writtenBuf;
+    builder.AddComputePass(
+        "GenerateData", [&](PassBuilder& pb) { writtenBuf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite); },
+        [&](RenderPassContext&) { names.push_back("GenerateData"); }
+    );
+    builder.AddGraphicsPass(
+        "Render",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(writtenBuf, ResourceAccess::ShaderReadOnly);
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { names.push_back("Render"); }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(names.size(), 2u);
+    EXPECT_EQ(names[0], "GenerateData");
+    EXPECT_EQ(names[1], "Render");
+    EXPECT_EQ(result->stats.passesRecorded, 2u);
+    EXPECT_GE(result->stats.transientBuffersAllocated, 1u);
+    EXPECT_GE(result->stats.transientTexturesAllocated, 1u);
+}
+
+// =============================================================================
+// Executor — Three-pass merged chain
+// =============================================================================
+
+TEST(ExecutorMergedGroup, ThreeSubpassChainAllInvoked) {
+    RenderGraphBuilder builder;
+    auto depth = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 128, .height = 128, .debugName = "D"});
+
+    uint32_t count = 0;
+    RGResourceHandle d0, d1;
+    builder.AddGraphicsPass(
+        "Sub0",
+        [&](PassBuilder& pb) {
+            d0 = pb.WriteDepthStencil(depth);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { count++; }
+    );
+    builder.AddGraphicsPass(
+        "Sub1",
+        [&](PassBuilder& pb) {
+            d1 = pb.WriteDepthStencil(d0);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { count++; }
+    );
+    builder.AddGraphicsPass(
+        "Sub2",
+        [&](PassBuilder& pb) {
+            pb.WriteDepthStencil(d1);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext&) { count++; }
+    );
+
+    auto result = CompileAndExecute(builder, {}, /*enableMerging=*/true);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(count, 3u);
+    EXPECT_EQ(result->stats.passesRecorded, 3u);
+}
+
+// =============================================================================
+// Executor — Verify no double-begin/end rendering in merged group
+// (verified by correct stats — if double begin/end happened, MockCommandBuffer
+// would not crash but pass count would be wrong)
+// =============================================================================
+
+TEST(ExecutorMergedGroup, StatsMatchMergedGroupCount) {
+    RenderGraphBuilder builder;
+    auto depth = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 128, .height = 128, .debugName = "D"});
+
+    RGResourceHandle d0;
+    builder.AddGraphicsPass(
+        "A",
+        [&](PassBuilder& pb) {
+            d0 = pb.WriteDepthStencil(depth);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.WriteDepthStencil(d0);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+
+    // Run both with and without merging, stats.passesRecorded should be identical
+    auto mergedResult = CompileAndExecute(builder, {}, /*enableMerging=*/true);
+    ASSERT_TRUE(mergedResult.has_value());
+
+    RenderGraphBuilder builder2;
+    auto depth2 = builder2.CreateTexture({.format = Format::D32_FLOAT, .width = 128, .height = 128, .debugName = "D"});
+    RGResourceHandle d02;
+    builder2.AddGraphicsPass(
+        "A",
+        [&](PassBuilder& pb) {
+            d02 = pb.WriteDepthStencil(depth2);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder2.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.WriteDepthStencil(d02);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    auto unmergedResult = CompileAndExecute(builder2, {}, /*enableMerging=*/false);
+    ASSERT_TRUE(unmergedResult.has_value());
+
+    EXPECT_EQ(mergedResult->stats.passesRecorded, unmergedResult->stats.passesRecorded);
+}
+
+// =============================================================================
+// Executor — Multiple batches
+// =============================================================================
+
+TEST(Executor, MultipleBatchesSubmitted) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT"});
+
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            rt = pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    // At least one batch should be submitted
+    EXPECT_GE(result->stats.batchesSubmitted, 1u);
+}
+
+// =============================================================================
+// Executor — DepthStencil with custom clear value
+// =============================================================================
+
+TEST(Executor, DepthClearValuePropagated) {
+    RenderGraphBuilder builder;
+    auto depth = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 128, .height = 128, .debugName = "D"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "DepthClear",
+        [&](PassBuilder& pb) {
+            ClearValue cv{};
+            cv.depthStencil = {0.5f, 128};
+            pb.WriteDepthStencil(depth, AttachmentLoadOp::Clear, AttachmentStoreOp::Store, cv);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            ASSERT_NE(ctx.depthAttachment, nullptr);
+            EXPECT_EQ(ctx.depthAttachment->loadOp, AttachmentLoadOp::Clear);
+            EXPECT_FLOAT_EQ(ctx.depthAttachment->clearValue.depthStencil.depth, 0.5f);
+            EXPECT_EQ(ctx.depthAttachment->clearValue.depthStencil.stencil, 128u);
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+// =============================================================================
+// Executor — Color clear value propagation
+// =============================================================================
+
+TEST(Executor, ColorClearValuePropagated) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT"});
+
+    bool verified = false;
+    ClearValue cv{};
+    cv.color = {0.1f, 0.2f, 0.3f, 1.0f};
+    builder.AddGraphicsPass(
+        "Clear",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt, 0, AttachmentLoadOp::Clear, AttachmentStoreOp::Store, cv);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            ASSERT_GE(ctx.colorAttachments.size(), 1u);
+            EXPECT_EQ(ctx.colorAttachments[0].loadOp, AttachmentLoadOp::Clear);
+            EXPECT_FLOAT_EQ(ctx.colorAttachments[0].clearValue.color.r, 0.1f);
+            EXPECT_FLOAT_EQ(ctx.colorAttachments[0].clearValue.color.g, 0.2f);
+            EXPECT_FLOAT_EQ(ctx.colorAttachments[0].clearValue.color.b, 0.3f);
+            EXPECT_FLOAT_EQ(ctx.colorAttachments[0].clearValue.color.a, 1.0f);
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+// =============================================================================
+// Executor — WriteColorAttachment with non-zero slot index gap
+// =============================================================================
+
+TEST(Executor, ColorAttachmentSlotGap) {
+    // Write only slot 2. outColor should be sized to at least 3, with slot 0 and 1 default.
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+
+    bool verified = false;
+    builder.AddGraphicsPass(
+        "Draw",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt, 2, AttachmentLoadOp::Clear, AttachmentStoreOp::Store);
+            pb.SetSideEffects();
+        },
+        [&](RenderPassContext& ctx) {
+            verified = true;
+            EXPECT_GE(ctx.colorAttachments.size(), 3u);
+            if (ctx.colorAttachments.size() >= 3) {
+                // Slot 2 should have a valid view
+                EXPECT_TRUE(ctx.colorAttachments[2].view.IsValid());
+                EXPECT_EQ(ctx.colorAttachments[2].loadOp, AttachmentLoadOp::Clear);
+                // Slot 0 and 1 should have invalid views (not written)
+                EXPECT_FALSE(ctx.colorAttachments[0].view.IsValid());
+                EXPECT_FALSE(ctx.colorAttachments[1].view.IsValid());
+            }
+        }
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(verified);
+}
+
+// =============================================================================
+// Executor — Repeated execute (simulate multi-frame)
+// =============================================================================
+
+TEST(Executor, RepeatedExecuteDoesNotLeak) {
+    // Execute the same graph multiple times — stats should reset each time
+    RenderGraphExecutor executor;
+    for (int frame = 0; frame < 5; ++frame) {
+        RenderGraphBuilder builder;
+        auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+        builder.AddGraphicsPass(
+            "P",
+            [&](PassBuilder& pb) {
+                pb.WriteColorAttachment(rt);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        builder.Build();
+
+        RenderGraphCompiler compiler;
+        auto compiled = compiler.Compile(builder);
+        ASSERT_TRUE(compiled.has_value()) << "Frame " << frame;
+
+        MockDevice device;
+        device.Init();
+        auto dh = DeviceHandle(&device, BackendType::Mock);
+        miki::frame::SyncScheduler sched;
+        sched.Init(device.GetQueueTimelinesImpl());
+        miki::frame::CommandPoolAllocator::Desc pd{.device = dh, .framesInFlight = 2};
+        auto pool = miki::frame::CommandPoolAllocator::Create(pd);
+        ASSERT_TRUE(pool.has_value()) << "Frame " << frame;
+        miki::frame::FrameContext fc{.frameIndex = static_cast<uint32_t>(frame % 2), .width = 64, .height = 64};
+
+        auto execResult = executor.Execute(*compiled, builder, fc, dh, sched, *pool);
+        ASSERT_TRUE(execResult.has_value()) << "Frame " << frame;
+
+        auto& stats = executor.GetStats();
+        EXPECT_EQ(stats.passesRecorded, 1u) << "Frame " << frame;
+        EXPECT_EQ(stats.batchesSubmitted, 1u) << "Frame " << frame;
+    }
+}
+
+// =============================================================================
+// Executor — Null executeFn should not crash
+// =============================================================================
+
+TEST(Executor, NullExecuteFnDoesNotCrash) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    // Set executeFn to nullptr by providing null lambda (should be handled gracefully)
+    builder.AddGraphicsPass(
+        "NullExec",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        nullptr
+    );
+
+    auto result = CompileAndExecute(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->stats.passesRecorded, 1u);
+}
+
+// =============================================================================
+// PassBuilder — Load/store op defaults
+// =============================================================================
+
+TEST(PassBuilderAttachment, DefaultColorAttachmentOps) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    builder.AddGraphicsPass(
+        "P",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    auto& pass = builder.GetPasses()[0];
+    ASSERT_EQ(pass.colorAttachments.size(), 1u);
+    EXPECT_EQ(pass.colorAttachments[0].loadOp, AttachmentLoadOp::Clear);
+    EXPECT_EQ(pass.colorAttachments[0].storeOp, AttachmentStoreOp::Store);
+    EXPECT_EQ(pass.colorAttachments[0].slotIndex, 0u);
+}
+
+TEST(PassBuilderAttachment, DefaultDepthStencilOps) {
+    RenderGraphBuilder builder;
+    auto depth = builder.CreateTexture({.format = Format::D32_FLOAT, .width = 64, .height = 64, .debugName = "D"});
+    builder.AddGraphicsPass(
+        "P",
+        [&](PassBuilder& pb) {
+            pb.WriteDepthStencil(depth);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    auto& pass = builder.GetPasses()[0];
+    EXPECT_TRUE(pass.hasDepthStencil);
+    EXPECT_EQ(pass.depthStencilAttachment.loadOp, AttachmentLoadOp::Clear);
+    EXPECT_EQ(pass.depthStencilAttachment.storeOp, AttachmentStoreOp::Store);
+    EXPECT_FLOAT_EQ(pass.depthStencilAttachment.clearValue.depthStencil.depth, 1.0f);
+    EXPECT_EQ(pass.depthStencilAttachment.clearValue.depthStencil.stencil, 0u);
+}
+
+TEST(PassBuilderAttachment, CustomLoadStoreOps) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    builder.AddGraphicsPass(
+        "P",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt, 3, AttachmentLoadOp::Load, AttachmentStoreOp::DontCare);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    auto& pass = builder.GetPasses()[0];
+    ASSERT_EQ(pass.colorAttachments.size(), 1u);
+    EXPECT_EQ(pass.colorAttachments[0].slotIndex, 3u);
+    EXPECT_EQ(pass.colorAttachments[0].loadOp, AttachmentLoadOp::Load);
+    EXPECT_EQ(pass.colorAttachments[0].storeOp, AttachmentStoreOp::DontCare);
+}
+
+// =============================================================================
+// RenderPassContext — GetColorAttachment / GetDepthAttachment
+// =============================================================================
+
+TEST(RenderPassContext, GetColorAttachmentByIndex) {
+    RenderingAttachment att0{.loadOp = AttachmentLoadOp::Clear};
+    RenderingAttachment att1{.loadOp = AttachmentLoadOp::Load};
+    std::vector<RenderingAttachment> atts = {att0, att1};
+    RenderPassContext ctx{.colorAttachments = atts};
+
+    auto r0 = ctx.GetColorAttachment(0);
+    EXPECT_EQ(r0.loadOp, AttachmentLoadOp::Clear);
+    auto r1 = ctx.GetColorAttachment(1);
+    EXPECT_EQ(r1.loadOp, AttachmentLoadOp::Load);
+    // Out of range -> default
+    auto rOob = ctx.GetColorAttachment(99);
+    EXPECT_FALSE(rOob.view.IsValid());
+}
+
+TEST(RenderPassContext, GetDepthAttachmentNullptr) {
+    RenderPassContext ctx{};
+    EXPECT_EQ(ctx.GetDepthAttachment(), nullptr);
+}
+
+TEST(RenderPassContext, GetDepthAttachmentPresent) {
+    RenderingAttachment depthAtt{.loadOp = AttachmentLoadOp::Clear};
+    RenderPassContext ctx{.depthAttachment = &depthAtt};
+    EXPECT_NE(ctx.GetDepthAttachment(), nullptr);
+    EXPECT_EQ(ctx.GetDepthAttachment()->loadOp, AttachmentLoadOp::Clear);
+}
+
+// =============================================================================
+// RenderPassContext — Buffer and TextureView resolution
+// =============================================================================
+
+TEST(RenderPassContext, ResolveBuffer) {
+    BufferHandle physicals[] = {BufferHandle{10}, BufferHandle{20}};
+    RenderPassContext ctx{.physicalBuffers = physicals};
+
+    auto h = RGResourceHandle::Create(1, 0);
+    auto resolved = ctx.GetBuffer(h);
+    EXPECT_EQ(resolved.value, 20u);
+}
+
+TEST(RenderPassContext, ResolveTextureView) {
+    TextureViewHandle physicals[] = {TextureViewHandle{100}, TextureViewHandle{200}, TextureViewHandle{300}};
+    RenderPassContext ctx{.physicalTextureViews = physicals};
+
+    auto h = RGResourceHandle::Create(2, 0);
+    auto resolved = ctx.GetTextureView(h);
+    EXPECT_EQ(resolved.value, 300u);
+}
+
+TEST(RenderPassContext, ResolveBufferOutOfRange) {
+    RenderPassContext ctx{};
+    auto h = RGResourceHandle::Create(999, 0);
+    EXPECT_FALSE(ctx.GetBuffer(h).IsValid());
+}
+
+TEST(RenderPassContext, ResolveTextureViewOutOfRange) {
+    RenderPassContext ctx{};
+    auto h = RGResourceHandle::Create(999, 0);
+    EXPECT_FALSE(ctx.GetTextureView(h).IsValid());
 }

@@ -15,6 +15,7 @@
 #include "miki/rhi/backend/AllBackends.h"
 #include "miki/rhi/backend/AllCommandBuffers.h"
 
+#include <array>
 #include <cassert>
 #include <cstring>
 #include <utility>
@@ -109,6 +110,77 @@ namespace miki::rg {
                 }
             }
             return combined;
+        }
+
+        /// @brief Queue-type-based debug label colors for PIX/RenderDoc/NSight integration.
+        /// Graphics=blue, AsyncCompute=green, Transfer=orange.
+        constexpr auto GetQueueDebugColor(RGQueueType queue) noexcept -> std::array<float, 4> {
+            switch (queue) {
+                case RGQueueType::Graphics: return {0.2f, 0.4f, 0.9f, 1.0f};
+                case RGQueueType::AsyncCompute: return {0.2f, 0.8f, 0.3f, 1.0f};
+                case RGQueueType::Transfer: return {0.9f, 0.6f, 0.1f, 1.0f};
+                default: return {0.5f, 0.5f, 0.5f, 1.0f};
+            }
+        }
+
+        /// @brief Emit aliasing barriers for a specific topo-order position.
+        /// Scans the AliasingLayout for barriers matching this position and emits them.
+        void EmitAliasingBarriersForPass(
+            rhi::CommandListHandle& cmd, uint32_t topoPosition, const AliasingLayout& aliasing,
+            std::span<const rhi::TextureHandle> physicalTextures, std::span<const rhi::BufferHandle> physicalBuffers,
+            std::span<const RGResourceNode> resources
+        ) {
+            for (size_t i = 0; i < aliasing.aliasingBarriers.size(); ++i) {
+                if (i >= aliasing.aliasingBarrierPassPos.size()) {
+                    break;
+                }
+                if (aliasing.aliasingBarrierPassPos[i] != topoPosition) {
+                    continue;
+                }
+
+                auto& bc = aliasing.aliasingBarriers[i];
+                if (bc.resourceIndex >= resources.size()) {
+                    continue;
+                }
+
+                auto dstMapping = ResolveBarrierCombined(bc.dstAccess);
+                auto dstLayout = bc.dstLayout != rhi::TextureLayout::Undefined ? bc.dstLayout : dstMapping.layout;
+                auto dstStage
+                    = dstMapping.stage != rhi::PipelineStage::None ? dstMapping.stage : rhi::PipelineStage::AllCommands;
+
+                if (resources[bc.resourceIndex].kind == RGResourceKind::Texture) {
+                    auto texHandle = bc.resourceIndex < physicalTextures.size() ? physicalTextures[bc.resourceIndex]
+                                                                                : rhi::TextureHandle{};
+                    if (!texHandle.IsValid()) {
+                        continue;
+                    }
+
+                    rhi::TextureBarrierDesc desc{
+                        .srcStage = rhi::PipelineStage::None,
+                        .dstStage = dstStage,
+                        .srcAccess = rhi::AccessFlags::None,
+                        .dstAccess = dstMapping.access,
+                        .oldLayout = rhi::TextureLayout::Undefined,
+                        .newLayout = dstLayout,
+                        .subresource = {},
+                    };
+                    cmd.Dispatch([&](auto& c) { c.CmdTextureBarrier(texHandle, desc); });
+                } else {
+                    auto bufHandle = bc.resourceIndex < physicalBuffers.size() ? physicalBuffers[bc.resourceIndex]
+                                                                               : rhi::BufferHandle{};
+                    if (!bufHandle.IsValid()) {
+                        continue;
+                    }
+
+                    rhi::BufferBarrierDesc desc{
+                        .srcStage = rhi::PipelineStage::None,
+                        .dstStage = dstStage,
+                        .srcAccess = rhi::AccessFlags::None,
+                        .dstAccess = dstMapping.access,
+                    };
+                    cmd.Dispatch([&](auto& c) { c.CmdBufferBarrier(bufHandle, desc); });
+                }
+            }
         }
 
     }  // anonymous namespace
@@ -376,24 +448,42 @@ namespace miki::rg {
     // =========================================================================
 
     void RenderGraphExecutor::RecordSinglePass(
-        rhi::CommandListHandle& cmdList, const CompiledPassInfo& compiledPass, RGPassNode& passNode,
-        const frame::FrameContext& frame, bool emitBarriers, RenderGraphBuilder& builder
+        rhi::CommandListHandle& cmdList, const CompiledRenderGraph& graph, uint32_t compiledPassIndex,
+        const CompiledPassInfo& compiledPass, RGPassNode& passNode, const frame::FrameContext& frame, bool emitBarriers,
+        RenderGraphBuilder& builder, const MergedGroupMembership* mergedMembership
     ) {
         uint32_t passIdx = compiledPass.passIndex;
+        bool inMergedGroup = mergedMembership != nullptr && mergedMembership->groupIndex != UINT32_MAX;
 
-        // Emit acquire barriers (only in primary cmd buf path)
-        if (emitBarriers && !compiledPass.acquireBarriers.empty()) {
-            EmitBarriers(cmdList, compiledPass.acquireBarriers, builder);
-            stats_.barriersEmitted += static_cast<uint32_t>(compiledPass.acquireBarriers.size());
+        // Debug label begin (PIX/RenderDoc/NSight integration)
+        if (config_.enableDebugLabels && passNode.name != nullptr) {
+            auto color = GetQueueDebugColor(compiledPass.queue);
+            cmdList.Dispatch([&](auto& cmd) { cmd.CmdBeginDebugLabel(passNode.name, color.data()); });
+        }
+
+        if (emitBarriers) {
+            // Emit aliasing barriers for this pass position (before regular acquire barriers)
+            EmitAliasingBarriersForPass(
+                cmdList, compiledPassIndex, graph.aliasing, physicalTextures_, physicalBuffers_, builder.GetResources()
+            );
+
+            // Emit acquire barriers (skip inter-subpass barriers within merged groups —
+            // those are handled by SubpassDependency / tile memory, not explicit barriers)
+            if (!compiledPass.acquireBarriers.empty()) {
+                EmitBarriers(cmdList, compiledPass.acquireBarriers, builder);
+                stats_.barriersEmitted += static_cast<uint32_t>(compiledPass.acquireBarriers.size());
+            }
         }
 
         // Build rendering attachments for graphics passes
+        // When inside a merged group, skip per-pass CmdBeginRendering — the caller brackets the group
         std::vector<rhi::RenderingAttachment> colorAttachments;
         rhi::RenderingAttachment depthAttachment{};
         bool hasDepth = false;
         bool isGraphicsPass = (static_cast<uint8_t>(passNode.flags) & static_cast<uint8_t>(RGPassFlags::Graphics)) != 0;
+        bool didBeginRendering = false;
 
-        if (isGraphicsPass) {
+        if (isGraphicsPass && !inMergedGroup) {
             BuildRenderingAttachments(passNode, builder, colorAttachments, depthAttachment, hasDepth);
             if (!colorAttachments.empty() || hasDepth) {
                 rhi::RenderingDesc renderingDesc{
@@ -402,7 +492,11 @@ namespace miki::rg {
                     .depthAttachment = hasDepth ? &depthAttachment : nullptr,
                 };
                 cmdList.Dispatch([&](auto& cmd) { cmd.CmdBeginRendering(renderingDesc); });
+                didBeginRendering = true;
             }
+        } else if (isGraphicsPass && inMergedGroup) {
+            // Still build attachment info for RenderPassContext, but don't begin rendering
+            BuildRenderingAttachments(passNode, builder, colorAttachments, depthAttachment, hasDepth);
         }
 
         // Build RenderPassContext
@@ -426,8 +520,8 @@ namespace miki::rg {
         }
         stats_.passesRecorded++;
 
-        // End dynamic rendering
-        if (isGraphicsPass && (!colorAttachments.empty() || hasDepth)) {
+        // End dynamic rendering (only if we began it — not for merged group subpasses)
+        if (didBeginRendering) {
             cmdList.Dispatch([](auto& cmd) { cmd.CmdEndRendering(); });
         }
 
@@ -435,6 +529,11 @@ namespace miki::rg {
         if (emitBarriers && !compiledPass.releaseBarriers.empty()) {
             EmitBarriers(cmdList, compiledPass.releaseBarriers, builder);
             stats_.barriersEmitted += static_cast<uint32_t>(compiledPass.releaseBarriers.size());
+        }
+
+        // Debug label end
+        if (config_.enableDebugLabels && passNode.name != nullptr) {
+            cmdList.Dispatch([](auto& cmd) { cmd.CmdEndDebugLabel(); });
         }
     }
 
@@ -447,6 +546,9 @@ namespace miki::rg {
         rhi::DeviceHandle /*device*/, frame::CommandPoolAllocator& poolAllocator
     ) -> core::Result<void> {
         auto& passes = builder.GetPasses();
+
+        // Build merged group lookup (O(N) where N = total subpass count across all groups)
+        auto mergedLookup = BuildMergedGroupLookup(graph);
 
         batchRecordings_.clear();
         batchRecordings_.reserve(graph.batches.size());
@@ -472,7 +574,42 @@ namespace miki::rg {
                     continue;
                 }
                 auto& passNode = passes[compiledPass.passIndex];
-                RecordSinglePass(cmdList, compiledPass, passNode, frame, /*emitBarriers=*/true, builder);
+
+                // Merged group handling: bracket with CmdBeginRendering/CmdEndRendering
+                const MergedGroupMembership* membership
+                    = (compiledIdx < mergedLookup.size() && mergedLookup[compiledIdx].groupIndex != UINT32_MAX)
+                          ? &mergedLookup[compiledIdx]
+                          : nullptr;
+
+                // Begin merged group rendering scope at first subpass
+                if (membership != nullptr && membership->isFirst) {
+                    auto& group = graph.mergedGroups[membership->groupIndex];
+                    std::vector<rhi::RenderingAttachment> groupColor;
+                    rhi::RenderingAttachment groupDepth{};
+                    bool groupHasDepth = false;
+                    BuildMergedGroupAttachments(group, graph, builder, groupColor, groupDepth, groupHasDepth);
+
+                    if (!groupColor.empty() || groupHasDepth) {
+                        uint32_t w = group.renderAreaWidth > 0 ? group.renderAreaWidth : frame.width;
+                        uint32_t h = group.renderAreaHeight > 0 ? group.renderAreaHeight : frame.height;
+                        rhi::RenderingDesc renderingDesc{
+                            .renderArea = {{0, 0}, {w, h}},
+                            .colorAttachments = groupColor,
+                            .depthAttachment = groupHasDepth ? &groupDepth : nullptr,
+                        };
+                        cmdList.Dispatch([&](auto& cmd) { cmd.CmdBeginRendering(renderingDesc); });
+                    }
+                }
+
+                RecordSinglePass(
+                    cmdList, graph, compiledIdx, compiledPass, passNode, frame, /*emitBarriers=*/true, builder,
+                    membership
+                );
+
+                // End merged group rendering scope at last subpass
+                if (membership != nullptr && membership->isLast) {
+                    cmdList.Dispatch([](auto& cmd) { cmd.CmdEndRendering(); });
+                }
             }
 
             // E-10: Record pending readback transfers at end of last batch
@@ -534,7 +671,9 @@ namespace miki::rg {
                         continue;
                     }
                     auto& passNode = passes[compiledPass.passIndex];
-                    RecordSinglePass(primaryCmd, compiledPass, passNode, frame, /*emitBarriers=*/true, builder);
+                    RecordSinglePass(
+                        primaryCmd, graph, compiledIdx, compiledPass, passNode, frame, /*emitBarriers=*/true, builder
+                    );
                 }
                 primaryCmd.Dispatch([](auto& cmd) { cmd.End(); });
                 batchRecordings_.push_back({.queue = batch.queue, .commandBuffers = {primaryAcq.bufferHandle}});
@@ -582,7 +721,10 @@ namespace miki::rg {
                     auto& passNode = passes[compiledPass.passIndex];
 
                     pr.cmdList.Dispatch([](auto& cmd) { cmd.Begin(); });
-                    RecordSinglePass(pr.cmdList, compiledPass, passNode, frame, /*emitBarriers=*/false, builder);
+                    RecordSinglePass(
+                        pr.cmdList, graph, pr.compiledIdx, compiledPass, passNode, frame, /*emitBarriers=*/false,
+                        builder
+                    );
                     pr.cmdList.Dispatch([](auto& cmd) { cmd.End(); });
                 }
                 done.count_down();
@@ -833,6 +975,43 @@ namespace miki::rg {
         hasDepth = false;
         outColor.clear();
 
+        // Use RGAttachmentInfo from pass node if available (populated by WriteColorAttachment/WriteDepthStencil)
+        if (!passNode.colorAttachments.empty() || passNode.hasDepthStencil) {
+            // Determine max slot index to size the color attachment array correctly
+            uint32_t maxSlot = 0;
+            for (auto& att : passNode.colorAttachments) {
+                maxSlot = std::max(maxSlot, att.slotIndex + 1);
+            }
+            outColor.resize(maxSlot);
+
+            for (auto& attInfo : passNode.colorAttachments) {
+                auto idx = attInfo.handle.GetIndex();
+                rhi::RenderingAttachment att{};
+                if (idx < physicalTextureViews_.size()) {
+                    att.view = physicalTextureViews_[idx];
+                }
+                att.loadOp = attInfo.loadOp;
+                att.storeOp = attInfo.storeOp;
+                att.clearValue = attInfo.clearValue;
+                if (attInfo.slotIndex < maxSlot) {
+                    outColor[attInfo.slotIndex] = att;
+                }
+            }
+
+            if (passNode.hasDepthStencil) {
+                auto idx = passNode.depthStencilAttachment.handle.GetIndex();
+                if (idx < physicalTextureViews_.size()) {
+                    outDepth.view = physicalTextureViews_[idx];
+                }
+                outDepth.loadOp = passNode.depthStencilAttachment.loadOp;
+                outDepth.storeOp = passNode.depthStencilAttachment.storeOp;
+                outDepth.clearValue = passNode.depthStencilAttachment.clearValue;
+                hasDepth = true;
+            }
+            return;
+        }
+
+        // Fallback: infer from write accesses (backward compat for passes that don't use the new API)
         for (auto& w : passNode.writes) {
             auto idx = w.handle.GetIndex();
             if ((w.access & ResourceAccess::ColorAttachWrite) != ResourceAccess::None) {
@@ -854,6 +1033,87 @@ namespace miki::rg {
                 hasDepth = true;
             }
         }
+    }
+
+    // =========================================================================
+    // BuildMergedGroupLookup — reverse map compiledPassIndex -> merged group
+    // =========================================================================
+
+    auto RenderGraphExecutor::BuildMergedGroupLookup(const CompiledRenderGraph& graph) const
+        -> std::vector<MergedGroupMembership> {
+        auto lookup = std::vector<MergedGroupMembership>(graph.passes.size());
+
+        for (uint32_t gi = 0; gi < graph.mergedGroups.size(); ++gi) {
+            auto& group = graph.mergedGroups[gi];
+            for (uint32_t si = 0; si < group.subpassIndices.size(); ++si) {
+                auto compiledIdx = group.subpassIndices[si];
+                if (compiledIdx < lookup.size()) {
+                    lookup[compiledIdx] = MergedGroupMembership{
+                        .groupIndex = gi,
+                        .subpassPosition = si,
+                        .isFirst = (si == 0),
+                        .isLast = (si == group.subpassIndices.size() - 1),
+                    };
+                }
+            }
+        }
+        return lookup;
+    }
+
+    // =========================================================================
+    // BuildMergedGroupAttachments — union of all subpass attachments
+    // =========================================================================
+
+    void RenderGraphExecutor::BuildMergedGroupAttachments(
+        const MergedRenderPassGroup& group, const CompiledRenderGraph& graph, RenderGraphBuilder& builder,
+        std::vector<rhi::RenderingAttachment>& outColor, rhi::RenderingAttachment& outDepth, bool& hasDepth
+    ) {
+        hasDepth = false;
+        outColor.clear();
+
+        auto& passes = builder.GetPasses();
+
+        // Collect attachments from the first subpass (which defines Clear/Load semantics)
+        // Subsequent subpasses in the group inherit via tile memory
+        if (!group.subpassIndices.empty()) {
+            auto firstCompiledIdx = group.subpassIndices[0];
+            if (firstCompiledIdx < graph.passes.size()) {
+                auto firstPassIdx = graph.passes[firstCompiledIdx].passIndex;
+                if (firstPassIdx < passes.size()) {
+                    BuildRenderingAttachments(passes[firstPassIdx], builder, outColor, outDepth, hasDepth);
+                }
+            }
+        }
+
+        // For shared attachments used by later subpasses but not the first, add them with Load/Store
+        for (auto resIdx : group.sharedAttachments) {
+            if (resIdx < physicalTextureViews_.size() && physicalTextureViews_[resIdx].IsValid()) {
+                bool alreadyIncluded = false;
+                for (auto& c : outColor) {
+                    if (c.view == physicalTextureViews_[resIdx]) {
+                        alreadyIncluded = true;
+                        break;
+                    }
+                }
+                if (outDepth.view == physicalTextureViews_[resIdx]) {
+                    alreadyIncluded = true;
+                }
+                if (!alreadyIncluded) {
+                    outColor.push_back(
+                        rhi::RenderingAttachment{
+                            .view = physicalTextureViews_[resIdx],
+                            .loadOp = rhi::AttachmentLoadOp::Load,
+                            .storeOp = rhi::AttachmentStoreOp::Store,
+                            .clearValue = {},
+                            .resolveView = {},
+                        }
+                    );
+                }
+            }
+        }
+
+        // Use merged group dimensions if specified, otherwise defer to frame context
+        // (render area is set at CmdBeginRendering call site)
     }
 
 }  // namespace miki::rg

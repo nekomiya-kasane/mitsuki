@@ -13,7 +13,8 @@
  */
 #pragma once
 
-#include "miki/rhi/backend/BackendStub.h"
+#include "miki/rhi/Device.h"
+#include "miki/rhi/GpuCapabilityProfile.h"
 
 #pragma warning(push)
 #pragma warning(disable : 4199)  // MSVC warning for language extension tokens
