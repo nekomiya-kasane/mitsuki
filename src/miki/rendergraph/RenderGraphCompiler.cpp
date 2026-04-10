@@ -16,6 +16,9 @@
 
 #include "miki/rendergraph/RenderGraphCompiler.h"
 
+#include "miki/rendergraph/AsyncComputeScheduler.h"
+#include "miki/rendergraph/CompilerUtils.h"
+
 #include <algorithm>
 #include <cassert>
 #include <future>
@@ -265,262 +268,6 @@ namespace miki::rg {
     }
 
     // =========================================================================
-    // Stage 3b: Barrier-aware global reordering (optional second pass) — §5.3.1
-    // =========================================================================
-
-    namespace {
-
-        // Build predecessor/successor sets for valid insertion range computation.
-        // predecessors[i] = set of pass indices that must come before order[i]
-        // successors[i]   = set of pass indices that must come after order[i]
-        struct DagConstraints {
-            std::vector<std::vector<uint32_t>> predecessors;  // passIndex -> list of predecessors
-            std::vector<std::vector<uint32_t>> successors;    // passIndex -> list of successors
-
-            void Build(
-                uint32_t passCount, const std::vector<DependencyEdge>& edges, const std::vector<bool>& activeSet
-            ) {
-                predecessors.resize(passCount);
-                successors.resize(passCount);
-                for (auto& e : edges) {
-                    if (!activeSet[e.srcPass] || !activeSet[e.dstPass]) {
-                        continue;
-                    }
-                    predecessors[e.dstPass].push_back(e.srcPass);
-                    successors[e.srcPass].push_back(e.dstPass);
-                }
-            }
-        };
-
-        // Compute valid insertion range [lo, hi] for pass at position pos in order.
-        // lo = max position of all predecessors + 1
-        // hi = min position of all successors - 1
-        auto ComputeInsertionRange(
-            uint32_t passIdx, const std::vector<uint32_t>& order, const DagConstraints& dag,
-            const std::vector<uint32_t>& positionOf
-        ) -> std::pair<uint32_t, uint32_t> {
-            uint32_t lo = 0;
-            uint32_t hi = static_cast<uint32_t>(order.size() - 1);
-
-            for (auto pred : dag.predecessors[passIdx]) {
-                lo = std::max(lo, positionOf[pred] + 1);
-            }
-            for (auto succ : dag.successors[passIdx]) {
-                if (positionOf[succ] > 0) {
-                    hi = std::min(hi, positionOf[succ] - 1);
-                } else {
-                    hi = 0;
-                }
-            }
-            return {lo, hi};
-        }
-
-        // Estimate barrier cost: count resource transitions between consecutive passes.
-        // A transition occurs when pass i writes resource R and pass i+1 reads/writes R
-        // with a different access type (requiring a layout/access change).
-        auto EstimateBarrierCost(
-            const std::vector<uint32_t>& order, const std::vector<DependencyEdge>& edges,
-            const std::vector<bool>& activeSet
-        ) -> uint32_t {
-            if (edges.empty() || order.empty()) {
-                return 0;
-            }
-            // Count edges that connect consecutive passes in the order (requiring barriers)
-            std::vector<uint32_t> posOf(*std::max_element(order.begin(), order.end()) + 1, 0);
-            for (uint32_t i = 0; i < order.size(); ++i) {
-                posOf[order[i]] = i;
-            }
-
-            uint32_t cost = 0;
-            for (auto& e : edges) {
-                if (!activeSet[e.srcPass] || !activeSet[e.dstPass]) {
-                    continue;
-                }
-                // Barrier needed between non-consecutive passes = split barrier (cheaper)
-                // Barrier between consecutive passes = full barrier (more expensive)
-                uint32_t gap = posOf[e.dstPass] - posOf[e.srcPass];
-                if (gap == 1) {
-                    cost += 2;  // Full barrier (no split opportunity)
-                } else {
-                    cost += 1;  // Split barrier possible
-                }
-            }
-            return cost;
-        }
-
-        // Estimate peak transient memory from pass order (simplified: sum of live resources)
-        auto EstimatePeakMemory(
-            const std::vector<uint32_t>& order, const std::vector<RGPassNode>& passes,
-            const std::vector<RGResourceNode>& resources
-        ) -> uint64_t {
-            // Compute lifetimes and find max concurrent usage
-            struct Interval {
-                uint32_t first = UINT32_MAX;
-                uint32_t last = 0;
-                uint64_t size = 0;
-            };
-
-            std::unordered_map<uint16_t, Interval> intervals;
-            std::vector<uint32_t> posOf(passes.size(), 0);
-            for (uint32_t i = 0; i < order.size(); ++i) {
-                posOf[order[i]] = i;
-            }
-
-            for (auto passIdx : order) {
-                auto& pass = passes[passIdx];
-                uint32_t pos = posOf[passIdx];
-                for (auto& r : pass.reads) {
-                    auto idx = r.handle.GetIndex();
-                    if (idx < resources.size() && !resources[idx].imported) {
-                        auto& iv = intervals[idx];
-                        iv.first = std::min(iv.first, pos);
-                        iv.last = std::max(iv.last, pos);
-                        if (iv.size == 0) {
-                            iv.size = resources[idx].kind == RGResourceKind::Texture
-                                          ? EstimateTextureSize(resources[idx].textureDesc)
-                                          : EstimateBufferSize(resources[idx].bufferDesc);
-                        }
-                    }
-                }
-                for (auto& w : pass.writes) {
-                    auto idx = w.handle.GetIndex();
-                    if (idx < resources.size() && !resources[idx].imported) {
-                        auto& iv = intervals[idx];
-                        iv.first = std::min(iv.first, pos);
-                        iv.last = std::max(iv.last, pos);
-                        if (iv.size == 0) {
-                            iv.size = resources[idx].kind == RGResourceKind::Texture
-                                          ? EstimateTextureSize(resources[idx].textureDesc)
-                                          : EstimateBufferSize(resources[idx].bufferDesc);
-                        }
-                    }
-                }
-            }
-
-            // Sweep-line for peak memory
-            uint64_t peak = 0;
-            for (uint32_t pos = 0; pos < order.size(); ++pos) {
-                uint64_t live = 0;
-                for (auto& [idx, iv] : intervals) {
-                    if (pos >= iv.first && pos <= iv.last) {
-                        live += iv.size;
-                    }
-                }
-                peak = std::max(peak, live);
-            }
-            return peak;
-        }
-
-    }  // namespace
-
-    void RenderGraphCompiler::ReorderPasses(
-        const RenderGraphBuilder& builder, const std::vector<DependencyEdge>& edges, const std::vector<bool>& activeSet,
-        std::vector<uint32_t>& order
-    ) {
-        if (order.size() <= 2 || edges.empty()) {
-            return;
-        }
-
-        auto& passes = builder.GetPasses();
-        uint32_t passCount = static_cast<uint32_t>(passes.size());
-
-        // Build DAG constraint lookup
-        DagConstraints dag;
-        dag.Build(passCount, edges, activeSet);
-
-        // Position lookup: passIndex -> position in order
-        std::vector<uint32_t> positionOf(passCount, 0);
-        auto rebuildPositions = [&]() {
-            for (uint32_t i = 0; i < order.size(); ++i) {
-                positionOf[order[i]] = i;
-            }
-        };
-        rebuildPositions();
-
-        // Objective function weights based on strategy
-        float wBarrier = 0.5f, wMemory = 0.3f, wLatency = 0.2f;
-        switch (options_.strategy) {
-            case SchedulerStrategy::MinBarriers:
-                wBarrier = 1.0f;
-                wMemory = 0.0f;
-                wLatency = 0.0f;
-                break;
-            case SchedulerStrategy::MinMemory:
-                wBarrier = 0.0f;
-                wMemory = 1.0f;
-                wLatency = 0.0f;
-                break;
-            case SchedulerStrategy::MinLatency:
-                wBarrier = 0.0f;
-                wMemory = 0.0f;
-                wLatency = 1.0f;
-                break;
-            case SchedulerStrategy::Balanced: break;
-        }
-
-        // Normalize baseline costs for weighted combination
-        float baseBarrier = static_cast<float>(EstimateBarrierCost(order, edges, activeSet));
-
-        constexpr uint32_t kMaxIterations = 3;
-
-        for (uint32_t iter = 0; iter < kMaxIterations; ++iter) {
-            bool improved = false;
-
-            for (uint32_t pos = 0; pos < order.size(); ++pos) {
-                uint32_t passIdx = order[pos];
-                auto [lo, hi] = ComputeInsertionRange(passIdx, order, dag, positionOf);
-
-                if (lo >= hi || (lo == pos && hi == pos)) {
-                    continue;
-                }
-
-                // Evaluate current barrier cost contribution (local: edges involving this pass)
-                float bestScore = 0.0f;
-                uint32_t bestPos = pos;
-
-                for (uint32_t candidatePos = lo; candidatePos <= hi; ++candidatePos) {
-                    if (candidatePos == pos) {
-                        continue;
-                    }
-
-                    // Tentative move: remove from pos, insert at candidatePos
-                    auto trial = order;
-                    trial.erase(trial.begin() + pos);
-                    uint32_t insertAt = (candidatePos > pos) ? candidatePos - 1 : candidatePos;
-                    trial.insert(trial.begin() + insertAt, passIdx);
-
-                    // Evaluate delta (barrier-focused for speed)
-                    float delta = 0.0f;
-
-                    if (wBarrier > 0.0f) {
-                        float newBarrier = static_cast<float>(EstimateBarrierCost(trial, edges, activeSet));
-                        delta += wBarrier * (baseBarrier - newBarrier);
-                    }
-
-                    if (delta > bestScore) {
-                        bestScore = delta;
-                        bestPos = candidatePos;
-                    }
-                }
-
-                if (bestPos != pos && bestScore > 0.0f) {
-                    // Apply the move
-                    order.erase(order.begin() + pos);
-                    uint32_t insertAt = (bestPos > pos) ? bestPos - 1 : bestPos;
-                    order.insert(order.begin() + insertAt, passIdx);
-                    rebuildPositions();
-                    baseBarrier = static_cast<float>(EstimateBarrierCost(order, edges, activeSet));
-                    improved = true;
-                }
-            }
-
-            if (!improved) {
-                break;
-            }
-        }
-    }
-
-    // =========================================================================
     // Stage 4: Queue assignment
     // =========================================================================
 
@@ -536,6 +283,10 @@ namespace miki::rg {
                 // Demote async compute to graphics queue
                 queueAssignments[passIdx]
                     = (pass.queue == RGQueueType::Transfer) ? RGQueueType::Transfer : RGQueueType::Graphics;
+            } else if (pass.queue == RGQueueType::AsyncCompute && options_.asyncScheduler != nullptr) {
+                // Adaptive scheduling: consult the EMA-based scheduler (§7.2.1)
+                bool shouldAsync = options_.asyncScheduler->ShouldRunAsync(passIdx, pass.flags);
+                queueAssignments[passIdx] = shouldAsync ? RGQueueType::AsyncCompute : RGQueueType::Graphics;
             } else {
                 queueAssignments[passIdx] = pass.queue;
             }
@@ -601,139 +352,6 @@ namespace miki::rg {
                         existing.srcPassIndex = e.srcPass;
                     }
                 }
-            }
-        }
-    }
-
-    // =========================================================================
-    // Stage 6: Barrier synthesis (split barrier model)
-    // =========================================================================
-
-    void RenderGraphCompiler::SynthesizeBarriers(
-        const RenderGraphBuilder& builder, const std::vector<uint32_t>& order,
-        const std::vector<DependencyEdge>& /*edges*/, const std::vector<RGQueueType>& queueAssignments,
-        std::vector<CompiledPassInfo>& compiledPasses
-    ) {
-        auto& passes = builder.GetPasses();
-        auto& resources = builder.GetResources();
-
-        // Build compiled pass info for each pass in topological order
-        compiledPasses.clear();
-        compiledPasses.reserve(order.size());
-
-        // Map from passIndex -> position in topological order
-        std::unordered_map<uint32_t, uint32_t> orderPosition;
-        for (uint32_t pos = 0; pos < order.size(); ++pos) {
-            orderPosition[order[pos]] = pos;
-        }
-
-        for (auto passIdx : order) {
-            compiledPasses.push_back(
-                CompiledPassInfo{
-                    .passIndex = passIdx,
-                    .queue = queueAssignments[passIdx],
-                    .acquireBarriers = {},
-                    .releaseBarriers = {},
-                }
-            );
-        }
-
-        // Track current resource state: last access, last layout, last queue
-        struct ResourceState {
-            ResourceAccess lastAccess = ResourceAccess::None;
-            rhi::TextureLayout lastLayout = rhi::TextureLayout::Undefined;
-            RGQueueType lastQueue = RGQueueType::Graphics;
-            uint32_t lastPassOrderPos = std::numeric_limits<uint32_t>::max();
-        };
-
-        std::unordered_map<uint16_t, ResourceState> resourceStates;
-
-        // Process passes in topological order
-        for (uint32_t pos = 0; pos < order.size(); ++pos) {
-            auto passIdx = order[pos];
-            auto& pass = passes[passIdx];
-            auto& compiled = compiledPasses[pos];
-
-            auto processAccess = [&](RGResourceHandle handle, ResourceAccess access, bool isWrite) {
-                auto resIdx = handle.GetIndex();
-                auto& state = resourceStates[resIdx];
-                bool isTexture = (resIdx < resources.size() && resources[resIdx].kind == RGResourceKind::Texture);
-
-                auto dstBarrier = ResolveBarrier(access);
-                bool needsBarrier = false;
-                bool isCrossQueue = false;
-
-                if (state.lastAccess != ResourceAccess::None) {
-                    auto srcBarrier = ResolveBarrierCombined(state.lastAccess);
-
-                    // Determine if barrier is needed:
-                    // 1. Any write involved (RAW, WAW, WAR-with-layout-change)
-                    // 2. Layout transition needed (texture only)
-                    // 3. Cross-queue transition
-                    bool srcHasWrite = IsWriteAccess(state.lastAccess);
-                    bool dstHasWrite = isWrite;
-
-                    needsBarrier = srcHasWrite || dstHasWrite;
-
-                    if (isTexture && srcBarrier.layout != dstBarrier.layout
-                        && dstBarrier.layout != rhi::TextureLayout::Undefined) {
-                        needsBarrier = true;
-                    }
-
-                    isCrossQueue = (state.lastQueue != queueAssignments[passIdx]);
-                    if (isCrossQueue) {
-                        needsBarrier = true;
-                    }
-
-                    if (needsBarrier) {
-                        BarrierCommand barrier{
-                            .resourceIndex = resIdx,
-                            .srcAccess = state.lastAccess,
-                            .dstAccess = access,
-                            .srcLayout = isTexture ? srcBarrier.layout : rhi::TextureLayout::Undefined,
-                            .dstLayout = isTexture ? dstBarrier.layout : rhi::TextureLayout::Undefined,
-                            .isCrossQueue = isCrossQueue,
-                            .srcQueue = state.lastQueue,
-                            .dstQueue = queueAssignments[passIdx],
-                        };
-
-                        if (options_.enableSplitBarriers && !isCrossQueue
-                            && state.lastPassOrderPos != std::numeric_limits<uint32_t>::max()
-                            && pos - state.lastPassOrderPos > 1) {
-                            // Split barrier: release at previous pass, acquire at current
-                            BarrierCommand release = barrier;
-                            release.isSplitRelease = true;
-                            release.isSplitAcquire = false;
-
-                            BarrierCommand acquire = barrier;
-                            acquire.isSplitRelease = false;
-                            acquire.isSplitAcquire = true;
-
-                            // Insert release after the last pass that touched this resource
-                            compiledPasses[state.lastPassOrderPos].releaseBarriers.push_back(release);
-                            compiled.acquireBarriers.push_back(acquire);
-                        } else {
-                            // Full barrier at current pass
-                            compiled.acquireBarriers.push_back(barrier);
-                        }
-                    }
-                }
-
-                // Update state
-                state.lastAccess = access;
-                if (isTexture && dstBarrier.layout != rhi::TextureLayout::Undefined) {
-                    state.lastLayout = dstBarrier.layout;
-                }
-                state.lastQueue = queueAssignments[passIdx];
-                state.lastPassOrderPos = pos;
-            };
-
-            // Process reads first, then writes (reads see previous state)
-            for (auto& r : pass.reads) {
-                processAccess(r.handle, r.access, false);
-            }
-            for (auto& w : pass.writes) {
-                processAccess(w.handle, w.access, true);
             }
         }
     }
@@ -827,17 +445,7 @@ namespace miki::rg {
             ResourceAccess combinedAccess = ResourceAccess::None;
         };
 
-        // Build combined access per resource (OR of all read/write accesses)
-        std::vector<ResourceAccess> combinedAccesses(resources.size(), ResourceAccess::None);
-        for (auto passIdx : order) {
-            auto& pass = passes[passIdx];
-            for (auto& r : pass.reads) {
-                combinedAccesses[r.handle.GetIndex()] = combinedAccesses[r.handle.GetIndex()] | r.access;
-            }
-            for (auto& w : pass.writes) {
-                combinedAccesses[w.handle.GetIndex()] = combinedAccesses[w.handle.GetIndex()] | w.access;
-            }
-        }
+        auto combinedAccesses = BuildCombinedAccesses(order, passes, resources.size());
 
         std::vector<ResourceMeta> metas;
         metas.reserve(lifetimes.size());
@@ -955,17 +563,7 @@ namespace miki::rg {
         auto& resources = builder.GetResources();
         auto& passes = builder.GetPasses();
 
-        // Rebuild combined access per resource (lightweight — same logic as ComputeAliasingSlots)
-        std::vector<ResourceAccess> combinedAccesses(resources.size(), ResourceAccess::None);
-        for (auto passIdx : order) {
-            auto& pass = passes[passIdx];
-            for (auto& r : pass.reads) {
-                combinedAccesses[r.handle.GetIndex()] = combinedAccesses[r.handle.GetIndex()] | r.access;
-            }
-            for (auto& w : pass.writes) {
-                combinedAccesses[w.handle.GetIndex()] = combinedAccesses[w.handle.GetIndex()] | w.access;
-            }
-        }
+        auto combinedAccesses = BuildCombinedAccesses(order, passes, resources.size());
 
         // Build per-resource first/last pass from lifetimes, filtered to aliased resources
         struct AliasedResource {
@@ -1045,345 +643,6 @@ namespace miki::rg {
             owner.currentResource = ar.resourceIndex;
             owner.lastPassEnd = ar.lastPass;
         }
-    }
-
-    // =========================================================================
-    // Stage 8: Render pass merging (subpass consolidation) — §5.7
-    // =========================================================================
-
-    namespace {
-
-        // Merge profitability limits (§5.7.4)
-        inline constexpr uint32_t kMaxSubpassesPerGroup = 8;
-        inline constexpr uint32_t kMaxAttachmentsPerGroup = 8;
-
-        // Determine render area (width, height) for a pass.
-        // Prefers write attachments (color/depth), falls back to read textures.
-        auto GetPassRenderArea(const RGPassNode& pass, const std::vector<RGResourceNode>& resources)
-            -> std::pair<uint32_t, uint32_t> {
-            // Primary: from write attachments
-            for (auto& w : pass.writes) {
-                auto idx = w.handle.GetIndex();
-                if (idx < resources.size() && resources[idx].kind == RGResourceKind::Texture) {
-                    bool isAttachment
-                        = (w.access & (ResourceAccess::ColorAttachWrite | ResourceAccess::DepthStencilWrite))
-                          != ResourceAccess::None;
-                    if (isAttachment) {
-                        return {resources[idx].textureDesc.width, resources[idx].textureDesc.height};
-                    }
-                }
-            }
-            // Fallback: from read textures (input attachment / shader read of RT)
-            for (auto& r : pass.reads) {
-                auto idx = r.handle.GetIndex();
-                if (idx < resources.size() && resources[idx].kind == RGResourceKind::Texture) {
-                    return {resources[idx].textureDesc.width, resources[idx].textureDesc.height};
-                }
-            }
-            return {0, 0};
-        }
-
-        // Check if pass has PresentSrc access that prevents merging (condition 6, §5.7.1)
-        // PresentSrc requires full VRAM flush before presentation.
-        // Note: hasSideEffects is NOT checked — it is used for DCE, not merge blocking.
-        auto HasMergeBlockingAccess(const RGPassNode& pass) -> bool {
-            for (auto& r : pass.reads) {
-                if ((r.access & ResourceAccess::PresentSrc) != ResourceAccess::None) {
-                    return true;
-                }
-            }
-            for (auto& w : pass.writes) {
-                if ((w.access & ResourceAccess::PresentSrc) != ResourceAccess::None) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        // Collect resource indices that are RT/DS attachments for a pass
-        auto CollectAttachmentIndices(const RGPassNode& pass) -> std::vector<uint16_t> {
-            std::vector<uint16_t> result;
-            for (auto& w : pass.writes) {
-                if ((w.access & (ResourceAccess::ColorAttachWrite | ResourceAccess::DepthStencilWrite))
-                    != ResourceAccess::None) {
-                    result.push_back(w.handle.GetIndex());
-                }
-            }
-            return result;
-        }
-
-        // Check if Pi+1 reads an attachment output of Pi (condition 3: shared attachment)
-        auto HasSharedAttachment(
-            const RGPassNode& prev, const RGPassNode& next, const std::vector<RGResourceNode>& resources
-        ) -> bool {
-            auto prevAttachments = CollectAttachmentIndices(prev);
-            // Check if next reads any of prev's attachment outputs
-            for (auto& r : next.reads) {
-                auto idx = r.handle.GetIndex();
-                for (auto att : prevAttachments) {
-                    if (idx == att) {
-                        return true;
-                    }
-                }
-            }
-            // Check shared depth attachment: both write same depth resource
-            for (auto& pw : prev.writes) {
-                if ((pw.access & ResourceAccess::DepthStencilWrite) == ResourceAccess::None) {
-                    continue;
-                }
-                for (auto& nw : next.writes) {
-                    if ((nw.access & ResourceAccess::DepthStencilWrite) == ResourceAccess::None) {
-                        continue;
-                    }
-                    if (pw.handle.GetIndex() == nw.handle.GetIndex()) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        // Check if a cross-queue sync point sits between two topo-order positions (condition 4)
-        auto HasCrossQueueBetween(const std::vector<CrossQueueSyncPoint>& syncPoints, uint32_t posA, uint32_t posB)
-            -> bool {
-            for (auto& sp : syncPoints) {
-                if (sp.srcPassIndex > posA && sp.srcPassIndex < posB) {
-                    return true;
-                }
-                if (sp.dstPassIndex > posA && sp.dstPassIndex < posB) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        // Check aliasing conflict: any resource in Pi and Pj map to the same aliasing slot (condition 5)
-        auto HasAliasingConflict(const RGPassNode& prev, const RGPassNode& next, const AliasingLayout& aliasing)
-            -> bool {
-            if (aliasing.resourceToSlot.empty()) {
-                return false;
-            }
-            auto prevAtts = CollectAttachmentIndices(prev);
-            auto nextAtts = CollectAttachmentIndices(next);
-            for (auto a : prevAtts) {
-                if (a >= aliasing.resourceToSlot.size()) {
-                    continue;
-                }
-                auto slotA = aliasing.resourceToSlot[a];
-                if (slotA == AliasingLayout::kNotAliased) {
-                    continue;
-                }
-                for (auto b : nextAtts) {
-                    if (b >= aliasing.resourceToSlot.size()) {
-                        continue;
-                    }
-                    if (a != b && aliasing.resourceToSlot[b] == slotA) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        // Check if pass has UAV write + color output simultaneously (profitability: unprofitable)
-        auto HasUavAndColorWrite(const RGPassNode& pass) -> bool {
-            bool hasColor = false;
-            bool hasUav = false;
-            for (auto& w : pass.writes) {
-                if ((w.access & ResourceAccess::ColorAttachWrite) != ResourceAccess::None) {
-                    hasColor = true;
-                }
-                if ((w.access & ResourceAccess::ShaderWrite) != ResourceAccess::None) {
-                    hasUav = true;
-                }
-            }
-            return hasColor && hasUav;
-        }
-
-    }  // anonymous namespace
-
-    void RenderGraphCompiler::MergeRenderPasses(
-        const RenderGraphBuilder& builder, const std::vector<uint32_t>& order, const AliasingLayout& aliasing,
-        const std::vector<CrossQueueSyncPoint>& syncPoints, std::vector<CompiledPassInfo>& compiledPasses,
-        std::vector<MergedRenderPassGroup>& mergedGroups
-    ) {
-        if (compiledPasses.empty()) {
-            return;
-        }
-
-        auto& passes = builder.GetPasses();
-        auto& resources = builder.GetResources();
-        bool isTileBased = options_.capabilities && options_.capabilities->isTileBasedGpu;
-        uint32_t maxAttachments
-            = options_.capabilities ? options_.capabilities->maxColorAttachments : kMaxAttachmentsPerGroup;
-
-        MergedRenderPassGroup currentGroup;
-
-        auto flushGroup = [&]() {
-            if (currentGroup.subpassIndices.size() > 1) {
-                mergedGroups.push_back(std::move(currentGroup));
-            }
-            currentGroup = {};
-        };
-
-        auto startGroup = [&](uint32_t pos) {
-            currentGroup = {};
-            currentGroup.subpassIndices.push_back(pos);
-            auto passIdx = compiledPasses[pos].passIndex;
-            auto [w, h] = GetPassRenderArea(passes[passIdx], resources);
-            currentGroup.renderAreaWidth = w;
-            currentGroup.renderAreaHeight = h;
-            // Track initial attachments
-            auto atts = CollectAttachmentIndices(passes[passIdx]);
-            for (auto a : atts) {
-                currentGroup.sharedAttachments.push_back(a);
-            }
-        };
-
-        // Begin with first graphics pass
-        if (compiledPasses[0].queue == RGQueueType::Graphics
-            && (passes[compiledPasses[0].passIndex].flags & RGPassFlags::Graphics) != RGPassFlags::None) {
-            startGroup(0);
-        }
-
-        for (uint32_t pos = 1; pos < compiledPasses.size(); ++pos) {
-            auto& cpi = compiledPasses[pos];
-            auto& pass = passes[cpi.passIndex];
-
-            // Condition 1: must be graphics
-            bool isGraphics
-                = (cpi.queue == RGQueueType::Graphics) && ((pass.flags & RGPassFlags::Graphics) != RGPassFlags::None);
-            if (!isGraphics) {
-                flushGroup();
-                continue;
-            }
-
-            // If current group is empty, start a new one
-            if (currentGroup.subpassIndices.empty()) {
-                startGroup(pos);
-                continue;
-            }
-
-            uint32_t prevPos = currentGroup.subpassIndices.back();
-            auto& prevPass = passes[compiledPasses[prevPos].passIndex];
-
-            // Condition 2: same render area
-            auto [curW, curH] = GetPassRenderArea(pass, resources);
-            if (curW != currentGroup.renderAreaWidth || curH != currentGroup.renderAreaHeight) {
-                flushGroup();
-                startGroup(pos);
-                continue;
-            }
-
-            // Condition 3: shared attachment (input attachment read or shared depth)
-            if (!HasSharedAttachment(prevPass, pass, resources)) {
-                flushGroup();
-                startGroup(pos);
-                continue;
-            }
-
-            // Condition 4: no cross-queue consumer between them
-            if (HasCrossQueueBetween(syncPoints, prevPos, pos)) {
-                flushGroup();
-                startGroup(pos);
-                continue;
-            }
-
-            // Condition 5: no aliasing conflict
-            if (HasAliasingConflict(prevPass, pass, aliasing)) {
-                flushGroup();
-                startGroup(pos);
-                continue;
-            }
-
-            // Condition 6: no host read/write/present
-            if (HasMergeBlockingAccess(pass) || HasMergeBlockingAccess(prevPass)) {
-                flushGroup();
-                startGroup(pos);
-                continue;
-            }
-
-            // Profitability: subpass count limit
-            if (currentGroup.subpassIndices.size() >= kMaxSubpassesPerGroup) {
-                flushGroup();
-                startGroup(pos);
-                continue;
-            }
-
-            // Profitability: attachment count limit
-            auto newAtts = CollectAttachmentIndices(pass);
-            uint32_t uniqueAttCount = static_cast<uint32_t>(currentGroup.sharedAttachments.size());
-            for (auto a : newAtts) {
-                bool found = false;
-                for (auto existing : currentGroup.sharedAttachments) {
-                    if (existing == a) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    ++uniqueAttCount;
-                }
-            }
-            if (uniqueAttCount > maxAttachments) {
-                flushGroup();
-                startGroup(pos);
-                continue;
-            }
-
-            // Profitability: UAV + color write (some drivers flush tiles)
-            if (!isTileBased && HasUavAndColorWrite(pass)) {
-                flushGroup();
-                startGroup(pos);
-                continue;
-            }
-
-            // All conditions passed — merge this pass into current group
-            uint32_t srcSubpass = static_cast<uint32_t>(currentGroup.subpassIndices.size()) - 1;
-            uint32_t dstSubpass = static_cast<uint32_t>(currentGroup.subpassIndices.size());
-
-            // Convert inter-pass barriers to subpass dependencies
-            for (auto& barrier : cpi.acquireBarriers) {
-                if (barrier.isAliasingBarrier || barrier.isCrossQueue) {
-                    continue;
-                }
-                SubpassDependency dep;
-                dep.srcSubpass = srcSubpass;
-                dep.dstSubpass = dstSubpass;
-                dep.srcAccess = barrier.srcAccess;
-                dep.dstAccess = barrier.dstAccess;
-                dep.srcLayout = barrier.srcLayout;
-                dep.dstLayout = barrier.dstLayout;
-                dep.byRegion = true;
-                currentGroup.dependencies.push_back(dep);
-            }
-
-            // Remove converted barriers from the pass (subpass dependency replaces them)
-            std::erase_if(cpi.acquireBarriers, [](const BarrierCommand& b) {
-                return !b.isAliasingBarrier && !b.isCrossQueue;
-            });
-            // Also remove matching release barriers from previous pass
-            std::erase_if(compiledPasses[prevPos].releaseBarriers, [](const BarrierCommand& b) {
-                return !b.isAliasingBarrier && !b.isCrossQueue;
-            });
-
-            currentGroup.subpassIndices.push_back(pos);
-            // Track new attachments
-            for (auto a : newAtts) {
-                bool found = false;
-                for (auto existing : currentGroup.sharedAttachments) {
-                    if (existing == a) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    currentGroup.sharedAttachments.push_back(a);
-                }
-            }
-        }
-
-        flushGroup();
     }
 
     // =========================================================================
@@ -1675,7 +934,8 @@ namespace miki::rg {
 
         // Stage 3b: Barrier-aware global reordering (optional)
         if (options_.enableBarrierReordering) {
-            ReorderPasses(builder, result.edges, activeSet, order);
+            PassReorderer reorderer(options_.strategy);
+            reorderer.Reorder(builder, result.edges, activeSet, order);
         }
 
         // Stage 4: Queue assignment
@@ -1684,6 +944,18 @@ namespace miki::rg {
 
         // Stage 5: Cross-queue sync synthesis
         SynthesizeCrossQueueSync(result.edges, queueAssignments, result.syncPoints);
+
+        // Stage 5b: Deadlock prevention (§7.5) — detect cross-queue cycles and demote
+        if (options_.enableDeadlockPrevention && options_.enableAsyncCompute) {
+            auto dlResult = AsyncComputeScheduler::DetectAndPreventDeadlocks(
+                result.syncPoints, queueAssignments, builder.GetPasses()
+            );
+            if (dlResult.hasCycle) {
+                // Re-synthesize sync points after demotion changed queue assignments
+                result.syncPoints.clear();
+                SynthesizeCrossQueueSync(result.edges, queueAssignments, result.syncPoints);
+            }
+        }
 
         // Stage 6 || Stage 7a: Run barrier synthesis and aliasing slot computation in parallel.
         // Stage 6 writes result.passes (barriers), Stage 7a writes result.lifetimes + result.aliasing (slots).
@@ -1695,7 +967,11 @@ namespace miki::rg {
             }
         });
 
-        SynthesizeBarriers(builder, order, result.edges, queueAssignments, result.passes);
+        BarrierSynthesizer barrierSynth({
+            .backendType = options_.backendType,
+            .enableSplitBarriers = options_.enableSplitBarriers,
+        });
+        barrierSynth.Synthesize(builder, order, queueAssignments, result.passes);
 
         aliasingFuture.get();  // Wait for Stage 7a to complete
 
@@ -1706,7 +982,8 @@ namespace miki::rg {
 
         // Stage 8: Render pass merging
         if (options_.enableRenderPassMerging) {
-            MergeRenderPasses(builder, order, result.aliasing, result.syncPoints, result.passes, result.mergedGroups);
+            PassMerger merger({.capabilities = options_.capabilities});
+            merger.Merge(builder, order, result.aliasing, result.syncPoints, result.passes, result.mergedGroups);
         }
 
         // Stage 9: Backend adaptation pass injection

@@ -20,6 +20,10 @@ set(MIKI_RENDERGRAPH_SOURCES
     src/miki/rendergraph/TransientResourceAllocator.cpp
     src/miki/rendergraph/PassRecorder.cpp
     src/miki/rendergraph/BatchSubmitter.cpp
+    src/miki/rendergraph/AsyncComputeScheduler.cpp
+    src/miki/rendergraph/BarrierSynthesizer.cpp
+    src/miki/rendergraph/PassReorderer.cpp
+    src/miki/rendergraph/PassMerger.cpp
     src/miki/rendergraph/RenderGraphSerializer.cpp
     src/miki/rendergraph/TransientHeapPool.cpp
 )

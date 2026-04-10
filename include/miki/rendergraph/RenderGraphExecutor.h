@@ -29,6 +29,7 @@
 #include "miki/frame/SyncScheduler.h"
 #include "miki/rendergraph/BatchSubmitter.h"
 #include "miki/rendergraph/PassRecorder.h"
+#include "miki/rendergraph/AsyncComputeScheduler.h"
 #include "miki/rendergraph/RenderGraphTypes.h"
 #include "miki/rendergraph/TransientResourceAllocator.h"
 #include "miki/rhi/Device.h"
@@ -65,6 +66,8 @@ namespace miki::rg {
         RecordingStats recording;
         SubmissionStats submission;
         uint32_t defragTriggered = 0;
+        uint32_t asyncPassCount = 0;    ///< Passes scheduled on async compute this frame
+        uint32_t demotedPassCount = 0;  ///< Passes demoted from async to graphics (deadlock prevention)
     };
 
     // =========================================================================
@@ -92,6 +95,12 @@ namespace miki::rg {
 
         /// @brief Set optional ReadbackRing for GPU->CPU readback integration (E-10).
         void SetReadbackRing(resource::ReadbackRing* ring) noexcept { readbackRing_ = ring; }
+
+        /// @brief Set optional async compute scheduler for adaptive scheduling (§7.2).
+        void SetAsyncScheduler(AsyncComputeScheduler* scheduler) noexcept { asyncScheduler_ = scheduler; }
+
+        /// @brief Get the async compute scheduler (nullable).
+        [[nodiscard]] auto GetAsyncScheduler() noexcept -> AsyncComputeScheduler* { return asyncScheduler_; }
 
         /// @brief Get the transient heap pool for inspection/defrag control.
         [[nodiscard]] auto GetHeapPool() noexcept -> TransientHeapPool& { return allocator_.GetHeapPool(); }
@@ -135,6 +144,7 @@ namespace miki::rg {
 
         // Optional integrations
         resource::ReadbackRing* readbackRing_ = nullptr;
+        AsyncComputeScheduler* asyncScheduler_ = nullptr;
     };
 
 }  // namespace miki::rg

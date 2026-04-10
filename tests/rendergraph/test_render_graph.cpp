@@ -10069,3 +10069,1351 @@ TEST(BufferSuballocator, RepeatedCallsReplaceParentBuffer) {
     // Different handles (MockDevice increments)
     EXPECT_NE(parent1.value, parent2.value);
 }
+
+// =============================================================================
+// Phase G: ComputeQueueLevel Detection Tests
+// =============================================================================
+
+TEST(ComputeQueueLevel, LevelA_DualQueueWithPriority) {
+    miki::rhi::GpuCapabilityProfile caps{};
+    caps.computeQueueFamilyCount = 2;
+    caps.hasGlobalPriority = true;
+    caps.hasAsyncCompute = true;
+    EXPECT_EQ(DetectComputeQueueLevel(caps), ComputeQueueLevel::A_DualQueuePriority);
+}
+
+TEST(ComputeQueueLevel, LevelB_SingleQueueWithPriority) {
+    miki::rhi::GpuCapabilityProfile caps{};
+    caps.computeQueueFamilyCount = 1;
+    caps.hasGlobalPriority = true;
+    caps.hasAsyncCompute = true;
+    EXPECT_EQ(DetectComputeQueueLevel(caps), ComputeQueueLevel::B_SingleQueuePriority);
+}
+
+TEST(ComputeQueueLevel, LevelC_SingleQueueBatchOnly) {
+    miki::rhi::GpuCapabilityProfile caps{};
+    caps.computeQueueFamilyCount = 1;
+    caps.hasGlobalPriority = false;
+    caps.hasAsyncCompute = true;
+    EXPECT_EQ(DetectComputeQueueLevel(caps), ComputeQueueLevel::C_SingleQueueBatch);
+}
+
+TEST(ComputeQueueLevel, LevelD_NoComputeQueue) {
+    miki::rhi::GpuCapabilityProfile caps{};
+    caps.computeQueueFamilyCount = 0;
+    caps.hasGlobalPriority = false;
+    caps.hasAsyncCompute = false;
+    EXPECT_EQ(DetectComputeQueueLevel(caps), ComputeQueueLevel::D_GraphicsOnly);
+}
+
+TEST(ComputeQueueLevel, DualQueueWithoutPriorityFallsToC) {
+    // 2 queue families but no global priority -> Level C (not A)
+    miki::rhi::GpuCapabilityProfile caps{};
+    caps.computeQueueFamilyCount = 2;
+    caps.hasGlobalPriority = false;
+    caps.hasAsyncCompute = true;
+    EXPECT_EQ(DetectComputeQueueLevel(caps), ComputeQueueLevel::C_SingleQueueBatch);
+}
+
+TEST(ComputeQueueLevel, PriorityWithoutAsyncComputeFallsToD) {
+    // hasGlobalPriority but no async compute -> Level D
+    miki::rhi::GpuCapabilityProfile caps{};
+    caps.computeQueueFamilyCount = 0;
+    caps.hasGlobalPriority = true;
+    caps.hasAsyncCompute = false;
+    EXPECT_EQ(DetectComputeQueueLevel(caps), ComputeQueueLevel::D_GraphicsOnly);
+}
+
+// =============================================================================
+// Phase G: QFOT Strategy Tests
+// =============================================================================
+
+TEST(QfotStrategy, VulkanTextureIsExclusive) {
+    auto s = DetermineQfotStrategy(RGResourceKind::Texture, BackendType::Vulkan14);
+    EXPECT_EQ(s, QfotStrategy::Exclusive);
+}
+
+TEST(QfotStrategy, VulkanBufferIsConcurrent) {
+    auto s = DetermineQfotStrategy(RGResourceKind::Buffer, BackendType::Vulkan14);
+    EXPECT_EQ(s, QfotStrategy::Concurrent);
+}
+
+TEST(QfotStrategy, VulkanCompatTextureIsExclusive) {
+    auto s = DetermineQfotStrategy(RGResourceKind::Texture, BackendType::VulkanCompat);
+    EXPECT_EQ(s, QfotStrategy::Exclusive);
+}
+
+TEST(QfotStrategy, VulkanCompatBufferIsConcurrent) {
+    auto s = DetermineQfotStrategy(RGResourceKind::Buffer, BackendType::VulkanCompat);
+    EXPECT_EQ(s, QfotStrategy::Concurrent);
+}
+
+TEST(QfotStrategy, D3D12TextureIsNone) {
+    auto s = DetermineQfotStrategy(RGResourceKind::Texture, BackendType::D3D12);
+    EXPECT_EQ(s, QfotStrategy::None);
+}
+
+TEST(QfotStrategy, D3D12BufferIsNone) {
+    auto s = DetermineQfotStrategy(RGResourceKind::Buffer, BackendType::D3D12);
+    EXPECT_EQ(s, QfotStrategy::None);
+}
+
+TEST(QfotStrategy, WebGPUIsNone) {
+    EXPECT_EQ(DetermineQfotStrategy(RGResourceKind::Texture, BackendType::WebGPU), QfotStrategy::None);
+    EXPECT_EQ(DetermineQfotStrategy(RGResourceKind::Buffer, BackendType::WebGPU), QfotStrategy::None);
+}
+
+TEST(QfotStrategy, OpenGLIsNone) {
+    EXPECT_EQ(DetermineQfotStrategy(RGResourceKind::Texture, BackendType::OpenGL43), QfotStrategy::None);
+    EXPECT_EQ(DetermineQfotStrategy(RGResourceKind::Buffer, BackendType::OpenGL43), QfotStrategy::None);
+}
+
+TEST(QfotStrategy, MockIsNone) {
+    EXPECT_EQ(DetermineQfotStrategy(RGResourceKind::Texture, BackendType::Mock), QfotStrategy::None);
+}
+
+// =============================================================================
+// Phase G: AsyncComputeScheduler — ShouldRunAsync behavior tests
+// =============================================================================
+
+TEST(AsyncScheduler, LevelD_AlwaysReturnsFalse) {
+    AsyncComputeScheduler sched;
+    sched.SetComputeQueueLevel(ComputeQueueLevel::D_GraphicsOnly);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 999.0f));
+}
+
+TEST(AsyncScheduler, NonAsyncFlagReturnsFalse) {
+    AsyncComputeScheduler sched;
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    // Graphics-only pass, no AsyncCompute flag
+    EXPECT_FALSE(sched.ShouldRunAsync(0, RGPassFlags::Graphics, 999.0f));
+}
+
+TEST(AsyncScheduler, ComputeWithoutAsyncFlagReturnsFalse) {
+    AsyncComputeScheduler sched;
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    // Compute pass but no AsyncCompute flag
+    EXPECT_FALSE(sched.ShouldRunAsync(0, RGPassFlags::Compute, 999.0f));
+}
+
+TEST(AsyncScheduler, ColdStartBelowThresholdReturnsFalse) {
+    // Default: staticThreshold=200, syncCost=75, threshold=275
+    AsyncComputeScheduler sched;
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    // estimatedGpuTime=100 < 275 → false
+    EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 100.0f));
+}
+
+TEST(AsyncScheduler, ColdStartAboveThresholdReturnsTrue) {
+    AsyncComputeScheduler sched;
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    // estimatedGpuTime=300 >= 275 → true
+    EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 300.0f));
+}
+
+TEST(AsyncScheduler, ColdStartExactThresholdReturnsTrue) {
+    // Default staticThreshold + crossQueueSyncCost = 200 + 75 = 275
+    AsyncComputeScheduler sched;
+    sched.SetComputeQueueLevel(ComputeQueueLevel::C_SingleQueueBatch);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 275.0f));
+}
+
+TEST(AsyncScheduler, CustomConfigThresholds) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.staticThresholdUs = 100.0f;
+    cfg.crossQueueSyncCostUs = 50.0f;  // threshold = 150
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 149.0f));
+    EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 150.0f));
+}
+
+// =============================================================================
+// Phase G: AsyncComputeScheduler — EMA feedback + warm-up transition
+// =============================================================================
+
+TEST(AsyncScheduler, WarmUpTransitionAfterNFrames) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 4;
+    cfg.emaAlpha = 0.5f;
+    cfg.staticThresholdUs = 200.0f;
+    cfg.adaptiveThresholdUs = 50.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+
+    // Create entry by calling ShouldRunAsync (creates cold-start entry)
+    sched.ShouldRunAsync(0, flags, 300.0f);
+
+    auto* est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    EXPECT_TRUE(est->isWarmingUp);
+    EXPECT_EQ(est->frameCount, 0u);
+
+    // Feed 4 frames of high benefit
+    for (uint32_t i = 0; i < 4; ++i) {
+        sched.BeginFrame();
+        PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 500.0f};
+        sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+    }
+
+    est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    EXPECT_FALSE(est->isWarmingUp) << "Should have exited warm-up after 4 frames";
+    EXPECT_EQ(est->frameCount, 4u);
+    // EMA should converge toward 500 (with alpha=0.5, all samples = 500)
+    EXPECT_GT(est->emaBenefitUs, 400.0f);
+}
+
+TEST(AsyncScheduler, EmaConvergesOverFrames) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 2;
+    cfg.emaAlpha = 0.5f;
+    cfg.adaptiveThresholdUs = 50.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+
+    // Feed consistent benefit=200 for several frames
+    for (uint32_t i = 0; i < 10; ++i) {
+        sched.BeginFrame();
+        PassTimingFeedback fb{.passIndex = 42, .overlappedGraphicsTimeUs = 200.0f};
+        sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+    }
+
+    auto* est = sched.GetEstimate(42);
+    ASSERT_NE(est, nullptr);
+    // After 10 frames with alpha=0.5, EMA should be very close to 200
+    EXPECT_NEAR(est->emaBenefitUs, 200.0f, 1.0f);
+    EXPECT_EQ(est->frameCount, 10u);
+    EXPECT_FALSE(est->isWarmingUp);
+}
+
+TEST(AsyncScheduler, EmaBenefitSubtractsSyncCost) {
+    // Benefit = max(0, overlappedGraphicsTime - syncCost)
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 1;
+    cfg.emaAlpha = 1.0f;  // instant tracking
+    cfg.crossQueueSyncCostUs = 100.0f;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+
+    // overlapped=80 - syncCost=100 = max(0,-20) = 0
+    sched.BeginFrame();
+    PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 80.0f};
+    sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+
+    auto* est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    EXPECT_FLOAT_EQ(est->emaBenefitUs, 0.0f);
+}
+
+TEST(AsyncScheduler, EmaBenefitPositiveWhenOverlapExceedsCost) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 1;
+    cfg.emaAlpha = 1.0f;
+    cfg.crossQueueSyncCostUs = 50.0f;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+
+    sched.BeginFrame();
+    PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 200.0f};
+    sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+
+    auto* est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    EXPECT_FLOAT_EQ(est->emaBenefitUs, 150.0f);  // 200 - 50
+}
+
+// =============================================================================
+// Phase G: Hysteresis behavior
+// =============================================================================
+
+TEST(AsyncScheduler, HysteresisKeepsAsyncAfterBenefitDrops) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 2;
+    cfg.hysteresisFrames = 3;
+    cfg.emaAlpha = 1.0f;  // instant
+    cfg.adaptiveThresholdUs = 50.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+
+    // Feed 3 frames of high benefit (warm-up + establish benefit)
+    for (uint32_t i = 0; i < 3; ++i) {
+        sched.BeginFrame();
+        PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 200.0f};
+        sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+    }
+    auto* est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    const_cast<PassAsyncEstimate*>(est)->framesOnAsync = 5;  // Simulate on async for 5 frames
+
+    // Now feed zero benefit for up to hysteresisFrames
+    for (uint32_t i = 0; i < 3; ++i) {
+        sched.BeginFrame();
+        PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 0.0f};
+        sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+    }
+
+    // After exactly hysteresisFrames(=3) of zero benefit, framesSinceBenefit=3
+    est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    EXPECT_EQ(est->framesSinceBenefit, 3u);
+
+    // Hysteresis: framesSinceBenefit(3) >= hysteresisFrames(3), framesOnAsync(5)>0
+    // Should NOT keep async anymore (framesSinceBenefit is NOT < hysteresisFrames)
+    // And EMA benefit is 0 which is not > adaptiveThreshold(50)
+    EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 0.0f));
+}
+
+TEST(AsyncScheduler, HysteresisWithinWindowKeepsAsync) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 1;
+    cfg.hysteresisFrames = 5;
+    cfg.emaAlpha = 1.0f;
+    cfg.adaptiveThresholdUs = 50.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+
+    // Feed 2 frames of high benefit → warm up done, EMA high
+    for (uint32_t i = 0; i < 2; ++i) {
+        sched.BeginFrame();
+        PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 200.0f};
+        sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+    }
+    auto* est = const_cast<PassAsyncEstimate*>(sched.GetEstimate(0));
+    est->framesOnAsync = 3;
+
+    // 1 frame of zero benefit
+    sched.BeginFrame();
+    PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 0.0f};
+    sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+
+    auto* est2 = sched.GetEstimate(0);
+    EXPECT_EQ(est2->framesSinceBenefit, 1u);
+
+    // framesSinceBenefit(1) < hysteresisFrames(5) && framesOnAsync(3)>0 → true
+    EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 0.0f));
+}
+
+// =============================================================================
+// Phase G: Adaptive phase EMA-based decision
+// =============================================================================
+
+TEST(AsyncScheduler, AdaptivePhaseHighEmaReturnsTrue) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 1;
+    cfg.emaAlpha = 1.0f;
+    cfg.adaptiveThresholdUs = 50.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    cfg.hysteresisFrames = 0;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::B_SingleQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+
+    // Feed 1 frame to exit warm-up
+    sched.BeginFrame();
+    PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 100.0f};
+    sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+
+    auto* est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    EXPECT_FALSE(est->isWarmingUp);
+    EXPECT_FLOAT_EQ(est->emaBenefitUs, 100.0f);
+
+    // EMA(100) > adaptiveThreshold(50) → true
+    EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 0.0f));
+}
+
+TEST(AsyncScheduler, AdaptivePhaseLowEmaReturnsFalse) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 1;
+    cfg.emaAlpha = 1.0f;
+    cfg.adaptiveThresholdUs = 50.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    cfg.hysteresisFrames = 0;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+
+    sched.BeginFrame();
+    PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 10.0f};
+    sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+
+    // EMA(10) <= adaptiveThreshold(50), hysteresis=0 → false
+    EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 0.0f));
+}
+
+// =============================================================================
+// Phase G: BeginFrame and GetEstimate
+// =============================================================================
+
+TEST(AsyncScheduler, BeginFrameIncrementsCounter) {
+    AsyncComputeScheduler sched;
+    EXPECT_EQ(sched.GetFrameCount(), 0u);
+    sched.BeginFrame();
+    EXPECT_EQ(sched.GetFrameCount(), 1u);
+    sched.BeginFrame();
+    EXPECT_EQ(sched.GetFrameCount(), 2u);
+}
+
+TEST(AsyncScheduler, GetEstimateUnknownPassReturnsNull) {
+    AsyncComputeScheduler sched;
+    EXPECT_EQ(sched.GetEstimate(999), nullptr);
+}
+
+TEST(AsyncScheduler, MultiplePasses_IndependentTracking) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 1;
+    cfg.emaAlpha = 1.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+
+    sched.BeginFrame();
+    PassTimingFeedback fb0{.passIndex = 0, .overlappedGraphicsTimeUs = 100.0f};
+    PassTimingFeedback fb1{.passIndex = 1, .overlappedGraphicsTimeUs = 300.0f};
+    std::array<PassTimingFeedback, 2> fbs = {fb0, fb1};
+    sched.UpdateFeedback(fbs);
+
+    auto* e0 = sched.GetEstimate(0);
+    auto* e1 = sched.GetEstimate(1);
+    ASSERT_NE(e0, nullptr);
+    ASSERT_NE(e1, nullptr);
+    EXPECT_FLOAT_EQ(e0->emaBenefitUs, 100.0f);
+    EXPECT_FLOAT_EQ(e1->emaBenefitUs, 300.0f);
+}
+
+// =============================================================================
+// Phase G: Deadlock Detection — no cycle
+// =============================================================================
+
+TEST(DeadlockDetection, NoCycleReturnsClean) {
+    // Linear chain: G->C->G (no back-edge)
+    std::vector<CrossQueueSyncPoint> syncPoints = {
+        {.srcQueue = RGQueueType::Graphics,
+         .dstQueue = RGQueueType::AsyncCompute,
+         .srcPassIndex = 0,
+         .dstPassIndex = 1},
+        {.srcQueue = RGQueueType::AsyncCompute,
+         .dstQueue = RGQueueType::Graphics,
+         .srcPassIndex = 1,
+         .dstPassIndex = 2},
+    };
+    std::vector<RGQueueType> qa = {RGQueueType::Graphics, RGQueueType::AsyncCompute, RGQueueType::Graphics};
+
+    auto result = AsyncComputeScheduler::DetectAndPreventDeadlocks(syncPoints, qa, {});
+    EXPECT_FALSE(result.hasCycle);
+    EXPECT_TRUE(result.demotedPasses.empty());
+    // Queue assignments unchanged
+    EXPECT_EQ(qa[0], RGQueueType::Graphics);
+    EXPECT_EQ(qa[1], RGQueueType::AsyncCompute);
+    EXPECT_EQ(qa[2], RGQueueType::Graphics);
+}
+
+TEST(DeadlockDetection, EmptySyncPointsReturnsClean) {
+    std::vector<CrossQueueSyncPoint> empty;
+    std::vector<RGQueueType> qa = {RGQueueType::Graphics};
+    auto result = AsyncComputeScheduler::DetectAndPreventDeadlocks(empty, qa, {});
+    EXPECT_FALSE(result.hasCycle);
+    EXPECT_TRUE(result.demotedPasses.empty());
+}
+
+// =============================================================================
+// Phase G: Deadlock Detection — cycle detection + demotion
+// =============================================================================
+
+TEST(DeadlockDetection, SimpleCycleDemotesAsyncPass) {
+    // Cycle: pass0(G) -> pass1(C) -> pass0(G) — back edge from 1 to 0
+    std::vector<CrossQueueSyncPoint> syncPoints = {
+        {.srcQueue = RGQueueType::Graphics,
+         .dstQueue = RGQueueType::AsyncCompute,
+         .srcPassIndex = 0,
+         .dstPassIndex = 1},
+        {.srcQueue = RGQueueType::AsyncCompute,
+         .dstQueue = RGQueueType::Graphics,
+         .srcPassIndex = 1,
+         .dstPassIndex = 0},
+    };
+    std::vector<RGQueueType> qa = {RGQueueType::Graphics, RGQueueType::AsyncCompute};
+
+    auto result = AsyncComputeScheduler::DetectAndPreventDeadlocks(syncPoints, qa, {});
+    EXPECT_TRUE(result.hasCycle);
+    // Pass 1 (AsyncCompute) should be demoted to Graphics
+    EXPECT_FALSE(result.demotedPasses.empty());
+    bool pass1Demoted = false;
+    for (auto idx : result.demotedPasses) {
+        if (idx == 1) {
+            pass1Demoted = true;
+        }
+    }
+    EXPECT_TRUE(pass1Demoted) << "Pass 1 (AsyncCompute) should be demoted";
+    EXPECT_EQ(qa[1], RGQueueType::Graphics) << "Queue assignment for pass 1 should be Graphics after demotion";
+}
+
+TEST(DeadlockDetection, TransferCycleDemotesTransferPass) {
+    // Cycle where only transfer passes are in the cycle (no async compute)
+    // pass0(G) -> pass1(T) -> pass0(G) — cycle
+    std::vector<CrossQueueSyncPoint> syncPoints = {
+        {.srcQueue = RGQueueType::Graphics, .dstQueue = RGQueueType::Transfer, .srcPassIndex = 0, .dstPassIndex = 1},
+        {.srcQueue = RGQueueType::Transfer, .dstQueue = RGQueueType::Graphics, .srcPassIndex = 1, .dstPassIndex = 0},
+    };
+    std::vector<RGQueueType> qa = {RGQueueType::Graphics, RGQueueType::Transfer};
+
+    auto result = AsyncComputeScheduler::DetectAndPreventDeadlocks(syncPoints, qa, {});
+    EXPECT_TRUE(result.hasCycle);
+    // No async compute to demote first; should fall through to demoting transfer
+    EXPECT_FALSE(result.demotedPasses.empty());
+    EXPECT_EQ(qa[1], RGQueueType::Graphics);
+}
+
+// =============================================================================
+// Phase G: Compiler integration — adaptive scheduler in Stage 4
+// =============================================================================
+
+TEST(PhaseG_Compiler, AdaptiveSchedulerDemotesLowBenefitPass) {
+    AsyncComputeSchedulerConfig cfg;
+    cfg.staticThresholdUs = 200.0f;
+    cfg.crossQueueSyncCostUs = 75.0f;  // cold-start threshold = 275
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    // Async compute pass — but scheduler will demote it (estimatedGpuTime=0 < 275)
+    builder.AddAsyncComputePass(
+        "AsyncWork",
+        [&](PassBuilder& pb) {
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.asyncScheduler = &sched;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 1u);
+    // Scheduler demoted: queue should be Graphics
+    EXPECT_EQ(result->passes[0].queue, RGQueueType::Graphics);
+}
+
+TEST(PhaseG_Compiler, NullSchedulerKeepsOriginalAssignment) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    builder.AddAsyncComputePass(
+        "AsyncWork",
+        [&](PassBuilder& pb) {
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.asyncScheduler = nullptr;  // No scheduler → keep original queue
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes[0].queue, RGQueueType::AsyncCompute);
+}
+
+TEST(PhaseG_Compiler, AsyncDisabledDemotesToGraphics) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    builder.AddAsyncComputePass(
+        "AsyncWork",
+        [&](PassBuilder& pb) {
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = false;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes[0].queue, RGQueueType::Graphics);
+}
+
+TEST(PhaseG_Compiler, AsyncDisabledPreservesTransferQueue) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    builder.AddTransferPass(
+        "Upload",
+        [&](PassBuilder& pb) {
+            buf = pb.WriteBuffer(buf, ResourceAccess::TransferDst);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = false;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    // Transfer queue should be preserved even when async compute is disabled
+    EXPECT_EQ(result->passes[0].queue, RGQueueType::Transfer);
+}
+
+// =============================================================================
+// Phase G: QFOT barrier emission in compiler Stage 6 — Vulkan backend
+// =============================================================================
+
+TEST(PhaseG_QFOT, VulkanCrossQueueTextureEmitsSplitReleaseAcquire) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Draw", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Process",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.backendType = BackendType::Vulkan14;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.enableSplitBarriers = true;
+    opts.enableDeadlockPrevention = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+
+    // Find compiled pass positions
+    int drawPos = -1, processPos = -1;
+    for (int i = 0; i < static_cast<int>(result->passes.size()); ++i) {
+        auto& p = builder.GetPasses()[result->passes[i].passIndex];
+        if (std::string_view(p.name) == "Draw") {
+            drawPos = i;
+        }
+        if (std::string_view(p.name) == "Process") {
+            processPos = i;
+        }
+    }
+    ASSERT_GE(drawPos, 0);
+    ASSERT_GE(processPos, 0);
+
+    // Draw pass should have a RELEASE barrier for texture T (QFOT release)
+    bool hasRelease = false;
+    for (auto& b : result->passes[drawPos].releaseBarriers) {
+        if (b.isCrossQueue && b.isSplitRelease && b.resourceIndex == t.GetIndex()) {
+            hasRelease = true;
+            EXPECT_EQ(b.srcQueue, RGQueueType::Graphics);
+            EXPECT_EQ(b.dstQueue, RGQueueType::AsyncCompute);
+            EXPECT_EQ(b.dstAccess, ResourceAccess::None) << "QFOT release should have no dst access";
+        }
+    }
+    EXPECT_TRUE(hasRelease) << "Vulkan cross-queue texture should have QFOT release on source pass";
+
+    // Process pass should have an ACQUIRE barrier for texture T (QFOT acquire)
+    bool hasAcquire = false;
+    for (auto& b : result->passes[processPos].acquireBarriers) {
+        if (b.isCrossQueue && b.isSplitAcquire && b.resourceIndex == t.GetIndex()) {
+            hasAcquire = true;
+            EXPECT_EQ(b.srcQueue, RGQueueType::Graphics);
+            EXPECT_EQ(b.dstQueue, RGQueueType::AsyncCompute);
+            EXPECT_EQ(b.srcAccess, ResourceAccess::None) << "QFOT acquire should have no src access";
+        }
+    }
+    EXPECT_TRUE(hasAcquire) << "Vulkan cross-queue texture should have QFOT acquire on dest pass";
+}
+
+TEST(PhaseG_QFOT, D3D12CrossQueueTextureEmitsSingleBarrier) {
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Draw", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Process",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.backendType = BackendType::D3D12;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.enableDeadlockPrevention = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+
+    int drawPos = -1, processPos = -1;
+    for (int i = 0; i < static_cast<int>(result->passes.size()); ++i) {
+        auto& p = builder.GetPasses()[result->passes[i].passIndex];
+        if (std::string_view(p.name) == "Draw") {
+            drawPos = i;
+        }
+        if (std::string_view(p.name) == "Process") {
+            processPos = i;
+        }
+    }
+    ASSERT_GE(drawPos, 0);
+    ASSERT_GE(processPos, 0);
+
+    // D3D12: NO split release on source pass
+    bool hasQfotRelease = false;
+    for (auto& b : result->passes[drawPos].releaseBarriers) {
+        if (b.isCrossQueue && b.isSplitRelease && b.resourceIndex == t.GetIndex()) {
+            hasQfotRelease = true;
+        }
+    }
+    EXPECT_FALSE(hasQfotRelease) << "D3D12 should NOT emit QFOT split release";
+
+    // D3D12: single cross-queue barrier on dest pass (not split)
+    bool hasSingleBarrier = false;
+    for (auto& b : result->passes[processPos].acquireBarriers) {
+        if (b.isCrossQueue && b.resourceIndex == t.GetIndex()) {
+            hasSingleBarrier = true;
+            // Should NOT be isSplitAcquire (it's a full barrier, not QFOT)
+            EXPECT_FALSE(b.isSplitAcquire) << "D3D12 cross-queue barrier should not be split acquire";
+        }
+    }
+    EXPECT_TRUE(hasSingleBarrier) << "D3D12 cross-queue texture should have single barrier on dest pass";
+}
+
+TEST(PhaseG_QFOT, VulkanCrossQueueBufferNoConcurrentSplit) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 1024, .debugName = "Buf"});
+    builder.AddGraphicsPass(
+        "Fill", [&](PassBuilder& pb) { buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite); },
+        [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Read",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.backendType = BackendType::Vulkan14;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.enableDeadlockPrevention = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+
+    // Vulkan buffer: CONCURRENT mode → NO split release/acquire
+    int fillPos = -1;
+    for (int i = 0; i < static_cast<int>(result->passes.size()); ++i) {
+        auto& p = builder.GetPasses()[result->passes[i].passIndex];
+        if (std::string_view(p.name) == "Fill") {
+            fillPos = i;
+        }
+    }
+    ASSERT_GE(fillPos, 0);
+
+    bool hasSplitRelease = false;
+    for (auto& b : result->passes[fillPos].releaseBarriers) {
+        if (b.isCrossQueue && b.isSplitRelease && b.resourceIndex == buf.GetIndex()) {
+            hasSplitRelease = true;
+        }
+    }
+    EXPECT_FALSE(hasSplitRelease) << "Vulkan CONCURRENT buffer should NOT have QFOT split release";
+}
+
+// =============================================================================
+// Phase G: 3-queue chain (Transfer → Compute → Graphics)
+// =============================================================================
+
+TEST(PhaseG_3Queue, TransferComputeGraphicsChainProducesTwoSyncPoints) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 4096, .debugName = "CompressedData"});
+    auto tex = builder.CreateTexture({.width = 256, .height = 256, .debugName = "Decompressed"});
+
+    // Transfer: upload compressed data
+    builder.AddTransferPass(
+        "Upload", [&](PassBuilder& pb) { buf = pb.WriteBuffer(buf, ResourceAccess::TransferDst); },
+        [](RenderPassContext&) {}
+    );
+    // Compute: decompress on async compute
+    builder.AddAsyncComputePass(
+        "Decompress",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            tex = pb.WriteTexture(tex, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    // Graphics: render using decompressed texture
+    builder.AddGraphicsPass(
+        "Render",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tex, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.enableDeadlockPrevention = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 3u);
+
+    // Should have sync points: Transfer->AsyncCompute and AsyncCompute->Graphics
+    bool hasT2C = false, hasC2G = false;
+    for (auto& sp : result->syncPoints) {
+        if (sp.srcQueue == RGQueueType::Transfer && sp.dstQueue == RGQueueType::AsyncCompute) {
+            hasT2C = true;
+        }
+        if (sp.srcQueue == RGQueueType::AsyncCompute && sp.dstQueue == RGQueueType::Graphics) {
+            hasC2G = true;
+        }
+    }
+    EXPECT_TRUE(hasT2C) << "Missing Transfer->AsyncCompute sync point";
+    EXPECT_TRUE(hasC2G) << "Missing AsyncCompute->Graphics sync point";
+
+    // Should have at least 3 batches (one per queue)
+    EXPECT_GE(result->batches.size(), 3u);
+    bool hasTransferBatch = false, hasComputeBatch = false, hasGraphicsBatch = false;
+    for (auto& b : result->batches) {
+        if (b.queue == RGQueueType::Transfer) {
+            hasTransferBatch = true;
+        }
+        if (b.queue == RGQueueType::AsyncCompute) {
+            hasComputeBatch = true;
+        }
+        if (b.queue == RGQueueType::Graphics) {
+            hasGraphicsBatch = true;
+        }
+    }
+    EXPECT_TRUE(hasTransferBatch);
+    EXPECT_TRUE(hasComputeBatch);
+    EXPECT_TRUE(hasGraphicsBatch);
+}
+
+// =============================================================================
+// Phase G: Deadlock prevention integration in compiler (Stage 5b)
+// =============================================================================
+
+TEST(PhaseG_Compiler, DeadlockPreventionResyncsAfterDemotion) {
+    // Construct a scenario where the compiler would produce a cycle:
+    // Draw(G) -> AsyncBlur(C) -> PostProcess(G) with a reverse dep
+    // The deadlock prevention should detect and demote if cycle exists.
+    // Since our DAG is well-formed, this tests the code path is exercised.
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Draw", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "AsyncBlur",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            t = pb.WriteTexture(t, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "PostProcess",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableDeadlockPrevention = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    // Whether or not demotion happened, compilation must succeed
+    EXPECT_GE(result->passes.size(), 3u);
+    // Batches should be well-formed
+    EXPECT_FALSE(result->batches.empty());
+    EXPECT_TRUE(result->batches.back().signalTimeline);
+}
+
+// =============================================================================
+// Phase G: Complex multi-queue stress tests
+// =============================================================================
+
+TEST(PhaseG_Stress, ManyAsyncPassesFanInFanOut) {
+    // 1 Graphics producer → 4 AsyncCompute consumers → 1 Graphics merger
+    // Tests fan-in sync point merging and multi-batch formation
+    RenderGraphBuilder builder;
+    auto src = builder.CreateTexture({.width = 128, .height = 128, .debugName = "Src"});
+    builder.AddGraphicsPass(
+        "Produce", [&](PassBuilder& pb) { src = pb.WriteColorAttachment(src); }, [](RenderPassContext&) {}
+    );
+
+    std::array<RGResourceHandle, 4> outputs;
+    for (int i = 0; i < 4; ++i) {
+        std::string name = "Buf" + std::to_string(i);
+        outputs[i] = builder.CreateBuffer({.size = 256, .debugName = name.c_str()});
+        std::string passName = "AsyncWork" + std::to_string(i);
+        auto& buf = outputs[i];
+        builder.AddAsyncComputePass(
+            passName.c_str(),
+            [&, idx = i](PassBuilder& pb) {
+                pb.ReadTexture(src, ResourceAccess::ShaderReadOnly);
+                outputs[idx] = pb.WriteBuffer(outputs[idx], ResourceAccess::ShaderWrite);
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+
+    builder.AddGraphicsPass(
+        "Merge",
+        [&](PassBuilder& pb) {
+            for (auto& o : outputs) {
+                pb.ReadBuffer(o, ResourceAccess::ShaderReadOnly);
+            }
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.enableDeadlockPrevention = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 6u);  // 1 produce + 4 async + 1 merge
+
+    // Verify sync points exist for all queue transitions
+    bool hasG2C = false, hasC2G = false;
+    for (auto& sp : result->syncPoints) {
+        if (sp.srcQueue == RGQueueType::Graphics && sp.dstQueue == RGQueueType::AsyncCompute) {
+            hasG2C = true;
+        }
+        if (sp.srcQueue == RGQueueType::AsyncCompute && sp.dstQueue == RGQueueType::Graphics) {
+            hasC2G = true;
+        }
+    }
+    EXPECT_TRUE(hasG2C);
+    EXPECT_TRUE(hasC2G);
+
+    // Last batch should signal timeline
+    EXPECT_TRUE(result->batches.back().signalTimeline);
+}
+
+TEST(PhaseG_Stress, AlternatingQueuesPingPong) {
+    // G0 -> C0 -> G1 -> C1 -> G2 : alternating queue ping-pong
+    // Tests that each queue transition produces correct sync points and batch splits
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "PingPong"});
+    builder.AddGraphicsPass("G0", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddAsyncComputePass(
+        "C0",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            t = pb.WriteTexture(t, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "G1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            t = pb.WriteColorAttachment(t);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "C1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            t = pb.WriteTexture(t, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "G2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.enableDeadlockPrevention = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 5u);
+
+    // At least 4 sync points (G->C, C->G, G->C, C->G)
+    EXPECT_GE(result->syncPoints.size(), 4u);
+
+    // At least 5 batches (each queue switch = new batch)
+    EXPECT_GE(result->batches.size(), 5u);
+
+    // Verify queue ordering is correct (G, C, G, C, G)
+    std::vector<RGQueueType> expectedQueues
+        = {RGQueueType::Graphics, RGQueueType::AsyncCompute, RGQueueType::Graphics, RGQueueType::AsyncCompute,
+           RGQueueType::Graphics};
+    for (size_t i = 0; i < result->passes.size() && i < expectedQueues.size(); ++i) {
+        EXPECT_EQ(result->passes[i].queue, expectedQueues[i]) << "Pass " << i << " queue mismatch";
+    }
+}
+
+TEST(PhaseG_Stress, TransferToComputeToGraphicsWithVulkanQFOT) {
+    // Full 3-queue chain with Vulkan backend: verify QFOT barriers at every transition
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 2048, .debugName = "CompBuf"});
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "DecompTex"});
+
+    builder.AddTransferPass(
+        "DMA", [&](PassBuilder& pb) { buf = pb.WriteBuffer(buf, ResourceAccess::TransferDst); },
+        [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Decompress",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            tex = pb.WriteTexture(tex, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Render",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tex, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.backendType = BackendType::Vulkan14;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.enableDeadlockPrevention = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 3u);
+
+    // Find pass positions
+    int dmaPos = -1, decompPos = -1, renderPos = -1;
+    for (int i = 0; i < static_cast<int>(result->passes.size()); ++i) {
+        auto& p = builder.GetPasses()[result->passes[i].passIndex];
+        if (std::string_view(p.name) == "DMA") {
+            dmaPos = i;
+        }
+        if (std::string_view(p.name) == "Decompress") {
+            decompPos = i;
+        }
+        if (std::string_view(p.name) == "Render") {
+            renderPos = i;
+        }
+    }
+    ASSERT_GE(dmaPos, 0);
+    ASSERT_GE(decompPos, 0);
+    ASSERT_GE(renderPos, 0);
+
+    // Transfer->Compute: buffer is CONCURRENT (no split), texture written by Compute is new
+    // Compute->Graphics: texture should have QFOT release on Compute, acquire on Render
+    bool hasTexRelease = false;
+    for (auto& b : result->passes[decompPos].releaseBarriers) {
+        if (b.isCrossQueue && b.isSplitRelease && b.resourceIndex == tex.GetIndex()) {
+            hasTexRelease = true;
+            EXPECT_EQ(b.srcQueue, RGQueueType::AsyncCompute);
+            EXPECT_EQ(b.dstQueue, RGQueueType::Graphics);
+        }
+    }
+    EXPECT_TRUE(hasTexRelease) << "Vulkan: Decompress should release texture ownership";
+
+    bool hasTexAcquire = false;
+    for (auto& b : result->passes[renderPos].acquireBarriers) {
+        if (b.isCrossQueue && b.isSplitAcquire && b.resourceIndex == tex.GetIndex()) {
+            hasTexAcquire = true;
+            EXPECT_EQ(b.srcQueue, RGQueueType::AsyncCompute);
+            EXPECT_EQ(b.dstQueue, RGQueueType::Graphics);
+        }
+    }
+    EXPECT_TRUE(hasTexAcquire) << "Vulkan: Render should acquire texture ownership";
+}
+
+TEST(PhaseG_Stress, AllPassesSameQueueNoSyncPoints) {
+    // All graphics passes → no cross-queue sync should be emitted
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass("A", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->syncPoints.empty()) << "Same-queue passes should produce no sync points";
+    // All passes in one batch
+    EXPECT_EQ(result->batches.size(), 1u);
+}
+
+TEST(PhaseG_Stress, MixedResourceTypesAcrossQueues) {
+    // Graphics writes a texture AND a buffer, both read by async compute
+    // Vulkan: texture should get QFOT EXCLUSIVE, buffer CONCURRENT
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "Tex"});
+    auto buf = builder.CreateBuffer({.size = 512, .debugName = "Buf"});
+    builder.AddGraphicsPass(
+        "Produce",
+        [&](PassBuilder& pb) {
+            tex = pb.WriteColorAttachment(tex);
+            buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "Consume",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tex, ResourceAccess::ShaderReadOnly);
+            pb.ReadBuffer(buf, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.backendType = BackendType::Vulkan14;
+    opts.enableAsyncCompute = true;
+    opts.enableRenderPassMerging = false;
+    opts.enableDeadlockPrevention = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->passes.size(), 2u);
+
+    int producePos = -1, consumePos = -1;
+    for (int i = 0; i < static_cast<int>(result->passes.size()); ++i) {
+        auto& p = builder.GetPasses()[result->passes[i].passIndex];
+        if (std::string_view(p.name) == "Produce") {
+            producePos = i;
+        }
+        if (std::string_view(p.name) == "Consume") {
+            consumePos = i;
+        }
+    }
+    ASSERT_GE(producePos, 0);
+    ASSERT_GE(consumePos, 0);
+
+    // Texture: should have QFOT split release on Produce
+    bool hasTexRelease = false;
+    for (auto& b : result->passes[producePos].releaseBarriers) {
+        if (b.isCrossQueue && b.isSplitRelease && b.resourceIndex == tex.GetIndex()) {
+            hasTexRelease = true;
+        }
+    }
+    EXPECT_TRUE(hasTexRelease) << "Vulkan texture should have QFOT release";
+
+    // Buffer: should NOT have QFOT split release (CONCURRENT mode)
+    bool hasBufRelease = false;
+    for (auto& b : result->passes[producePos].releaseBarriers) {
+        if (b.isCrossQueue && b.isSplitRelease && b.resourceIndex == buf.GetIndex()) {
+            hasBufRelease = true;
+        }
+    }
+    EXPECT_FALSE(hasBufRelease) << "Vulkan buffer (CONCURRENT) should NOT have QFOT release";
+
+    // Texture: should have QFOT acquire on Consume
+    bool hasTexAcquire = false;
+    for (auto& b : result->passes[consumePos].acquireBarriers) {
+        if (b.isCrossQueue && b.isSplitAcquire && b.resourceIndex == tex.GetIndex()) {
+            hasTexAcquire = true;
+        }
+    }
+    EXPECT_TRUE(hasTexAcquire) << "Vulkan texture should have QFOT acquire";
+
+    // Buffer: should have regular (non-split) cross-queue barrier on Consume
+    bool hasBufBarrier = false;
+    for (auto& b : result->passes[consumePos].acquireBarriers) {
+        if (b.isCrossQueue && b.resourceIndex == buf.GetIndex()) {
+            hasBufBarrier = true;
+            EXPECT_FALSE(b.isSplitAcquire) << "Buffer barrier should not be split acquire";
+        }
+    }
+    EXPECT_TRUE(hasBufBarrier) << "Buffer should have cross-queue barrier on consumer";
+}
+
+TEST(PhaseG_Stress, EmaRapidBenefitFluctuation) {
+    // Simulate wildly fluctuating benefit: 500, 0, 500, 0, ...
+    // EMA with alpha=0.1 should smooth it out
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 2;
+    cfg.emaAlpha = 0.1f;
+    cfg.adaptiveThresholdUs = 50.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    cfg.hysteresisFrames = 2;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+
+    for (uint32_t i = 0; i < 20; ++i) {
+        sched.BeginFrame();
+        float overlap = (i % 2 == 0) ? 500.0f : 0.0f;
+        PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = overlap};
+        sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+    }
+
+    auto* est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    // EMA with alpha=0.1 on alternating 500/0 should converge toward ~250
+    // (geometric series: 0.1*500 + 0.9*0.1*0 + 0.9^2*0.1*500 + ...)
+    // Actual value depends on exact sequence; just verify it's smoothed
+    EXPECT_GT(est->emaBenefitUs, 100.0f) << "EMA should smooth out fluctuations above 0";
+    EXPECT_LT(est->emaBenefitUs, 400.0f) << "EMA should smooth out fluctuations below 500";
+    EXPECT_EQ(est->frameCount, 20u);
+}
+
+TEST(PhaseG_Stress, ZeroOverlapNeverGoesAsync) {
+    // Consistent zero benefit → should never approve async after warm-up
+    AsyncComputeSchedulerConfig cfg;
+    cfg.warmUpFrames = 2;
+    cfg.emaAlpha = 0.5f;
+    cfg.adaptiveThresholdUs = 10.0f;
+    cfg.crossQueueSyncCostUs = 0.0f;
+    cfg.hysteresisFrames = 0;
+    AsyncComputeScheduler sched(cfg);
+    sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+
+    for (uint32_t i = 0; i < 10; ++i) {
+        sched.BeginFrame();
+        PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 0.0f};
+        sched.UpdateFeedback(std::span<const PassTimingFeedback>(&fb, 1));
+    }
+
+    // EMA should be 0 → below threshold → false
+    EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 0.0f));
+    auto* est = sched.GetEstimate(0);
+    ASSERT_NE(est, nullptr);
+    EXPECT_FLOAT_EQ(est->emaBenefitUs, 0.0f);
+}
+
+TEST(PhaseG_Stress, LargePassCountDeadlockDetection) {
+    // 100 async passes in a chain — no cycle — should be fast
+    constexpr uint32_t N = 100;
+    std::vector<CrossQueueSyncPoint> syncPoints;
+    std::vector<RGQueueType> qa(N + 1);
+    qa[0] = RGQueueType::Graphics;
+    for (uint32_t i = 0; i < N; ++i) {
+        qa[i + 1] = (i % 2 == 0) ? RGQueueType::AsyncCompute : RGQueueType::Graphics;
+        syncPoints.push_back({
+            .srcQueue = qa[i],
+            .dstQueue = qa[i + 1],
+            .srcPassIndex = i,
+            .dstPassIndex = i + 1,
+        });
+    }
+
+    auto result = AsyncComputeScheduler::DetectAndPreventDeadlocks(syncPoints, qa, {});
+    EXPECT_FALSE(result.hasCycle);
+    EXPECT_TRUE(result.demotedPasses.empty());
+}
+
+TEST(PhaseG_Stress, CompilerWithDeadlockPreventionDisabled) {
+    // Same graph as DeadlockPreventionResyncsAfterDemotion but with prevention OFF
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+    builder.AddGraphicsPass(
+        "Draw", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "AsyncBlur",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            t = pb.WriteTexture(t, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "PostProcess",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t, ResourceAccess::ShaderReadOnly);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    opts.enableDeadlockPrevention = false;
+    opts.enableRenderPassMerging = false;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->passes.size(), 3u);
+    // AsyncBlur should still be on async compute (no deadlock prevention to demote it)
+    bool foundAsync = false;
+    for (auto& p : result->passes) {
+        if (p.queue == RGQueueType::AsyncCompute) {
+            foundAsync = true;
+        }
+    }
+    EXPECT_TRUE(foundAsync);
+}
