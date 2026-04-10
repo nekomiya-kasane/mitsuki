@@ -26,9 +26,11 @@ set(MIKI_RENDERGRAPH_SOURCES
     src/miki/rendergraph/PassMerger.cpp
     src/miki/rendergraph/RenderGraphSerializer.cpp
     src/miki/rendergraph/TransientHeapPool.cpp
+    src/miki/rendergraph/FrameOrchestrator.cpp
+    src/miki/rendergraph/RenderGraphDebug.cpp
 )
 
 add_library(miki_rendergraph OBJECT ${MIKI_RENDERGRAPH_SOURCES})
 target_link_libraries(miki_rendergraph PUBLIC miki_rhi)
-target_link_libraries(miki_rendergraph PRIVATE miki::third_party::nlohmann_json)
+target_link_libraries(miki_rendergraph PUBLIC miki::third_party::nlohmann_json)
 miki_setup_library(miki_rendergraph)

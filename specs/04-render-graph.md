@@ -2820,15 +2820,15 @@ Implementation follows a strict bottom-up dependency order. Each item is atomic 
 | G-4 | Deadlock prevention: cross-queue DAG validation + demotion       | §7.5         | **DONE** | `DetectAndPreventDeadlocks` uses Kahn's algorithm on cross-queue DAG. Demotes async/transfer passes to graphics. Re-synthesizes sync points after demotion. Integrated in Stage 5b.   |
 | G-5 | 3-queue chain: Transfer → Compute → Graphics                     | §7.6         | **DONE** | Emergent from existing `SynthesizeCrossQueueSync` + QFOT emission. Any queue-pair crossing emits proper sync points + QFOT barriers.                                                  |
 
-#### Phase H: Conditional Execution & History — PARTIAL
+#### Phase H: Conditional Execution & History — DONE
 
-| #   | Item                                                                          | Spec Section | Status   | Notes                                                            |
-| --- | ----------------------------------------------------------------------------- | ------------ | -------- | ---------------------------------------------------------------- |
-| H-1 | Static conditional (feature gating) — `EnableIf` with caps/settings           | §9.1         | **DONE** | `EnableIf` + condition evaluation in Stage 1                     |
-| H-2 | Dynamic conditional (per-frame runtime) — same API                            | §9.2         | **DONE** | Conditions evaluated every `Build()`                             |
-| H-3 | Zero-cost guarantee: no lambda call, no alloc, no barrier for disabled passes | §9.3         | **DONE** | DCE + condition cull verified in tests                           |
-| H-4 | History resource lifetime extension — prevent aliasing of stale history       | §9.5         | **TODO** | `ReadHistoryTexture` stub exists, no `lastWrittenFrame` tracking |
-| H-5 | History staleness counter + consumer-side fallback policy                     | §9.5         | **TODO** | TAA reset, GTAO spatial-only fallback                            |
+| #   | Item                                                                          | Spec Section | Status   | Notes                                                                                                                                                                                                                          |
+| --- | ----------------------------------------------------------------------------- | ------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| H-1 | Static conditional (feature gating) — `EnableIf` with caps/settings           | §9.1         | **DONE** | `EnableIf` + condition evaluation in Stage 1                                                                                                                                                                                   |
+| H-2 | Dynamic conditional (per-frame runtime) — same API                            | §9.2         | **DONE** | Conditions evaluated every `Build()`                                                                                                                                                                                           |
+| H-3 | Zero-cost guarantee: no lambda call, no alloc, no barrier for disabled passes | §9.3         | **DONE** | DCE + condition cull verified in tests                                                                                                                                                                                         |
+| H-4 | History resource lifetime extension — prevent aliasing of stale history       | §9.5         | **DONE** | `ProcessHistoryLifetimes` in Stage 1b. `lastWrittenFrame` tracked per-resource. `HistoryEdge` on `RGPassNode`. Producer-culled resources auto-lifetime-extended.                                                               |
+| H-5 | History staleness counter + consumer-side fallback policy                     | §9.5         | **DONE** | `StalenessPolicy` enum (Hold/Reset/SpatialFallback/Invalidate). `QueryHistoryStaleness()` constexpr utility. `HistoryResourceInfo` in `CompiledRenderGraph`. Per-consumer policy via `ReadHistoryTexture`/`ReadHistoryBuffer`. |
 
 #### Phase I: Graph Caching & Incremental Recompile — PARTIAL
 
@@ -2841,16 +2841,16 @@ Implementation follows a strict bottom-up dependency order. Each item is atomic 
 | I-5 | Frame-to-frame resource handle patching (`PatchExternalResources`)  | §10.3        | **TODO** | Swap backbuffer + import handles per frame |
 | I-6 | Multi-graph composition (per-layer graphs, `FrameOrchestrator`)     | §10.4        | **TODO** | Cross-graph imports for depth, color       |
 
-#### Phase J: Debugging & Profiling — TODO
+#### Phase J: Debugging & Profiling — DONE
 
-| #   | Item                                                                                      | Spec Section | Status   | Notes                                                            |
-| --- | ----------------------------------------------------------------------------------------- | ------------ | -------- | ---------------------------------------------------------------- |
-| J-1 | Graphviz DOT export (`ExportGraphviz`)                                                    | §12.1        | **TODO** | Queue-colored nodes, typed edges, aliasing annotations           |
-| J-2 | Per-pass GPU timestamps (`PassTimingReport`)                                              | §12.2        | **TODO** | `vkCmdWriteTimestamp2` / `EndQuery`, readback via `ReadbackRing` |
-| J-3 | Barrier audit log (`BarrierAuditEntry`)                                                   | §12.3        | **TODO** | Compare emitted vs required barriers                             |
-| J-4 | RenderDoc / Nsight / PIX debug regions (begin/end per pass)                               | §12.4        | **TODO** | Queue-type-based color scheme                                    |
-| J-5 | Graph diff report (`GraphDiffReport`) on structural hash change                           | §12.5        | **TODO** | Pass + resource diffs, JSON export, recompilation cost           |
-| J-6 | `RenderGraphValidator` — post-pass state validation, aliasing correctness, timeline audit | §11.2        | **TODO** | Debug build only                                                 |
+| #   | Item                                                                                      | Spec Section | Status   | Notes                                                                                               |
+| --- | ----------------------------------------------------------------------------------------- | ------------ | -------- | --------------------------------------------------------------------------------------------------- |
+| J-1 | Graphviz DOT export (`ExportGraphviz`)                                                    | §12.1        | **DONE** | Queue-colored nodes, typed edges, aliasing group colors, culled passes, clusters, history resources |
+| J-2 | Per-pass GPU timestamps (`PassTimingReport`)                                              | §12.2        | **DONE** | Data types + PopulateBarrierCounts + FormatTable; query insertion is executor-side (Phase E)        |
+| J-3 | Barrier audit log (`BarrierAuditEntry`)                                                   | §12.3        | **DONE** | PopulateFromCompiled, count methods, JSON export, FormatSummary                                     |
+| J-4 | RenderDoc / Nsight / PIX debug regions (begin/end per pass)                               | §12.4        | **DONE** | GetPassDebugColor + PackDebugColorU32; leverages existing `ScopedDebugRegion` from DebugMarker.h    |
+| J-5 | Graph diff report (`GraphDiffReport`) on structural hash change                           | §12.5        | **DONE** | Generate from old/new builder, ToJson, Summary; pass + resource diffs with reasons                  |
+| J-6 | `RenderGraphValidator` — post-pass state validation, aliasing correctness, timeline audit | §11.2        | **DONE** | UninitializedRead, AliasingOverlap, MissingBarrier, CrossQueueRace checks; combined ValidateAll     |
 
 #### Phase K: Plugin Extension System — TODO
 
@@ -2888,14 +2888,14 @@ Implementation follows a strict bottom-up dependency order. Each item is atomic 
 | E     | Executor                              | 11      | 0      | 1       | 10     |
 | F     | Transient memory management           | 6       | 0      | 0       | 6      |
 | G     | Cross-queue & async compute runtime   | 5       | 0      | 0       | 5      |
-| H     | Conditional execution & history       | 5       | 3      | 0       | 2      |
+| H     | Conditional execution & history       | 5       | 5      | 0       | 0      |
 | I     | Graph caching & incremental recompile | 6       | 2      | 0       | 4      |
-| J     | Debugging & profiling                 | 6       | 0      | 0       | 6      |
+| J     | Debugging & profiling                 | 6       | 6      | 0       | 0      |
 | K     | Plugin extension system               | 3       | 0      | 0       | 3      |
 | L     | GPGPU & future                        | 12      | 0      | 0       | 12     |
-| **Σ** |                                       | **108** | **45** | **1**   | **62** |
+| **Σ** |                                       | **108** | **53** | **1**   | **54** |
 
-**Overall: 42% complete** (core builder + compiler stages 1-6 done; executor, advanced compiler stages, and runtime subsystems remain).
+**Overall: 49% complete** (core builder + compiler stages 1-6 + conditional/history + debugging/profiling done; executor, advanced compiler stages, and runtime subsystems remain).
 
 ### 18.3 Recommended Next Steps
 
@@ -2905,8 +2905,7 @@ Implementation follows a strict bottom-up dependency order. Each item is atomic 
 2. Phase E (executor)              — makes the graph actually runnable on GPU
    Start with E-1 (complete RenderPassContext), then E-3 (single-threaded RecordPasses)
 3. Phase F (heap pool)             — required for transient aliasing runtime
-4. Phase J-1 (Graphviz export)     — cheap to implement, huge debugging value
-5. Remaining phases in dependency order
+4. Remaining phases in dependency order
 ```
 
 ### 18.4 Known Divergences from Spec

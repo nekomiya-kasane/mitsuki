@@ -380,6 +380,76 @@ namespace miki::rg {
     };
 
     // =========================================================================
+    // History edge — cross-frame temporal resource dependency (§9.5)
+    // =========================================================================
+
+    /// @brief Declares that a pass reads the previous frame's version of a resource.
+    /// This creates a cross-frame dependency: the resource must not be aliased
+    /// even when its producer is culled, to preserve the last valid frame's data.
+    struct HistoryEdge {
+        RGResourceHandle handle = {};       ///< The resource being read as history
+        uint32_t consumerPassIndex = 0;     ///< Pass that reads the history
+        const char* historyName = nullptr;  ///< Debug name for history binding (e.g., "TAAHistory")
+    };
+
+    // =========================================================================
+    // Staleness policy — configurable fallback for stale history data (§9.5)
+    // =========================================================================
+
+    /// @brief Defines how a history consumer reacts to stale data.
+    /// Configured per-history-edge at graph build time.
+    enum class StalenessPolicy : uint8_t {
+        Hold,             ///< Keep using last valid data indefinitely (default, safest)
+        Reset,            ///< Reset accumulation — use current frame only (TAA)
+        SpatialFallback,  ///< Fall back to spatial-only algorithm (GTAO temporal -> spatial)
+        Invalidate,       ///< Treat as invalid — consumer should skip history read
+    };
+
+    /// @brief Result of a history staleness query, available at pass execution time.
+    struct HistoryQueryResult {
+        uint32_t staleFrames = 0;                        ///< Frames since resource was last written (0 = fresh)
+        bool isValid = false;                            ///< true if resource was ever written
+        StalenessPolicy policy = StalenessPolicy::Hold;  ///< Consumer's configured policy
+        bool shouldReset = false;  ///< Convenience: true if policy recommends reset at this staleness
+    };
+
+    /// @brief Compiled history resource metadata, stored in CompiledRenderGraph.
+    static constexpr uint64_t kNeverWrittenFrame = UINT64_MAX;  ///< Sentinel: resource was never written
+
+    struct HistoryResourceInfo {
+        uint16_t resourceIndex = 0;                      ///< Index into resource array
+        const char* historyName = nullptr;               ///< Debug name
+        uint64_t lastWrittenFrame = kNeverWrittenFrame;  ///< Frame index when last written (kNeverWrittenFrame = never)
+        uint32_t producerPassIndex = RGPassHandle::kInvalid;    ///< Pass that writes this resource
+        bool producerCulled = false;                            ///< true if producer was culled this frame
+        StalenessPolicy defaultPolicy = StalenessPolicy::Hold;  ///< Default policy for consumers
+    };
+
+    /// @brief Query staleness of a history resource at execution time.
+    /// @param info The compiled history metadata for the resource.
+    /// @param currentFrame The current frame index.
+    /// @param stalenessThreshold Policy-specific threshold (e.g., 1 for TAA Reset, 4 for GTAO SpatialFallback).
+    [[nodiscard]] constexpr auto QueryHistoryStaleness(
+        const HistoryResourceInfo& info, uint64_t currentFrame, uint32_t stalenessThreshold = 1
+    ) noexcept -> HistoryQueryResult {
+        HistoryQueryResult result;
+        result.isValid = (info.lastWrittenFrame != kNeverWrittenFrame);
+        result.policy = info.defaultPolicy;
+
+        if (result.isValid && currentFrame >= info.lastWrittenFrame) {
+            result.staleFrames = static_cast<uint32_t>(currentFrame - info.lastWrittenFrame);
+        }
+
+        switch (info.defaultPolicy) {
+            case StalenessPolicy::Hold: result.shouldReset = false; break;
+            case StalenessPolicy::Reset: result.shouldReset = result.staleFrames > stalenessThreshold; break;
+            case StalenessPolicy::SpatialFallback: result.shouldReset = result.staleFrames > stalenessThreshold; break;
+            case StalenessPolicy::Invalidate: result.shouldReset = !result.isValid || result.staleFrames > 0; break;
+        }
+        return result;
+    }
+
+    // =========================================================================
     // Per-pass resource access record (SSA edge in the DAG)
     // =========================================================================
 
@@ -420,6 +490,12 @@ namespace miki::rg {
         rhi::BufferHandle importedBuffer = {};
 
         const char* name = nullptr;
+
+        // History tracking (Phase H, §9.5)
+        const char* historyName = nullptr;               ///< Non-null if this resource is a history source
+        uint64_t lastWrittenFrame = kNeverWrittenFrame;  ///< Frame index when last written (kNeverWrittenFrame = never)
+        uint32_t historyConsumerCount = 0;               ///< Number of passes that read this as history
+        StalenessPolicy defaultStalenessPolicy = StalenessPolicy::Hold;  ///< Default fallback policy
 
         RGResourceNode() : textureDesc{} {}
     };
@@ -491,6 +567,9 @@ namespace miki::rg {
         // Resource accesses — spans into LinearAllocator-owned memory
         std::span<RGResourceAccess> reads;
         std::span<RGResourceAccess> writes;
+
+        // History edges — cross-frame temporal reads (Phase H, §9.5)
+        std::vector<HistoryEdge> historyReads;
 
         // Attachment configuration — populated by PassBuilder::WriteColorAttachment / WriteDepthStencil
         std::vector<RGAttachmentInfo> colorAttachments;
@@ -690,12 +769,49 @@ namespace miki::rg {
         RGQueueType queue = RGQueueType::Graphics;
         std::vector<BarrierCommand> acquireBarriers;  ///< Barriers before pass execution
         std::vector<BarrierCommand> releaseBarriers;  ///< Barriers after pass execution
+
+        // PSO readiness tracking (Phase I, §10.1.1)
+        rhi::PipelineHandle psoHandle = {};  ///< Pipeline bound to this pass (invalid = no PSO)
+        uint64_t psoGeneration = 0;          ///< Generation of the PSO at compilation time
+    };
+
+    // =========================================================================
+    // External resource slot (Phase I, §10.3)
+    // =========================================================================
+
+    enum class ExternalResourceType : uint8_t {
+        Backbuffer,
+        ImportedTexture,
+        ImportedBuffer,
+    };
+
+    struct ExternalResourceSlot {
+        uint16_t resourceIndex = 0;  ///< Index into RGResourceNode array
+        ExternalResourceType type = ExternalResourceType::Backbuffer;
+        rhi::TextureHandle physicalTexture = {};  ///< Current frame's physical texture
+        rhi::BufferHandle physicalBuffer = {};    ///< Current frame's physical buffer
+        uint64_t importGeneration = 0;            ///< External generation counter for stale detection
+        const char* debugName = nullptr;
+    };
+
+    // =========================================================================
+    // Cache hit classification (Phase I, §10.1-10.2)
+    // =========================================================================
+
+    enum class CacheHitResult : uint8_t {
+        FullHit,               ///< Topology + descriptors identical -> skip all compilation
+        DescriptorOnlyChange,  ///< Topology unchanged, descriptors changed -> incremental recompile (Stage 7-10)
+        Miss,                  ///< Topology changed -> full recompile
     };
 
     struct CompiledRenderGraph {
         std::vector<CompiledPassInfo> passes;  ///< Topologically sorted, active passes only
         std::vector<CrossQueueSyncPoint> syncPoints;
         std::vector<DependencyEdge> edges;
+
+        // History resource metadata (Phase H, §9.5)
+        std::vector<HistoryResourceInfo> historyResources;  ///< All history-tracked resources
+        uint64_t currentFrameIndex = 0;                     ///< Frame counter for staleness computation
 
         struct ResourceLifetime {
             uint16_t resourceIndex = 0;
@@ -715,18 +831,43 @@ namespace miki::rg {
         struct StructuralHash {
             uint64_t passCount = 0;
             uint64_t resourceCount = 0;
-            uint64_t edgeHash = 0;
-            uint64_t conditionHash = 0;
-            uint64_t descHash = 0;
+            uint64_t topologyHash = 0;  ///< FNV-1a over pass names, flags, queues, edges, conditions
+            uint64_t descHash = 0;      ///< FNV-1a over all resource descriptors
+
             [[nodiscard]] auto operator==(const StructuralHash&) const noexcept -> bool = default;
+
+            /// @brief Check if topology is identical (for incremental recompile detection)
+            [[nodiscard]] auto IsTopologyMatch(const StructuralHash& other) const noexcept -> bool {
+                return passCount == other.passCount && resourceCount == other.resourceCount
+                       && topologyHash == other.topologyHash;
+            }
         };
         StructuralHash hash = {};
+
+        // External resource slots (Phase I, §10.3) — patched per-frame without recompile
+        std::vector<ExternalResourceSlot> externalResources;
+
+        // PSO readiness bitmask (Phase I, §10.1.1) — one bit per pass in passes[]
+        // bit i = 1 means passes[i].psoHandle is valid and generation-current
+        std::vector<uint64_t> psoReadyMask;  ///< Bitset, ceil(passes.size()/64) elements
+
+        // Cache hit classification from last Compile/CompileIncremental
+        CacheHitResult cacheResult = CacheHitResult::Miss;
 
         /// @brief Per-frame scheduling statistics (populated by compiler, Phase G)
         uint32_t asyncPassCount = 0;
         uint32_t transferPassCount = 0;
         uint32_t pipelinedComputePassCount = 0;
         uint32_t demotedPassCount = 0;
+
+        /// @brief Check if pass at index i has a ready PSO.
+        static constexpr uint32_t kBitsPerWord = 64;
+
+        [[nodiscard]] auto IsPsoReady(uint32_t passIdx) const noexcept -> bool {
+            uint32_t word = passIdx / kBitsPerWord;
+            uint32_t bit = passIdx % kBitsPerWord;
+            return word < psoReadyMask.size() && (psoReadyMask[word] & (1ULL << bit)) != 0;
+        }
     };
 
     // =========================================================================
@@ -739,5 +880,48 @@ namespace miki::rg {
         MinLatency,   ///< Minimize critical path (maximize async overlap)
         Balanced,     ///< Weighted combination (default)
     };
+
+    // =========================================================================
+    // PSO staleness check (Phase I, §10.1.1) — O(P) per frame, ~100ns for 88 passes
+    // =========================================================================
+
+    /// @brief Update psoReadyMask by comparing each pass's psoGeneration against
+    /// the current PipelineCache generation. Does NOT trigger graph recompilation.
+    /// @param graph Compiled graph to update (psoReadyMask written in-place).
+    /// @param getPsoGeneration Callable: (rhi::PipelineHandle) -> uint64_t returning current gen.
+    template <typename GetGenFn>
+    inline void CheckPsoStaleness(CompiledRenderGraph& graph, GetGenFn& getPsoGeneration) {
+        auto numPasses = static_cast<uint32_t>(graph.passes.size());
+        auto numWords = (numPasses + CompiledRenderGraph::kBitsPerWord - 1) / CompiledRenderGraph::kBitsPerWord;
+        graph.psoReadyMask.assign(numWords, 0);
+
+        for (uint32_t i = 0; i < numPasses; ++i) {
+            auto& pass = graph.passes[i];
+            if (pass.psoHandle.IsValid() && getPsoGeneration(pass.psoHandle) == pass.psoGeneration) {
+                graph.psoReadyMask[i / CompiledRenderGraph::kBitsPerWord]
+                    |= (1ULL << (i % CompiledRenderGraph::kBitsPerWord));
+            }
+        }
+    }
+
+    // =========================================================================
+    // External resource patching (Phase I, §10.3)
+    // =========================================================================
+
+    /// @brief Context providing per-frame external handles for resource patching.
+    struct FrameContext {
+        rhi::TextureHandle swapchainImage = {};  ///< Current frame's backbuffer
+    };
+
+    /// @brief Patch physical handles on a cached CompiledRenderGraph's external resource slots.
+    /// O(E) where E = number of imported/external resources. Runs every frame, even on cache hit.
+    inline void PatchExternalResources(CompiledRenderGraph& graph, const FrameContext& frame) {
+        for (auto& slot : graph.externalResources) {
+            if (slot.type == ExternalResourceType::Backbuffer) {
+                slot.physicalTexture = frame.swapchainImage;
+            }
+            // ImportedTexture / ImportedBuffer: physicalTexture/Buffer already set at import time
+        }
+    }
 
 }  // namespace miki::rg

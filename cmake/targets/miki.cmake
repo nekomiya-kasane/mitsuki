@@ -74,6 +74,11 @@ if(TARGET miki::third_party::tapioca)
     target_link_libraries(miki PUBLIC miki::third_party::tapioca)
 endif()
 
+# RenderGraph deps (nlohmann/json exposed in RenderGraphDebug.h API)
+if(TARGET miki::third_party::nlohmann_json)
+    target_link_libraries(miki PUBLIC miki::third_party::nlohmann_json)
+endif()
+
 # RHI backend header deps (PUBLIC for consumer includes)
 if(MIKI_BUILD_VULKAN)
     target_link_libraries(miki PUBLIC miki::third_party::volk)

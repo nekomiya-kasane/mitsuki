@@ -23,6 +23,7 @@
 #include <cassert>
 #include <future>
 #include <queue>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -857,7 +858,7 @@ namespace miki::rg {
 
     auto RenderGraphCompiler::ComputeStructuralHash(
         const RenderGraphBuilder& builder, const std::vector<bool>& activeSet
-    ) -> CompiledRenderGraph::StructuralHash {
+    ) const -> CompiledRenderGraph::StructuralHash {
         auto& passes = builder.GetPasses();
         auto& resources = builder.GetResources();
 
@@ -865,11 +866,13 @@ namespace miki::rg {
         hash.passCount = 0;
         hash.resourceCount = resources.size();
 
-        uint64_t edgeSeed = core::kFnv1aOffset64;
-        uint64_t condSeed = core::kFnv1aOffset64;
+        // topologySeed: pass names, flags, queues, condition results, edge structure
+        uint64_t topoSeed = core::kFnv1aOffset64;
         uint64_t descSeed = core::kFnv1aOffset64;
 
         for (uint32_t i = 0; i < passes.size(); ++i) {
+            // Condition results are part of topology (determines active set)
+            topoSeed = core::HashCombine(topoSeed, activeSet[i] ? 1ULL : 0ULL);
             if (!activeSet[i]) {
                 continue;
             }
@@ -877,28 +880,30 @@ namespace miki::rg {
 
             auto& pass = passes[i];
 
-            // Hash pass name and flags
+            // Hash pass identity (name, flags, queue)
             if (pass.name) {
-                edgeSeed = core::HashCombine(edgeSeed, core::Fnv1a64(pass.name));
+                topoSeed = core::HashCombine(topoSeed, core::Fnv1a64(pass.name));
             }
-            edgeSeed = core::HashCombine(edgeSeed, static_cast<uint64_t>(pass.flags));
-            edgeSeed = core::HashCombine(edgeSeed, static_cast<uint64_t>(pass.queue));
+            topoSeed = core::HashCombine(topoSeed, static_cast<uint64_t>(pass.flags));
+            topoSeed = core::HashCombine(topoSeed, static_cast<uint64_t>(pass.queue));
 
-            // Hash condition state
-            condSeed = core::HashCombine(condSeed, pass.enabled ? 1ULL : 0ULL);
-
-            // Hash resource accesses
+            // Hash edge structure (resource accesses define DAG topology)
             for (auto& r : pass.reads) {
-                edgeSeed
-                    = core::HashCombine(edgeSeed, core::HashMultiple(r.handle.packed, static_cast<uint32_t>(r.access)));
+                topoSeed
+                    = core::HashCombine(topoSeed, core::HashMultiple(r.handle.packed, static_cast<uint32_t>(r.access)));
             }
             for (auto& w : pass.writes) {
-                edgeSeed
-                    = core::HashCombine(edgeSeed, core::HashMultiple(w.handle.packed, static_cast<uint32_t>(w.access)));
+                topoSeed
+                    = core::HashCombine(topoSeed, core::HashMultiple(w.handle.packed, static_cast<uint32_t>(w.access)));
+            }
+
+            // Hash history edges (affect lifetime extension topology)
+            for (auto& h : pass.historyReads) {
+                topoSeed = core::HashCombine(topoSeed, core::HashTrivial(h.handle.packed));
             }
         }
 
-        // Hash resource descriptors
+        // Hash resource descriptors (affects aliasing layout, not topology)
         for (auto& res : resources) {
             if (res.kind == RGResourceKind::Texture) {
                 descSeed = core::HashCombine(
@@ -913,10 +918,151 @@ namespace miki::rg {
             }
         }
 
-        hash.edgeHash = core::MurmurFinalize64(edgeSeed);
-        hash.conditionHash = core::MurmurFinalize64(condSeed);
+        hash.topologyHash = core::MurmurFinalize64(topoSeed);
         hash.descHash = core::MurmurFinalize64(descSeed);
         return hash;
+    }
+
+    // =========================================================================
+    // Stage 1b: History lifetime extension (Phase H, §9.5)
+    // =========================================================================
+
+    void RenderGraphCompiler::ProcessHistoryLifetimes(
+        RenderGraphBuilder& builder, const std::vector<bool>& activeSet, uint64_t frameIndex,
+        std::vector<HistoryResourceInfo>& historyResources
+    ) {
+        auto& passes = builder.GetPasses();
+        auto& resources = builder.GetResources();
+
+        // Step 1: Collect all resources that have history consumers.
+        // Build a map: resource index -> set of history consumer passes.
+        std::unordered_map<uint16_t, std::vector<uint32_t>> historyConsumerMap;
+        for (uint32_t pi = 0; pi < passes.size(); ++pi) {
+            for (auto& he : passes[pi].historyReads) {
+                historyConsumerMap[he.handle.GetIndex()].push_back(pi);
+            }
+        }
+
+        if (historyConsumerMap.empty()) {
+            return;
+        }
+
+        // Step 2: Find the producer pass for each history-tracked resource.
+        // Producer = any active pass that writes to this resource.
+        std::unordered_map<uint16_t, uint32_t> producerMap;
+        for (uint32_t pi = 0; pi < passes.size(); ++pi) {
+            for (auto& w : passes[pi].writes) {
+                auto resIdx = w.handle.GetIndex();
+                if (historyConsumerMap.contains(resIdx)) {
+                    producerMap[resIdx] = pi;
+                }
+            }
+        }
+
+        // Step 3: For each history-tracked resource, build HistoryResourceInfo.
+        for (auto& [resIdx, consumers] : historyConsumerMap) {
+            if (resIdx >= resources.size()) {
+                continue;
+            }
+
+            auto& res = resources[resIdx];
+            auto producerIt = producerMap.find(resIdx);
+            uint32_t producerIdx = (producerIt != producerMap.end()) ? producerIt->second : RGPassHandle::kInvalid;
+            bool producerCulled = (producerIdx != RGPassHandle::kInvalid) && !activeSet[producerIdx];
+
+            // If producer is active this frame, update lastWrittenFrame
+            if (producerIdx != RGPassHandle::kInvalid && activeSet[producerIdx]) {
+                res.lastWrittenFrame = frameIndex;
+            }
+
+            // If producer is culled but has history consumers, ensure resource is lifetime-extended
+            if (producerCulled && !consumers.empty()) {
+                res.lifetimeExtended = true;
+            }
+
+            historyResources.push_back(
+                HistoryResourceInfo{
+                    .resourceIndex = resIdx,
+                    .historyName = res.historyName,
+                    .lastWrittenFrame = res.lastWrittenFrame,
+                    .producerPassIndex = producerIdx,
+                    .producerCulled = producerCulled,
+                    .defaultPolicy = res.defaultStalenessPolicy,
+                }
+            );
+        }
+    }
+
+    // =========================================================================
+    // Collect external resource slots (Phase I, §10.3)
+    // =========================================================================
+
+    void RenderGraphCompiler::CollectExternalResources(
+        const RenderGraphBuilder& builder, std::vector<ExternalResourceSlot>& slots
+    ) {
+        auto& resources = builder.GetResources();
+        slots.clear();
+        for (uint16_t i = 0; i < static_cast<uint16_t>(resources.size()); ++i) {
+            auto& res = resources[i];
+            if (!res.imported) {
+                continue;
+            }
+            ExternalResourceSlot slot;
+            slot.resourceIndex = i;
+            slot.debugName = res.name;
+
+            if (res.kind == RGResourceKind::Texture) {
+                // Distinguish backbuffer from imported textures by name convention
+                bool isBackbuffer
+                    = res.name != nullptr
+                      && (std::string_view(res.name) == "Backbuffer" || std::string_view(res.name) == "backbuffer");
+                slot.type = isBackbuffer ? ExternalResourceType::Backbuffer : ExternalResourceType::ImportedTexture;
+                slot.physicalTexture = res.importedTexture;
+            } else {
+                slot.type = ExternalResourceType::ImportedBuffer;
+                slot.physicalBuffer = res.importedBuffer;
+            }
+            slots.push_back(slot);
+        }
+    }
+
+    // =========================================================================
+    // Stage 7-10 subroutine: recompile aliasing, merging, adaptation, batching
+    // =========================================================================
+
+    void RenderGraphCompiler::RecompileDescriptorDependentStages(
+        RenderGraphBuilder& builder, const std::vector<uint32_t>& order, const std::vector<bool>& activeSet,
+        const std::vector<RGQueueType>& queueAssignments, CompiledRenderGraph& result
+    ) {
+        // Stage 7a: Lifetime + aliasing slot computation
+        result.lifetimes.clear();
+        ComputeLifetimes(builder, order, activeSet, result.lifetimes);
+        if (options_.enableTransientAliasing) {
+            result.aliasing = {};
+            ComputeAliasingSlots(builder, order, result.lifetimes, result.aliasing);
+        }
+
+        // Stage 7b: Inject aliasing barriers into compiled passes
+        if (options_.enableTransientAliasing) {
+            InjectAliasingBarriers(builder, order, result.lifetimes, result.aliasing, result.passes);
+        }
+
+        // Stage 8: Render pass merging
+        result.mergedGroups.clear();
+        if (options_.enableRenderPassMerging) {
+            PassMerger merger({.capabilities = options_.capabilities});
+            merger.Merge(builder, order, result.aliasing, result.syncPoints, result.passes, result.mergedGroups);
+        }
+
+        // Stage 9: Backend adaptation pass injection
+        result.adaptationPasses.clear();
+        if (options_.enableAdaptation) {
+            InjectAdaptationPasses(builder, order, result.passes, result.adaptationPasses);
+        }
+
+        // Stage 10: Command batch formation
+        result.batches.clear();
+        FormCommandBatches(order, result.passes, result.syncPoints, result.mergedGroups, result.batches);
     }
 
     // =========================================================================
@@ -927,13 +1073,18 @@ namespace miki::rg {
         assert(builder.IsBuilt() && "Builder must be finalized via Build() before compilation");
 
         CompiledRenderGraph result;
+        result.currentFrameIndex = frameIndex_++;
 
         // Stage 1: Condition evaluation & DCE
         std::vector<bool> activeSet;
         EvaluateConditions(builder, activeSet);
 
-        // Compute structural hash for caching
+        // Stage 1b: History lifetime extension (Phase H, §9.5)
+        ProcessHistoryLifetimes(builder, activeSet, result.currentFrameIndex, result.historyResources);
+
+        // Compute structural hash for caching (Phase I, §10.1)
         result.hash = ComputeStructuralHash(builder, activeSet);
+        result.cacheResult = CacheHitResult::Miss;
 
         // Stage 2: DAG construction
         BuildDAG(builder, activeSet, result.edges);
@@ -965,7 +1116,6 @@ namespace miki::rg {
             );
             if (dlResult.hasCycle) {
                 result.demotedPassCount = static_cast<uint32_t>(dlResult.demotedPasses.size());
-                // Re-synthesize sync points after demotion changed queue assignments
                 result.syncPoints.clear();
                 SynthesizeCrossQueueSync(result.edges, queueAssignments, result.syncPoints);
             }
@@ -981,8 +1131,6 @@ namespace miki::rg {
         }
 
         // Stage 6 || Stage 7a: Run barrier synthesis and aliasing slot computation in parallel.
-        // Stage 6 writes result.passes (barriers), Stage 7a writes result.lifetimes + result.aliasing (slots).
-        // No shared mutable state between them — safe to parallelize.
         auto aliasingFuture = std::async(std::launch::async, [&] {
             ComputeLifetimes(builder, order, activeSet, result.lifetimes);
             if (options_.enableTransientAliasing) {
@@ -999,7 +1147,7 @@ namespace miki::rg {
         });
         barrierSynth.Synthesize(builder, order, queueAssignments, result.passes);
 
-        aliasingFuture.get();  // Wait for Stage 7a to complete
+        aliasingFuture.get();
 
         // Stage 7b: Inject aliasing barriers into compiled passes (must run after Stage 6)
         if (options_.enableTransientAliasing) {
@@ -1020,28 +1168,82 @@ namespace miki::rg {
         // Stage 10: Command batch formation
         FormCommandBatches(order, result.passes, result.syncPoints, result.mergedGroups, result.batches);
 
+        // Phase I, §10.3: Collect external resource slots for frame-to-frame patching
+        CollectExternalResources(builder, result.externalResources);
+
+        // Cache the topology data for incremental recompile (Phase I, §10.2)
+        cachedOrder_ = order;
+        cachedQueueAssignments_ = queueAssignments;
+        cachedActiveSet_ = activeSet;
+
         return result;
     }
 
     // =========================================================================
-    // Cache hit check
+    // Cache hit classification (Phase I, §10.1-10.2)
     // =========================================================================
+
+    auto RenderGraphCompiler::ClassifyCache(
+        const CompiledRenderGraph& prev, const RenderGraphBuilder& builder, const std::vector<bool>& activeSet
+    ) const -> CacheHitResult {
+        auto currentHash = ComputeStructuralHash(builder, activeSet);
+
+        if (currentHash == prev.hash) {
+            return CacheHitResult::FullHit;
+        }
+        if (currentHash.IsTopologyMatch(prev.hash)) {
+            return CacheHitResult::DescriptorOnlyChange;
+        }
+        return CacheHitResult::Miss;
+    }
 
     auto RenderGraphCompiler::IsCacheHit(const CompiledRenderGraph& prev, const RenderGraphBuilder& builder) const
         -> bool {
-        // Quick check: if pass or resource counts differ, definitely not a hit
-        if (prev.hash.passCount != 0 || prev.hash.resourceCount != 0) {
-            // Compute current hash and compare
-            std::vector<bool> dummyActive(builder.GetPasses().size(), true);
-            // Note: we need to evaluate conditions to get accurate hash,
-            // but for a quick check we compare counts first.
-            if (prev.hash.resourceCount != builder.GetResourceCount()) {
-                return false;
-            }
+        // Conservative: assume all passes active. For accurate classification with
+        // condition evaluation, use ClassifyCache() with a pre-evaluated activeSet.
+        std::vector<bool> activeSet(builder.GetPasses().size(), true);
+        return ClassifyCache(prev, builder, activeSet) == CacheHitResult::FullHit;
+    }
+
+    // =========================================================================
+    // Incremental recompile (Phase I, §10.2)
+    // Topology unchanged, only descriptors changed -> rerun Stage 7-10
+    // =========================================================================
+
+    auto RenderGraphCompiler::CompileIncremental(RenderGraphBuilder& builder, CompiledRenderGraph& prev)
+        -> core::Result<CompiledRenderGraph> {
+        assert(builder.IsBuilt() && "Builder must be finalized via Build() before compilation");
+
+        // Stage 1: Condition evaluation
+        std::vector<bool> activeSet;
+        EvaluateConditions(builder, activeSet);
+
+        // Stage 1b: History lifetime extension
+        prev.currentFrameIndex = frameIndex_++;
+        prev.historyResources.clear();
+        ProcessHistoryLifetimes(builder, activeSet, prev.currentFrameIndex, prev.historyResources);
+
+        // Compute new hash and verify topology match
+        auto newHash = ComputeStructuralHash(builder, activeSet);
+        if (!newHash.IsTopologyMatch(prev.hash)) {
+            // Topology changed — fall back to full recompile
+            return Compile(builder);
         }
-        // Full structural comparison would require recomputing the hash,
-        // which is done by the caller. This is a fast reject path.
-        return false;  // Conservative: always recompile. Cache is opt-in.
+
+        // Topology match confirmed — only descriptors changed
+        // Reuse cached topology data (order, queue assignments, edges, barriers, sync points)
+        // Re-run Stages 7-10 with new descriptors
+        prev.hash = newHash;
+        prev.cacheResult = CacheHitResult::DescriptorOnlyChange;
+
+        if (!cachedOrder_.empty()) {
+            RecompileDescriptorDependentStages(builder, cachedOrder_, activeSet, cachedQueueAssignments_, prev);
+        }
+
+        // Update external resource slots
+        CollectExternalResources(builder, prev.externalResources);
+
+        return std::move(prev);
     }
 
 }  // namespace miki::rg

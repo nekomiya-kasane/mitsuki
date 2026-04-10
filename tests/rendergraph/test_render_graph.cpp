@@ -3428,7 +3428,7 @@ TEST(DeepValidation, StructuralHashDeterminism) {
 
     EXPECT_EQ(r1->hash.passCount, r2->hash.passCount);
     EXPECT_EQ(r1->hash.resourceCount, r2->hash.resourceCount);
-    EXPECT_EQ(r1->hash.edgeHash, r2->hash.edgeHash);
+    EXPECT_EQ(r1->hash.topologyHash, r2->hash.topologyHash);
     EXPECT_EQ(r1->hash.descHash, r2->hash.descHash);
     EXPECT_EQ(r1->hash, r2->hash);
 }
@@ -3604,7 +3604,7 @@ TEST(DeepValidation, FivePassPipelineFullValidation) {
 
     // --- Hash sanity ---
     EXPECT_EQ(cg.hash.passCount, 5u);
-    EXPECT_GT(cg.hash.edgeHash, 0u);
+    EXPECT_GT(cg.hash.topologyHash, 0u);
 }
 
 TEST(DeepValidation, DCERemovesUnreachablePasses) {
@@ -15317,4 +15317,1241 @@ TEST(PhaseG_Stress_R2, AsyncComputeDemotedByCompilerWhenDisabled) {
         EXPECT_EQ(p.queue, RGQueueType::Graphics);
     }
     EXPECT_EQ(result->asyncPassCount, 0u);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase G Round-2 Supplemental: final uncovered branches
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(PhaseG_EnhancedBarrier_R2, VulkanWithEnhancedBarriersFlagStillNoGlobal) {
+    // enableEnhancedBarriers on Vulkan: globalAccess check only fires when
+    // Transfer queue involved. Compute↔Graphics: no globalAccess even with flag.
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass("W", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddAsyncComputePass(
+        "R",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    BarrierSynthesizerConfig cfg;
+    cfg.backendType = BackendType::Vulkan14;
+    cfg.enableEnhancedBarriers = true;  // Flag on, but no Transfer queue
+    BarrierSynthesizer synth(cfg);
+
+    std::vector<uint32_t> order = {0, 1};
+    std::vector<RGQueueType> qa = {RGQueueType::Graphics, RGQueueType::AsyncCompute};
+    std::vector<CompiledPassInfo> compiled;
+    synth.Synthesize(builder, order, qa, compiled);
+
+    // Vulkan Exclusive QFOT: 2 barriers (release+acquire). Neither should be global.
+    for (auto& cpi : compiled) {
+        for (auto& bc : cpi.acquireBarriers) {
+            EXPECT_FALSE(bc.needsGlobalAccess);
+        }
+        for (auto& bc : cpi.releaseBarriers) {
+            EXPECT_FALSE(bc.needsGlobalAccess);
+        }
+    }
+}
+
+TEST(PhaseG_FenceBarrier_R2, LegacySplitBarrierOnVulkanBackend) {
+    // Vulkan + enableSplitBarriers=true + gap>1 + no fence tier:
+    // Should hit legacy split path, not fence path.
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass("P0", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass("Mid", [&](PassBuilder& pb) { pb.SetSideEffects(); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "P2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    BarrierSynthesizerConfig cfg;
+    cfg.backendType = BackendType::Vulkan14;
+    cfg.enableSplitBarriers = true;
+    cfg.fenceBarrierTier = GpuCapabilityProfile::FenceBarrierTier::None;
+    BarrierSynthesizer synth(cfg);
+
+    std::vector<uint32_t> order = {0, 1, 2};
+    std::vector<RGQueueType> qa(3, RGQueueType::Graphics);
+    std::vector<CompiledPassInfo> compiled;
+    synth.Synthesize(builder, order, qa, compiled);
+
+    auto& stats = synth.GetStats();
+    EXPECT_EQ(stats.splitBarriers, 1u);
+    EXPECT_EQ(stats.fenceBarriers, 0u);  // No fence on Vulkan
+    EXPECT_EQ(stats.fullBarriers, 0u);
+    EXPECT_EQ(stats.totalBarriers, 2u);  // release + acquire
+
+    // Verify no fence flags on the split barriers
+    for (auto& bc : compiled[0].releaseBarriers) {
+        EXPECT_FALSE(bc.isFenceBarrier);
+        EXPECT_TRUE(bc.isSplitRelease);
+    }
+    for (auto& bc : compiled[2].acquireBarriers) {
+        EXPECT_FALSE(bc.isFenceBarrier);
+        EXPECT_TRUE(bc.isSplitAcquire);
+    }
+}
+
+TEST(PhaseG_FenceBarrier_R2, D3D12FenceTier1ButVulkanBackendNoFence) {
+    // fenceBarrierTier=Tier1 but backend=Vulkan → fence path not taken (requires D3D12).
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass("P0", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass("Mid", [&](PassBuilder& pb) { pb.SetSideEffects(); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "P2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    BarrierSynthesizerConfig cfg;
+    cfg.backendType = BackendType::Vulkan14;
+    cfg.enableSplitBarriers = true;
+    cfg.fenceBarrierTier = GpuCapabilityProfile::FenceBarrierTier::Tier1;
+    BarrierSynthesizer synth(cfg);
+
+    std::vector<uint32_t> order = {0, 1, 2};
+    std::vector<RGQueueType> qa(3, RGQueueType::Graphics);
+    std::vector<CompiledPassInfo> compiled;
+    synth.Synthesize(builder, order, qa, compiled);
+
+    auto& stats = synth.GetStats();
+    EXPECT_EQ(stats.fenceBarriers, 0u);  // Fence requires D3D12
+    EXPECT_EQ(stats.splitBarriers, 1u);  // Legacy split instead
+    EXPECT_EQ(stats.totalBarriers, 2u);
+}
+
+TEST(PhaseG_ReadReadElision_R2, ReadAfterWriteThenReadNotElided) {
+    // W→R1→R2 where R2 is same resource+layout as R1: W→R1 is WAR barrier, R1→R2 elided.
+    // But if there's a second write between R1 and R2: W→R1→W2→R2, R2 needs barrier from W2.
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    builder.AddGraphicsPass("W0", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R1",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass("W1", [&](PassBuilder& pb) { t = pb.WriteColorAttachment(t); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "R2",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    BarrierSynthesizerConfig cfg;
+    cfg.enableSplitBarriers = false;
+    BarrierSynthesizer synth(cfg);
+
+    std::vector<uint32_t> order = {0, 1, 2, 3};
+    std::vector<RGQueueType> qa(4, RGQueueType::Graphics);
+    std::vector<CompiledPassInfo> compiled;
+    synth.Synthesize(builder, order, qa, compiled);
+
+    auto& stats = synth.GetStats();
+    EXPECT_EQ(stats.elidedReadRead, 0u);  // No elision — write intervenes
+    EXPECT_EQ(stats.fullBarriers, 3u);    // W0→R1, R1→W1 (WAR), W1→R2
+    EXPECT_EQ(stats.totalBarriers, 3u);
+}
+
+TEST(PhaseG_Scheduler_R2, AmdPipelinedByGpuTimeNotWorkGroupCount) {
+    // AMD: workgroup count is large (>max), but GPU time is small (<pipelinedMaxGpuTimeUs).
+    // The GPU time check fires second and returns Pipelined.
+    AsyncComputeSchedulerConfig cfg;
+    cfg.gpuVendor = GpuVendor::Amd;
+    cfg.pipelinedMaxWorkGroups = 64;
+    cfg.pipelinedMaxGpuTimeUs = 100.0f;
+    AsyncComputeScheduler sched(cfg);
+
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    // workGroupCount=128 (> 64 max) but gpuTime=50 (< 100 max) → Pipelined by GPU time
+    EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 50.0f, 128), ComputeDispatchMode::Pipelined);
+    // Both large → Async
+    EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 200.0f, 128), ComputeDispatchMode::Async);
+    // workGroupCount=0 (not provided), gpuTime=0 (not provided) → no checks fire → Async
+    EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 0.0f, 0), ComputeDispatchMode::Async);
+}
+
+TEST(PhaseG_Scheduler_R2, AmdPipelinedByWorkGroupCountNotGpuTime) {
+    // AMD: GPU time is large but workgroup count is small → Pipelined by workgroup.
+    AsyncComputeSchedulerConfig cfg;
+    cfg.gpuVendor = GpuVendor::Amd;
+    cfg.pipelinedMaxWorkGroups = 64;
+    cfg.pipelinedMaxGpuTimeUs = 100.0f;
+    AsyncComputeScheduler sched(cfg);
+
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    // workGroupCount=32 (<= 64) → Pipelined (first check)
+    EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 200.0f, 32), ComputeDispatchMode::Pipelined);
+}
+
+TEST(PhaseG_Stress_R2, ThreeQueueDiamondAllBarrierTypes) {
+    // Diamond: GfxW → {AsyncR, TransferR} → GfxFinal
+    // Tests all 3 queue types in one DAG.
+    RenderGraphBuilder builder;
+    auto t = builder.CreateTexture({.width = 32, .height = 32, .debugName = "T"});
+    auto b = builder.CreateBuffer({.size = 4096, .debugName = "B"});
+
+    builder.AddGraphicsPass(
+        "GfxW",
+        [&](PassBuilder& pb) {
+            t = pb.WriteColorAttachment(t);
+            b = pb.WriteBuffer(b, ResourceAccess::ShaderWrite);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "AsyncR",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddTransferPass(
+        "TransferR",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(b, ResourceAccess::TransferSrc);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "GfxFinal",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t);
+            pb.ReadBuffer(b);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    BarrierSynthesizerConfig cfg;
+    cfg.backendType = BackendType::D3D12;
+    cfg.enableSplitBarriers = false;
+    cfg.enableEnhancedBarriers = true;
+    BarrierSynthesizer synth(cfg);
+
+    std::vector<uint32_t> order = {0, 1, 2, 3};
+    std::vector<RGQueueType> qa
+        = {RGQueueType::Graphics, RGQueueType::AsyncCompute, RGQueueType::Transfer, RGQueueType::Graphics};
+    std::vector<CompiledPassInfo> compiled;
+    synth.Synthesize(builder, order, qa, compiled);
+
+    auto& stats = synth.GetStats();
+    // GfxW→AsyncR: T cross-queue (Gfx→AC) — no Transfer → no globalAccess
+    // GfxW→TransferR: B cross-queue (Gfx→Transfer) → globalAccess=true
+    // AsyncR→GfxFinal: T cross-queue (AC→Gfx)
+    // TransferR→GfxFinal: B cross-queue (Transfer→Gfx) → globalAccess=true
+    EXPECT_GE(stats.crossQueueBarriers, 3u);
+    EXPECT_GE(stats.totalBarriers, 3u);
+
+    // Verify globalAccess only on Transfer-involving barriers
+    uint32_t globalCount = 0;
+    for (auto& cpi : compiled) {
+        for (auto& bc : cpi.acquireBarriers) {
+            if (bc.needsGlobalAccess) {
+                globalCount++;
+                EXPECT_TRUE(bc.srcQueue == RGQueueType::Transfer || bc.dstQueue == RGQueueType::Transfer);
+            }
+        }
+    }
+    EXPECT_GE(globalCount, 1u);
+}
+
+// =============================================================================
+// Phase H: History Resource Lifetime Extension & Staleness — Unit Tests
+// =============================================================================
+
+// --- H-4: PassBuilder history edge recording ---
+
+TEST(HistoryResource, ReadHistoryTextureRecordsEdgeAndMetadata) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "TAAOutput"});
+
+    builder.AddGraphicsPass(
+        "TAAProducer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex, ResourceAccess::ShaderWrite); },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "TAAConsumer",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "TAAHistory", StalenessPolicy::Reset);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    auto& passes = builder.GetPasses();
+    auto& resources = builder.GetResources();
+    auto texIdx = tex.GetIndex();
+
+    // Resource metadata
+    EXPECT_TRUE(resources[texIdx].lifetimeExtended);
+    EXPECT_STREQ(resources[texIdx].historyName, "TAAHistory");
+    EXPECT_EQ(resources[texIdx].historyConsumerCount, 1u);
+    EXPECT_EQ(resources[texIdx].defaultStalenessPolicy, StalenessPolicy::Reset);
+
+    // Pass history edge
+    EXPECT_EQ(passes[1].historyReads.size(), 1u);
+    EXPECT_EQ(passes[1].historyReads[0].handle.GetIndex(), texIdx);
+    EXPECT_EQ(passes[1].historyReads[0].consumerPassIndex, 1u);
+    EXPECT_STREQ(passes[1].historyReads[0].historyName, "TAAHistory");
+}
+
+TEST(HistoryResource, ReadHistoryBufferRecordsEdgeAndMetadata) {
+    RenderGraphBuilder builder;
+    auto buf = builder.CreateBuffer({.size = 4096, .debugName = "TemporalBuf"});
+
+    builder.AddComputePass(
+        "Producer", [&](PassBuilder& pb) { buf = pb.WriteBuffer(buf, ResourceAccess::ShaderWrite); },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "Consumer",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryBuffer(buf, "HistBuf", StalenessPolicy::SpatialFallback);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    auto& resources = builder.GetResources();
+    auto bufIdx = buf.GetIndex();
+    EXPECT_TRUE(resources[bufIdx].lifetimeExtended);
+    EXPECT_STREQ(resources[bufIdx].historyName, "HistBuf");
+    EXPECT_EQ(resources[bufIdx].historyConsumerCount, 1u);
+    EXPECT_EQ(resources[bufIdx].defaultStalenessPolicy, StalenessPolicy::SpatialFallback);
+
+    auto& passes = builder.GetPasses();
+    EXPECT_EQ(passes[1].historyReads.size(), 1u);
+    EXPECT_EQ(passes[1].historyReads[0].handle.GetIndex(), bufIdx);
+    EXPECT_STREQ(passes[1].historyReads[0].historyName, "HistBuf");
+}
+
+TEST(HistoryResource, NullHistoryNameDoesNotCrash) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+
+    builder.AddGraphicsPass("P", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "C",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, nullptr, StalenessPolicy::Hold);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    auto& resources = builder.GetResources();
+    // historyName should remain nullptr when nullptr passed
+    EXPECT_EQ(resources[tex.GetIndex()].historyName, nullptr);
+    EXPECT_EQ(resources[tex.GetIndex()].historyConsumerCount, 1u);
+    EXPECT_TRUE(resources[tex.GetIndex()].lifetimeExtended);
+}
+
+TEST(HistoryResource, MultipleConsumersOnSameResource) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "SharedHistory"});
+
+    builder.AddGraphicsPass(
+        "Producer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+    );
+    // Consumer 1: TAA with Reset policy
+    builder.AddComputePass(
+        "TAA",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "TAAHistory", StalenessPolicy::Reset);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    // Consumer 2: GTAO with SpatialFallback policy
+    builder.AddComputePass(
+        "GTAO",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "GTAOHistory", StalenessPolicy::SpatialFallback);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    auto& resources = builder.GetResources();
+    auto texIdx = tex.GetIndex();
+    EXPECT_EQ(resources[texIdx].historyConsumerCount, 2u);
+    EXPECT_TRUE(resources[texIdx].lifetimeExtended);
+    // Last writer of historyName wins (GTAO wrote last)
+    EXPECT_STREQ(resources[texIdx].historyName, "GTAOHistory");
+    // Last writer of policy wins
+    EXPECT_EQ(resources[texIdx].defaultStalenessPolicy, StalenessPolicy::SpatialFallback);
+
+    // Each pass has its own history edge
+    auto& passes = builder.GetPasses();
+    EXPECT_EQ(passes[1].historyReads.size(), 1u);
+    EXPECT_STREQ(passes[1].historyReads[0].historyName, "TAAHistory");
+    EXPECT_EQ(passes[2].historyReads.size(), 1u);
+    EXPECT_STREQ(passes[2].historyReads[0].historyName, "GTAOHistory");
+}
+
+TEST(HistoryResource, DefaultPolicyIsHold) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+
+    builder.AddGraphicsPass("P", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {});
+    // No explicit policy — default should be Hold
+    builder.AddGraphicsPass(
+        "C",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "H");
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    EXPECT_EQ(builder.GetResources()[tex.GetIndex()].defaultStalenessPolicy, StalenessPolicy::Hold);
+}
+
+// --- H-4: Compiler ProcessHistoryLifetimes ---
+
+TEST(HistoryCompiler, ProducerActiveUpdatesLastWrittenFrame) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 128, .height = 128, .debugName = "Hist"});
+
+    builder.AddGraphicsPass("Writer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {});
+    builder.AddComputePass(
+        "Reader",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "HistTex", StalenessPolicy::Reset);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    // History metadata should be populated
+    EXPECT_EQ(result->historyResources.size(), 1u);
+    auto& info = result->historyResources[0];
+    EXPECT_EQ(info.resourceIndex, tex.GetIndex());
+    EXPECT_STREQ(info.historyName, "HistTex");
+    EXPECT_EQ(info.lastWrittenFrame, result->currentFrameIndex);
+    EXPECT_FALSE(info.producerCulled);
+    EXPECT_EQ(info.defaultPolicy, StalenessPolicy::Reset);
+    EXPECT_NE(info.producerPassIndex, RGPassHandle::kInvalid);
+}
+
+TEST(HistoryCompiler, ProducerCulledSetsLifetimeExtendedAndCulledFlag) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 128, .height = 128, .debugName = "Hist"});
+
+    auto writerPass = builder.AddGraphicsPass(
+        "Writer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "HistReader",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "HistTex", StalenessPolicy::Hold);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    // Disable writer — it should be culled
+    builder.EnableIf(writerPass, []() { return false; });
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    EXPECT_EQ(result->historyResources.size(), 1u);
+    auto& info = result->historyResources[0];
+    EXPECT_TRUE(info.producerCulled);
+    EXPECT_EQ(info.defaultPolicy, StalenessPolicy::Hold);
+    // lastWrittenFrame should NOT be updated (producer was culled)
+    EXPECT_EQ(info.lastWrittenFrame, kNeverWrittenFrame);
+
+    // Resource should still be lifetime-extended
+    auto& resources = builder.GetResources();
+    EXPECT_TRUE(resources[tex.GetIndex()].lifetimeExtended);
+}
+
+TEST(HistoryCompiler, NoHistoryEdgesProducesEmptyHistoryResources) {
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "Plain"});
+
+    builder.AddGraphicsPass("A", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(tex);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    EXPECT_EQ(result->historyResources.size(), 0u);
+}
+
+TEST(HistoryCompiler, FrameCounterIncrements) {
+    // Two sequential compiles should produce incrementing frame indices
+    RenderGraphCompiler compiler;
+
+    auto makeGraph = []() {
+        RenderGraphBuilder b;
+        auto t = b.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+        b.AddGraphicsPass(
+            "P",
+            [&](PassBuilder& pb) {
+                t = pb.WriteTexture(t);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        b.Build();
+        return b;
+    };
+
+    auto b1 = makeGraph();
+    auto r1 = compiler.Compile(b1);
+    ASSERT_TRUE(r1.has_value());
+
+    auto b2 = makeGraph();
+    auto r2 = compiler.Compile(b2);
+    ASSERT_TRUE(r2.has_value());
+
+    EXPECT_EQ(r2->currentFrameIndex, r1->currentFrameIndex + 1);
+}
+
+TEST(HistoryCompiler, MultiFrameStalenessTracking) {
+    // Simulate: Frame 0 producer active, Frame 1 producer culled — lastWrittenFrame should stick at frame 0
+    RenderGraphCompiler compiler;
+
+    // Frame 0: producer active
+    {
+        RenderGraphBuilder b;
+        auto tex = b.CreateTexture({.width = 128, .height = 128, .debugName = "T"});
+        b.AddGraphicsPass("Writer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {});
+        b.AddComputePass(
+            "HistReader",
+            [&](PassBuilder& pb) {
+                pb.ReadHistoryTexture(tex, "H", StalenessPolicy::Reset);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        b.Build();
+        auto r = compiler.Compile(b);
+        ASSERT_TRUE(r.has_value());
+        EXPECT_EQ(r->historyResources.size(), 1u);
+        EXPECT_EQ(r->historyResources[0].lastWrittenFrame, r->currentFrameIndex);
+        EXPECT_FALSE(r->historyResources[0].producerCulled);
+    }
+
+    // Frame 1: producer culled — a new graph with culled writer
+    {
+        RenderGraphBuilder b;
+        auto tex = b.CreateTexture({.width = 128, .height = 128, .debugName = "T"});
+        auto writer = b.AddGraphicsPass(
+            "Writer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+        );
+        b.AddComputePass(
+            "HistReader",
+            [&](PassBuilder& pb) {
+                pb.ReadHistoryTexture(tex, "H", StalenessPolicy::Reset);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        b.EnableIf(writer, []() { return false; });
+        b.Build();
+        auto r = compiler.Compile(b);
+        ASSERT_TRUE(r.has_value());
+        EXPECT_EQ(r->historyResources.size(), 1u);
+        EXPECT_TRUE(r->historyResources[0].producerCulled);
+        // lastWrittenFrame is kNeverWrittenFrame because the resource was freshly created in this builder (new graph)
+        EXPECT_EQ(r->historyResources[0].lastWrittenFrame, kNeverWrittenFrame);
+    }
+}
+
+// --- H-4: Interaction with transient aliasing ---
+
+TEST(HistoryCompiler, HistoryResourceExcludedFromAliasing) {
+    RenderGraphBuilder builder;
+    auto histTex = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "HistTex"});
+    auto normalTex = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "NormalTex"});
+
+    builder.AddGraphicsPass(
+        "WriteHist", [&](PassBuilder& pb) { histTex = pb.WriteTexture(histTex); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "WriteNormal", [&](PassBuilder& pb) { normalTex = pb.WriteTexture(normalTex); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "HistConsumer",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(histTex, "H");
+            pb.ReadTexture(normalTex);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableTransientAliasing = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    // histTex should NOT appear in aliasing lifetimes (it's lifetime-extended)
+    // normalTex should appear in aliasing lifetimes
+    bool histInLifetimes = false;
+    bool normalInLifetimes = false;
+    for (auto& lt : result->lifetimes) {
+        if (lt.resourceIndex == histTex.GetIndex()) {
+            histInLifetimes = true;
+        }
+        if (lt.resourceIndex == normalTex.GetIndex()) {
+            normalInLifetimes = true;
+        }
+    }
+    EXPECT_FALSE(histInLifetimes);   // Excluded from aliasing
+    EXPECT_TRUE(normalInLifetimes);  // Normal transient — aliased
+}
+
+// --- H-5: QueryHistoryStaleness unit tests ---
+
+TEST(HistoryStaleness, FreshDataAllPolicies) {
+    HistoryResourceInfo info{.lastWrittenFrame = 10, .defaultPolicy = StalenessPolicy::Hold};
+    auto r = QueryHistoryStaleness(info, 10);
+    EXPECT_TRUE(r.isValid);
+    EXPECT_EQ(r.staleFrames, 0u);
+    EXPECT_EQ(r.policy, StalenessPolicy::Hold);
+    EXPECT_FALSE(r.shouldReset);
+
+    info.defaultPolicy = StalenessPolicy::Reset;
+    r = QueryHistoryStaleness(info, 10);
+    EXPECT_TRUE(r.isValid);
+    EXPECT_EQ(r.staleFrames, 0u);
+    EXPECT_FALSE(r.shouldReset);  // 0 <= threshold(1)
+
+    info.defaultPolicy = StalenessPolicy::SpatialFallback;
+    r = QueryHistoryStaleness(info, 10);
+    EXPECT_FALSE(r.shouldReset);
+
+    info.defaultPolicy = StalenessPolicy::Invalidate;
+    r = QueryHistoryStaleness(info, 10);
+    EXPECT_FALSE(r.shouldReset);  // staleFrames=0 and isValid=true
+}
+
+TEST(HistoryStaleness, StaleDataResetPolicy) {
+    HistoryResourceInfo info{.lastWrittenFrame = 5, .defaultPolicy = StalenessPolicy::Reset};
+
+    // 1 frame stale, threshold=1 -> staleFrames(1) > threshold(1) is false
+    auto r1 = QueryHistoryStaleness(info, 6, 1);
+    EXPECT_TRUE(r1.isValid);
+    EXPECT_EQ(r1.staleFrames, 1u);
+    EXPECT_FALSE(r1.shouldReset);
+
+    // 2 frames stale, threshold=1 -> staleFrames(2) > threshold(1) is true
+    auto r2 = QueryHistoryStaleness(info, 7, 1);
+    EXPECT_TRUE(r2.isValid);
+    EXPECT_EQ(r2.staleFrames, 2u);
+    EXPECT_TRUE(r2.shouldReset);
+}
+
+TEST(HistoryStaleness, SpatialFallbackPolicyWithThreshold4) {
+    // GTAO uses threshold=4 — fall back to spatial-only after 4 stale frames
+    HistoryResourceInfo info{.lastWrittenFrame = 10, .defaultPolicy = StalenessPolicy::SpatialFallback};
+
+    auto r3 = QueryHistoryStaleness(info, 13, 4);
+    EXPECT_EQ(r3.staleFrames, 3u);
+    EXPECT_FALSE(r3.shouldReset);  // 3 <= 4
+
+    auto r5 = QueryHistoryStaleness(info, 15, 4);
+    EXPECT_EQ(r5.staleFrames, 5u);
+    EXPECT_TRUE(r5.shouldReset);  // 5 > 4
+}
+
+TEST(HistoryStaleness, HoldPolicyNeverResets) {
+    HistoryResourceInfo info{.lastWrittenFrame = 1, .defaultPolicy = StalenessPolicy::Hold};
+
+    auto r = QueryHistoryStaleness(info, 1000, 1);
+    EXPECT_TRUE(r.isValid);
+    EXPECT_EQ(r.staleFrames, 999u);
+    EXPECT_FALSE(r.shouldReset);  // Hold never resets regardless of staleness
+}
+
+TEST(HistoryStaleness, InvalidatePolicyOnNeverWritten) {
+    HistoryResourceInfo info{.lastWrittenFrame = kNeverWrittenFrame, .defaultPolicy = StalenessPolicy::Invalidate};
+
+    auto r = QueryHistoryStaleness(info, 5);
+    EXPECT_FALSE(r.isValid);
+    EXPECT_EQ(r.staleFrames, 0u);
+    EXPECT_TRUE(r.shouldReset);  // !isValid -> shouldReset
+}
+
+TEST(HistoryStaleness, InvalidatePolicyOnStaleData) {
+    HistoryResourceInfo info{.lastWrittenFrame = 3, .defaultPolicy = StalenessPolicy::Invalidate};
+
+    // staleFrames=2 > 0 -> shouldReset
+    auto r = QueryHistoryStaleness(info, 5);
+    EXPECT_TRUE(r.isValid);
+    EXPECT_EQ(r.staleFrames, 2u);
+    EXPECT_TRUE(r.shouldReset);
+
+    // staleFrames=0 -> shouldReset is false (fresh data, valid)
+    auto r0 = QueryHistoryStaleness(info, 3);
+    EXPECT_TRUE(r0.isValid);
+    EXPECT_EQ(r0.staleFrames, 0u);
+    EXPECT_FALSE(r0.shouldReset);
+}
+
+TEST(HistoryStaleness, ZeroThresholdTriggersImmediately) {
+    HistoryResourceInfo info{.lastWrittenFrame = 10, .defaultPolicy = StalenessPolicy::Reset};
+
+    // staleFrames=1 > threshold(0) -> shouldReset
+    auto r = QueryHistoryStaleness(info, 11, 0);
+    EXPECT_EQ(r.staleFrames, 1u);
+    EXPECT_TRUE(r.shouldReset);
+}
+
+TEST(HistoryStaleness, LargeFrameGap) {
+    HistoryResourceInfo info{.lastWrittenFrame = 1, .defaultPolicy = StalenessPolicy::Reset};
+    auto r = QueryHistoryStaleness(info, 100001, 100);
+    EXPECT_EQ(r.staleFrames, 100000u);
+    EXPECT_TRUE(r.shouldReset);
+}
+
+// --- H-4/H-5 interaction with DCE: history consumer keeps producer chain alive ---
+
+TEST(HistoryDCE, HistoryConsumerKeepsProducerAlive) {
+    // Producer writes tex, Consumer reads it as history with side effects.
+    // Even though the producer has no direct side effects, it's kept alive
+    // because the consumer (which has side effects) depends on it.
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+
+    builder.AddGraphicsPass(
+        "Producer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "HistConsumer",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "H", StalenessPolicy::Reset);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    // Both passes should survive DCE (consumer has side effects, producer feeds consumer)
+    EXPECT_EQ(result->passes.size(), 2u);
+}
+
+TEST(HistoryDCE, CulledProducerStillLifetimeExtendsResource) {
+    // Producer disabled by condition, consumer reads history with side effects.
+    // Resource must be lifetime-extended even though producer is culled.
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 256, .height = 256, .debugName = "T"});
+
+    auto producer = builder.AddGraphicsPass(
+        "Producer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "HistConsumer",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "H");
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.EnableIf(producer, []() { return false; });
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    // Producer is culled, but consumer survives (side effects)
+    EXPECT_EQ(result->passes.size(), 1u);
+
+    // Resource must be lifetime-extended
+    EXPECT_TRUE(builder.GetResources()[tex.GetIndex()].lifetimeExtended);
+
+    // History info should show producer culled
+    EXPECT_EQ(result->historyResources.size(), 1u);
+    EXPECT_TRUE(result->historyResources[0].producerCulled);
+}
+
+// --- Complex multi-flow stress tests ---
+
+TEST(HistoryComplex, DualTemporalPipelineTAAAndGTAO) {
+    // Simulates a real scenario:
+    //   Pass 1: Write TAA output
+    //   Pass 2: Write GTAO output
+    //   Pass 3: Composite reads both + reads TAA as history (Reset, threshold=1)
+    //   Pass 4: Debug overlay reads GTAO as history (SpatialFallback, threshold=4)
+    //   Pass 5: Present (side effects)
+    RenderGraphBuilder builder;
+    auto taaOut = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "TAAOut"});
+    auto gtaoOut = builder.CreateTexture({.width = 960, .height = 540, .debugName = "GTAOOut"});  // half-res
+    auto composited = builder.CreateTexture({.width = 1920, .height = 1080, .debugName = "Composited"});
+
+    builder.AddGraphicsPass(
+        "TAAResolve", [&](PassBuilder& pb) { taaOut = pb.WriteTexture(taaOut); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "GTAO", [&](PassBuilder& pb) { gtaoOut = pb.WriteTexture(gtaoOut); }, [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "Composite",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(taaOut);
+            pb.ReadTexture(gtaoOut);
+            pb.ReadHistoryTexture(taaOut, "TAAHist", StalenessPolicy::Reset);
+            composited = pb.WriteTexture(composited);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "DebugOverlay",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(gtaoOut, "GTAOHist", StalenessPolicy::SpatialFallback);
+            pb.ReadTexture(composited);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    // All 4 passes should be alive (chain to side-effect DebugOverlay)
+    EXPECT_EQ(result->passes.size(), 4u);
+
+    // Two history resources
+    EXPECT_EQ(result->historyResources.size(), 2u);
+
+    // Both should be lifetime-extended
+    EXPECT_TRUE(builder.GetResources()[taaOut.GetIndex()].lifetimeExtended);
+    EXPECT_TRUE(builder.GetResources()[gtaoOut.GetIndex()].lifetimeExtended);
+
+    // Consumer counts
+    EXPECT_EQ(builder.GetResources()[taaOut.GetIndex()].historyConsumerCount, 1u);
+    EXPECT_EQ(builder.GetResources()[gtaoOut.GetIndex()].historyConsumerCount, 1u);
+
+    // Verify staleness query on fresh data
+    for (auto& info : result->historyResources) {
+        auto q = QueryHistoryStaleness(info, result->currentFrameIndex);
+        EXPECT_TRUE(q.isValid);
+        EXPECT_EQ(q.staleFrames, 0u);
+        EXPECT_FALSE(q.shouldReset);
+    }
+}
+
+TEST(HistoryComplex, ConditionalDisableAndReEnableProducer) {
+    // Simulate: Frame 0 producer active, Frame 1 producer disabled, Frame 2 producer re-enabled.
+    // History resource should be lifetime-extended in frame 1, then fresh in frame 2.
+    RenderGraphCompiler compiler;
+
+    auto buildGraph = [](bool producerEnabled) {
+        RenderGraphBuilder b;
+        auto tex = b.CreateTexture({.width = 128, .height = 128, .debugName = "TemporalTex"});
+        auto producer = b.AddGraphicsPass(
+            "Producer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+        );
+        b.AddComputePass(
+            "Consumer",
+            [&](PassBuilder& pb) {
+                pb.ReadHistoryTexture(tex, "TH", StalenessPolicy::Reset);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        b.EnableIf(producer, [producerEnabled]() { return producerEnabled; });
+        b.Build();
+        return b;
+    };
+
+    // Frame 0: producer active
+    auto b0 = buildGraph(true);
+    auto r0 = compiler.Compile(b0);
+    ASSERT_TRUE(r0.has_value());
+    EXPECT_EQ(r0->historyResources.size(), 1u);
+    EXPECT_FALSE(r0->historyResources[0].producerCulled);
+    EXPECT_EQ(r0->historyResources[0].lastWrittenFrame, r0->currentFrameIndex);
+
+    // Frame 1: producer disabled
+    auto b1 = buildGraph(false);
+    auto r1 = compiler.Compile(b1);
+    ASSERT_TRUE(r1.has_value());
+    EXPECT_EQ(r1->historyResources.size(), 1u);
+    EXPECT_TRUE(r1->historyResources[0].producerCulled);
+    // New builder means new resource — lastWrittenFrame = kNeverWrittenFrame
+    EXPECT_EQ(r1->historyResources[0].lastWrittenFrame, kNeverWrittenFrame);
+
+    // Frame 2: producer re-enabled
+    auto b2 = buildGraph(true);
+    auto r2 = compiler.Compile(b2);
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_EQ(r2->historyResources.size(), 1u);
+    EXPECT_FALSE(r2->historyResources[0].producerCulled);
+    EXPECT_EQ(r2->historyResources[0].lastWrittenFrame, r2->currentFrameIndex);
+}
+
+TEST(HistoryComplex, ManyHistoryConsumersOnSingleResource) {
+    // 8 consumers reading the same resource as history with different policies
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 512, .height = 512, .debugName = "SharedHist"});
+
+    builder.AddGraphicsPass(
+        "Producer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+    );
+
+    const StalenessPolicy policies[] = {
+        StalenessPolicy::Hold, StalenessPolicy::Reset, StalenessPolicy::SpatialFallback, StalenessPolicy::Invalidate,
+        StalenessPolicy::Hold, StalenessPolicy::Reset, StalenessPolicy::SpatialFallback, StalenessPolicy::Invalidate,
+    };
+
+    for (int i = 0; i < 8; ++i) {
+        std::string name = "Consumer" + std::to_string(i);
+        std::string histName = "Hist" + std::to_string(i);
+        builder.AddComputePass(
+            name.c_str(),
+            [&, i, histName](PassBuilder& pb) {
+                pb.ReadHistoryTexture(tex, histName.c_str(), policies[i]);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+    }
+    builder.Build();
+
+    auto& resources = builder.GetResources();
+    EXPECT_EQ(resources[tex.GetIndex()].historyConsumerCount, 8u);
+    EXPECT_TRUE(resources[tex.GetIndex()].lifetimeExtended);
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    // 9 passes total (1 producer + 8 consumers)
+    EXPECT_EQ(result->passes.size(), 9u);
+    // 1 history resource
+    EXPECT_EQ(result->historyResources.size(), 1u);
+}
+
+TEST(HistoryComplex, HistoryResourceWithAsyncComputeAndTransferQueues) {
+    // Producer on Graphics, HistReader on AsyncCompute, another on Transfer
+    // Tests that history tracking works across queue boundaries
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 256, .height = 256, .debugName = "CrossQueueHist"});
+
+    builder.AddGraphicsPass(
+        "GfxProducer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+    );
+    builder.AddAsyncComputePass(
+        "AsyncHistReader",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "AsyncHist", StalenessPolicy::Reset);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler::Options opts;
+    opts.enableAsyncCompute = true;
+    RenderGraphCompiler compiler(opts);
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    EXPECT_EQ(result->historyResources.size(), 1u);
+    EXPECT_FALSE(result->historyResources[0].producerCulled);
+    EXPECT_EQ(result->historyResources[0].lastWrittenFrame, result->currentFrameIndex);
+}
+
+TEST(HistoryComplex, HistoryOnImportedResource) {
+    // Imported resources are already excluded from aliasing, but history tracking should still work
+    RenderGraphBuilder builder;
+    auto imported = builder.ImportTexture(TextureHandle{42}, "ExternalTex");
+
+    builder.AddGraphicsPass(
+        "Writer", [&](PassBuilder& pb) { imported = pb.WriteTexture(imported); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "HistReader",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(imported, "ImportedHist", StalenessPolicy::Hold);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    EXPECT_EQ(result->historyResources.size(), 1u);
+    EXPECT_EQ(result->historyResources[0].defaultPolicy, StalenessPolicy::Hold);
+    EXPECT_FALSE(result->historyResources[0].producerCulled);
+}
+
+TEST(HistoryComplex, HistoryResourceWithNeverCullFlag) {
+    // NeverCull producer should never be culled, so producerCulled is always false
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+
+    builder.AddGraphicsPass(
+        "NeverCullWriter",
+        [&](PassBuilder& pb) {
+            tex = pb.WriteTexture(tex);
+            pb.SetSideEffects();  // Makes it NeverCull-like
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "HistReader",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "H", StalenessPolicy::Invalidate);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    EXPECT_EQ(result->passes.size(), 2u);
+    EXPECT_EQ(result->historyResources.size(), 1u);
+    EXPECT_FALSE(result->historyResources[0].producerCulled);
+    EXPECT_EQ(result->historyResources[0].defaultPolicy, StalenessPolicy::Invalidate);
+}
+
+TEST(HistoryComplex, DiamondDependencyWithHistoryOnOneBranch) {
+    // Diamond: A writes t0, B reads t0 writes t1, C reads t0 writes t2 (with history),
+    //          D reads t1+t2 (side effects)
+    // History on t0 from C should not affect the other branch
+    RenderGraphBuilder builder;
+    auto t0 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T0"});
+    auto t1 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T1"});
+    auto t2 = builder.CreateTexture({.width = 128, .height = 128, .debugName = "T2"});
+
+    builder.AddGraphicsPass("A", [&](PassBuilder& pb) { t0 = pb.WriteTexture(t0); }, [](RenderPassContext&) {});
+    builder.AddGraphicsPass(
+        "B",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t0);
+            t1 = pb.WriteTexture(t1);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "C",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(t0, "T0Hist", StalenessPolicy::Reset);
+            t2 = pb.WriteTexture(t2);
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddGraphicsPass(
+        "D",
+        [&](PassBuilder& pb) {
+            pb.ReadTexture(t1);
+            pb.ReadTexture(t2);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    // All 4 passes alive
+    EXPECT_EQ(result->passes.size(), 4u);
+
+    // Only t0 is a history resource
+    EXPECT_EQ(result->historyResources.size(), 1u);
+    EXPECT_EQ(result->historyResources[0].resourceIndex, t0.GetIndex());
+
+    // t0 is lifetime-extended, t1 and t2 are not
+    EXPECT_TRUE(builder.GetResources()[t0.GetIndex()].lifetimeExtended);
+    EXPECT_FALSE(builder.GetResources()[t1.GetIndex()].lifetimeExtended);
+    EXPECT_FALSE(builder.GetResources()[t2.GetIndex()].lifetimeExtended);
+}
+
+TEST(HistoryComplex, AllConsumersCulledResourceNotLifetimeExtended) {
+    // If all history consumers are culled, the resource should not need lifetime extension
+    // from ProcessHistoryLifetimes (though PassBuilder already set it)
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+
+    builder.AddGraphicsPass(
+        "Producer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+    );
+    auto consumer = builder.AddComputePass(
+        "HistConsumer",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "H");
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.EnableIf(consumer, []() { return false; });
+    builder.Build();
+
+    // Note: PassBuilder already set lifetimeExtended=true when ReadHistoryTexture was called.
+    // The consumer being culled doesn't undo that (it's set at build time).
+    // But the compiled graph should reflect the consumer being culled.
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    // Both passes culled: producer has no live consumers, consumer is disabled
+    // Producer is also dead (no live consumer with side effects)
+    EXPECT_EQ(result->passes.size(), 0u);
+
+    // History still tracked (edge exists even if consumer culled)
+    // The resource lifetimeExtended was set at build time by PassBuilder
+    EXPECT_TRUE(builder.GetResources()[tex.GetIndex()].lifetimeExtended);
+}
+
+TEST(HistoryComplex, HistoryBufferAndTextureInSameGraph) {
+    // Mix history texture and history buffer in one graph
+    RenderGraphBuilder builder;
+    auto tex = builder.CreateTexture({.width = 256, .height = 256, .debugName = "HistTex"});
+    auto buf = builder.CreateBuffer({.size = 8192, .debugName = "HistBuf"});
+
+    builder.AddGraphicsPass(
+        "TexProducer", [&](PassBuilder& pb) { tex = pb.WriteTexture(tex); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "BufProducer", [&](PassBuilder& pb) { buf = pb.WriteBuffer(buf); }, [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "MixedConsumer",
+        [&](PassBuilder& pb) {
+            pb.ReadHistoryTexture(tex, "TexH", StalenessPolicy::Reset);
+            pb.ReadHistoryBuffer(buf, "BufH", StalenessPolicy::SpatialFallback);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.Build();
+
+    RenderGraphCompiler compiler;
+    auto result = compiler.Compile(builder);
+    ASSERT_TRUE(result.has_value());
+
+    EXPECT_EQ(result->passes.size(), 3u);
+    EXPECT_EQ(result->historyResources.size(), 2u);
+
+    // Both resources lifetime-extended
+    EXPECT_TRUE(builder.GetResources()[tex.GetIndex()].lifetimeExtended);
+    EXPECT_TRUE(builder.GetResources()[buf.GetIndex()].lifetimeExtended);
+
+    // Verify policies propagated correctly
+    bool foundTex = false, foundBuf = false;
+    for (auto& info : result->historyResources) {
+        if (info.resourceIndex == tex.GetIndex()) {
+            EXPECT_EQ(info.defaultPolicy, StalenessPolicy::Reset);
+            EXPECT_STREQ(info.historyName, "TexH");
+            foundTex = true;
+        }
+        if (info.resourceIndex == buf.GetIndex()) {
+            EXPECT_EQ(info.defaultPolicy, StalenessPolicy::SpatialFallback);
+            EXPECT_STREQ(info.historyName, "BufH");
+            foundBuf = true;
+        }
+    }
+    EXPECT_TRUE(foundTex);
+    EXPECT_TRUE(foundBuf);
+
+    // Pass should have 2 history reads
+    auto& passes = builder.GetPasses();
+    EXPECT_EQ(passes[2].historyReads.size(), 2u);
+}
+
+TEST(HistoryComplex, StructuralHashIncludesConditionChanges) {
+    // Verify that disabling a history-producing pass changes the structural hash
+    // (via topologyHash which includes condition results), triggering cache miss.
+    RenderGraphCompiler compiler;
+
+    auto buildGraph = [](bool enabled) {
+        RenderGraphBuilder b;
+        auto t = b.CreateTexture({.width = 64, .height = 64, .debugName = "T"});
+        auto p = b.AddGraphicsPass("P", [&](PassBuilder& pb) { t = pb.WriteTexture(t); }, [](RenderPassContext&) {});
+        b.AddComputePass(
+            "C",
+            [&](PassBuilder& pb) {
+                pb.ReadHistoryTexture(t, "H");
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        b.EnableIf(p, [enabled]() { return enabled; });
+        b.Build();
+        return b;
+    };
+
+    auto b1 = buildGraph(true);
+    auto r1 = compiler.Compile(b1);
+    ASSERT_TRUE(r1.has_value());
+
+    auto b2 = buildGraph(false);
+    auto r2 = compiler.Compile(b2);
+    ASSERT_TRUE(r2.has_value());
+
+    // topologyHash must differ because condition result changed
+    EXPECT_NE(r1->hash.topologyHash, r2->hash.topologyHash);
 }

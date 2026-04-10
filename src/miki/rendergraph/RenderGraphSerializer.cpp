@@ -114,6 +114,9 @@ namespace miki::rg {
                 {"lifetimeExtended", res.lifetimeExtended},
                 {"currentVersion", res.currentVersion},
                 {"name", res.name ? res.name : ""},
+                {"historyName", res.historyName ? res.historyName : ""},
+                {"lastWrittenFrame", res.lastWrittenFrame},
+                {"historyConsumerCount", res.historyConsumerCount},
             };
             if (res.kind == RGResourceKind::Texture) {
                 j["textureDesc"] = ToJson(res.textureDesc);
@@ -292,8 +295,7 @@ namespace miki::rg {
             return {
                 {"passCount", h.passCount},
                 {"resourceCount", h.resourceCount},
-                {"edgeHash", std::format("0x{:016x}", h.edgeHash)},
-                {"conditionHash", std::format("0x{:016x}", h.conditionHash)},
+                {"topologyHash", std::format("0x{:016x}", h.topologyHash)},
                 {"descHash", std::format("0x{:016x}", h.descHash)},
             };
         }

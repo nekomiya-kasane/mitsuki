@@ -163,3 +163,13 @@ miki_add_test(test_render_graph tests/rendergraph/test_render_graph.cpp)
 if(TARGET test_render_graph)
     set_tests_properties(test_render_graph PROPERTIES TIMEOUT 60)
 endif()
+
+miki_add_test(test_phase_i_caching tests/rendergraph/test_phase_i_caching.cpp)
+if(TARGET test_phase_i_caching)
+    set_tests_properties(test_phase_i_caching PROPERTIES TIMEOUT 60)
+endif()
+
+miki_add_test(test_phase_j_debug tests/rendergraph/test_phase_j_debug.cpp)
+if(TARGET test_phase_j_debug)
+    set_tests_properties(test_phase_j_debug PROPERTIES TIMEOUT 120)
+endif()

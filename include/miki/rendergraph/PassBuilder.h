@@ -92,12 +92,20 @@ namespace miki::rg {
         // -- History resources (cross-frame temporal) --
 
         /// @brief Read the previous frame's version of a texture.
-        [[nodiscard]] auto ReadHistoryTexture(RGResourceHandle handle, const char* historyName = nullptr)
-            -> RGResourceHandle;
+        /// @param handle The resource handle whose previous frame's data is needed.
+        /// @param historyName Debug name for this history binding (e.g., "TAAHistory").
+        /// @param policy Fallback behavior when the history data is stale.
+        [[nodiscard]] auto ReadHistoryTexture(
+            RGResourceHandle handle, const char* historyName = nullptr, StalenessPolicy policy = StalenessPolicy::Hold
+        ) -> RGResourceHandle;
 
         /// @brief Read the previous frame's version of a buffer.
-        [[nodiscard]] auto ReadHistoryBuffer(RGResourceHandle handle, const char* historyName = nullptr)
-            -> RGResourceHandle;
+        /// @param handle The resource handle whose previous frame's data is needed.
+        /// @param historyName Debug name for this history binding.
+        /// @param policy Fallback behavior when the history data is stale.
+        [[nodiscard]] auto ReadHistoryBuffer(
+            RGResourceHandle handle, const char* historyName = nullptr, StalenessPolicy policy = StalenessPolicy::Hold
+        ) -> RGResourceHandle;
 
         // -- Async task integration --
 

@@ -48,15 +48,29 @@ namespace miki::rg {
         RenderGraphCompiler() noexcept = default;
         explicit RenderGraphCompiler(const Options& options) noexcept : options_(options) {}
 
-        /// @brief Compile a built graph into an execution plan.
+        /// @brief Compile a built graph into an execution plan (full recompile).
         /// @param builder The finalized graph builder (must have called Build()).
         /// @return CompiledRenderGraph on success, ErrorCode on failure.
         [[nodiscard]] auto Compile(RenderGraphBuilder& builder) -> core::Result<CompiledRenderGraph>;
 
-        /// @brief Check if a previously compiled graph can be reused (cache hit).
+        /// @brief Incremental recompile: topology unchanged, only descriptors changed.
+        /// Re-runs Stages 7-10 (aliasing, merging, adaptation, batching) only.
+        /// Falls back to full Compile() if topology has changed.
+        /// @param builder The finalized graph builder for the current frame.
+        /// @param prev Previous frame's compiled graph (modified in-place, then returned).
+        [[nodiscard]] auto CompileIncremental(RenderGraphBuilder& builder, CompiledRenderGraph& prev)
+            -> core::Result<CompiledRenderGraph>;
+
+        /// @brief Classify cache hit: FullHit / DescriptorOnlyChange / Miss.
         /// @param prev Previous frame's compiled graph.
         /// @param builder Current frame's graph builder.
-        /// @return true if structural hash matches (skip recompilation).
+        /// @param activeSet Condition evaluation results for current frame.
+        [[nodiscard]] auto ClassifyCache(
+            const CompiledRenderGraph& prev, const RenderGraphBuilder& builder, const std::vector<bool>& activeSet
+        ) const -> CacheHitResult;
+
+        /// @brief Quick check: is the previous graph fully reusable?
+        /// Evaluates conditions internally. For finer control, use ClassifyCache.
         [[nodiscard]] auto IsCacheHit(const CompiledRenderGraph& prev, const RenderGraphBuilder& builder) const -> bool;
 
        private:
@@ -123,11 +137,32 @@ namespace miki::rg {
             std::vector<CommandBatch>& batches
         );
 
-        // Compute structural hash for caching
-        auto ComputeStructuralHash(const RenderGraphBuilder& builder, const std::vector<bool>& activeSet)
+        // Stage 1b: History lifetime extension — prevent aliasing of history resources whose producer is culled
+        void ProcessHistoryLifetimes(
+            RenderGraphBuilder& builder, const std::vector<bool>& activeSet, uint64_t frameIndex,
+            std::vector<HistoryResourceInfo>& historyResources
+        );
+
+        // Compute structural hash for caching (Phase I, §10.1)
+        auto ComputeStructuralHash(const RenderGraphBuilder& builder, const std::vector<bool>& activeSet) const
             -> CompiledRenderGraph::StructuralHash;
 
+        // Collect external (imported) resource slots (Phase I, §10.3)
+        void CollectExternalResources(const RenderGraphBuilder& builder, std::vector<ExternalResourceSlot>& slots);
+
+        // Re-run Stages 7-10 for incremental recompile (Phase I, §10.2)
+        void RecompileDescriptorDependentStages(
+            RenderGraphBuilder& builder, const std::vector<uint32_t>& order, const std::vector<bool>& activeSet,
+            const std::vector<RGQueueType>& queueAssignments, CompiledRenderGraph& result
+        );
+
         Options options_;
+        uint64_t frameIndex_ = 0;  ///< Monotonic frame counter for history staleness
+
+        // Cached topology data for incremental recompile (Phase I, §10.2)
+        std::vector<uint32_t> cachedOrder_;
+        std::vector<RGQueueType> cachedQueueAssignments_;
+        std::vector<bool> cachedActiveSet_;
     };
 
 }  // namespace miki::rg

@@ -117,22 +117,60 @@ namespace miki::rg {
     // History resources (cross-frame temporal)
     // =========================================================================
 
-    auto PassBuilder::ReadHistoryTexture(RGResourceHandle handle, const char* /*historyName*/) -> RGResourceHandle {
+    auto PassBuilder::ReadHistoryTexture(RGResourceHandle handle, const char* historyName, StalenessPolicy policy)
+        -> RGResourceHandle {
         assert(handle.IsValid());
         auto& resources = builder_.GetResources();
         auto idx = handle.GetIndex();
         assert(idx < resources.size());
+
+        // Mark resource as lifetime-extended (excluded from aliasing)
         resources[idx].lifetimeExtended = true;
+        resources[idx].historyConsumerCount++;
+        if (historyName) {
+            resources[idx].historyName = historyName;
+        }
+        resources[idx].defaultStalenessPolicy = policy;
+
+        // Record history edge on the pass node
+        auto& passes = builder_.GetPasses();
+        assert(passIndex_ < passes.size());
+        passes[passIndex_].historyReads.push_back(
+            HistoryEdge{
+                .handle = handle,
+                .consumerPassIndex = passIndex_,
+                .historyName = historyName,
+            }
+        );
+
         RecordRead(handle, ResourceAccess::ShaderReadOnly);
         return handle;
     }
 
-    auto PassBuilder::ReadHistoryBuffer(RGResourceHandle handle, const char* /*historyName*/) -> RGResourceHandle {
+    auto PassBuilder::ReadHistoryBuffer(RGResourceHandle handle, const char* historyName, StalenessPolicy policy)
+        -> RGResourceHandle {
         assert(handle.IsValid());
         auto& resources = builder_.GetResources();
         auto idx = handle.GetIndex();
         assert(idx < resources.size());
+
         resources[idx].lifetimeExtended = true;
+        resources[idx].historyConsumerCount++;
+        if (historyName) {
+            resources[idx].historyName = historyName;
+        }
+        resources[idx].defaultStalenessPolicy = policy;
+
+        auto& passes = builder_.GetPasses();
+        assert(passIndex_ < passes.size());
+        passes[passIndex_].historyReads.push_back(
+            HistoryEdge{
+                .handle = handle,
+                .consumerPassIndex = passIndex_,
+                .historyName = historyName,
+            }
+        );
+
         RecordRead(handle, ResourceAccess::ShaderReadOnly);
         return handle;
     }
