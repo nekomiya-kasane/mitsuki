@@ -3681,15 +3681,15 @@ TEST(ExecutorConfig, CustomValues) {
 
 TEST(ExecutionStats, DefaultAllZero) {
     ExecutionStats stats{};
-    EXPECT_EQ(stats.transientTexturesAllocated, 0u);
-    EXPECT_EQ(stats.transientBuffersAllocated, 0u);
-    EXPECT_EQ(stats.transientTextureViewsCreated, 0u);
-    EXPECT_EQ(stats.heapsCreated, 0u);
-    EXPECT_EQ(stats.barriersEmitted, 0u);
-    EXPECT_EQ(stats.batchesSubmitted, 0u);
-    EXPECT_EQ(stats.passesRecorded, 0u);
-    EXPECT_EQ(stats.secondaryCmdBufsUsed, 0u);
-    EXPECT_EQ(stats.transientMemoryBytes, 0u);
+    EXPECT_EQ(stats.allocation.transientTexturesAllocated, 0u);
+    EXPECT_EQ(stats.allocation.transientBuffersAllocated, 0u);
+    EXPECT_EQ(stats.allocation.transientTextureViewsCreated, 0u);
+    EXPECT_EQ(stats.allocation.heapsCreated, 0u);
+    EXPECT_EQ(stats.recording.barriersEmitted, 0u);
+    EXPECT_EQ(stats.submission.batchesSubmitted, 0u);
+    EXPECT_EQ(stats.recording.passesRecorded, 0u);
+    EXPECT_EQ(stats.recording.secondaryCmdBufsUsed, 0u);
+    EXPECT_EQ(stats.allocation.transientMemoryBytes, 0u);
 }
 
 // =============================================================================
@@ -7651,10 +7651,10 @@ TEST(Executor, SingleGraphicsPassExecutes) {
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(invoked, 1u);
-    EXPECT_EQ(result->stats.passesRecorded, 1u);
-    EXPECT_EQ(result->stats.batchesSubmitted, 1u);
-    EXPECT_GE(result->stats.transientTexturesAllocated, 1u);
-    EXPECT_GE(result->stats.transientTextureViewsCreated, 1u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 1u);
+    EXPECT_EQ(result->stats.submission.batchesSubmitted, 1u);
+    EXPECT_GE(result->stats.allocation.transientTexturesAllocated, 1u);
+    EXPECT_GE(result->stats.allocation.transientTextureViewsCreated, 1u);
 }
 
 TEST(Executor, SingleComputePassExecutes) {
@@ -7676,8 +7676,8 @@ TEST(Executor, SingleComputePassExecutes) {
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(invoked, 1u);
-    EXPECT_EQ(result->stats.passesRecorded, 1u);
-    EXPECT_GE(result->stats.transientBuffersAllocated, 1u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 1u);
+    EXPECT_GE(result->stats.allocation.transientBuffersAllocated, 1u);
 }
 
 // =============================================================================
@@ -7719,8 +7719,8 @@ TEST(Executor, ThreePassChainInvocationOrder) {
     // Must respect topological order: 0 < 1 < 2
     EXPECT_LT(order[0], order[1]);
     EXPECT_LT(order[1], order[2]);
-    EXPECT_EQ(result->stats.passesRecorded, 3u);
-    EXPECT_GT(result->stats.barriersEmitted, 0u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 3u);
+    EXPECT_GT(result->stats.recording.barriersEmitted, 0u);
 }
 
 // =============================================================================
@@ -7750,7 +7750,7 @@ TEST(Executor, DebugLabelsDisabledDoesNotBreak) {
     auto result = CompileAndExecute(builder, cfg);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(invoked, 1u);
-    EXPECT_EQ(result->stats.passesRecorded, 1u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 1u);
 }
 
 // =============================================================================
@@ -7783,11 +7783,11 @@ TEST(Executor, AliasingBarriersEmittedForSharedSlots) {
 
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->stats.passesRecorded, 2u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 2u);
     // Barriers should be emitted (at minimum acquire barriers for each pass)
-    EXPECT_GE(result->stats.barriersEmitted, 0u);
+    EXPECT_GE(result->stats.recording.barriersEmitted, 0u);
     // Two textures allocated
-    EXPECT_GE(result->stats.transientTexturesAllocated, 2u);
+    EXPECT_GE(result->stats.allocation.transientTexturesAllocated, 2u);
 }
 
 // =============================================================================
@@ -7912,7 +7912,7 @@ TEST(Executor, MergedGroupPassesInvoked) {
     ASSERT_EQ(order.size(), 2u);
     EXPECT_EQ(order[0], 0u);
     EXPECT_EQ(order[1], 1u);
-    EXPECT_EQ(result->stats.passesRecorded, 2u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 2u);
 }
 
 TEST(Executor, MergedGroupContextStillHasAttachments) {
@@ -8127,8 +8127,8 @@ TEST(Executor, HeapCreationStatsCorrect) {
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
     // Should have created heaps for RT/DS and Buffer groups
-    EXPECT_GE(result->stats.heapsCreated, 1u);
-    EXPECT_GT(result->stats.transientMemoryBytes, 0u);
+    EXPECT_GE(result->stats.allocation.heapsCreated, 1u);
+    EXPECT_GT(result->stats.allocation.transientMemoryBytes, 0u);
 }
 
 // =============================================================================
@@ -8172,12 +8172,12 @@ TEST(Executor, StatsResetOnSecondExecution) {
     RenderGraphExecutor executor;
     ASSERT_TRUE(buildAndExecute(executor));
     auto s1 = executor.GetStats();
-    EXPECT_EQ(s1.passesRecorded, 1u);
+    EXPECT_EQ(s1.recording.passesRecorded, 1u);
 
     ASSERT_TRUE(buildAndExecute(executor));
     auto s2 = executor.GetStats();
     // Stats must reset: should be 1, not 2
-    EXPECT_EQ(s2.passesRecorded, 1u);
+    EXPECT_EQ(s2.recording.passesRecorded, 1u);
 }
 
 // =============================================================================
@@ -8189,9 +8189,9 @@ TEST(Executor, EmptyGraphSucceeds) {
     // No passes added — graph is empty
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->stats.passesRecorded, 0u);
-    EXPECT_EQ(result->stats.batchesSubmitted, 0u);
-    EXPECT_EQ(result->stats.transientTexturesAllocated, 0u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 0u);
+    EXPECT_EQ(result->stats.submission.batchesSubmitted, 0u);
+    EXPECT_EQ(result->stats.allocation.transientTexturesAllocated, 0u);
 }
 
 TEST(Executor, AllPassesCulledResultsInEmptyExecution) {
@@ -8205,7 +8205,7 @@ TEST(Executor, AllPassesCulledResultsInEmptyExecution) {
 
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->stats.passesRecorded, 0u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 0u);
 }
 
 // =============================================================================
@@ -8245,7 +8245,7 @@ TEST(Executor, TwentyPassChainExecutes) {
     auto result = CompileAndExecute(builder, cfg);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(invokeCount, static_cast<uint32_t>(N));
-    EXPECT_EQ(result->stats.passesRecorded, static_cast<uint32_t>(N));
+    EXPECT_EQ(result->stats.recording.passesRecorded, static_cast<uint32_t>(N));
 }
 
 // =============================================================================
@@ -8315,7 +8315,7 @@ TEST(ExecutorComplex, DiamondGraphExecution) {
             EXPECT_TRUE(cBeforeD);
         }
     }
-    EXPECT_EQ(result->stats.passesRecorded, 4u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 4u);
 }
 
 TEST(ExecutorComplex, MergePlusNonMergePassesMixed) {
@@ -8359,7 +8359,7 @@ TEST(ExecutorComplex, MergePlusNonMergePassesMixed) {
     EXPECT_EQ(order[0], 0u);
     EXPECT_EQ(order[1], 1u);
     EXPECT_EQ(order[2], 2u);
-    EXPECT_EQ(result->stats.passesRecorded, 3u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 3u);
 }
 
 TEST(ExecutorComplex, ImportedPlusTransientAliasingExecution) {
@@ -8403,7 +8403,7 @@ TEST(ExecutorComplex, ImportedPlusTransientAliasingExecution) {
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
     ASSERT_EQ(order.size(), 3u);
-    EXPECT_EQ(result->stats.passesRecorded, 3u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 3u);
 }
 
 // =============================================================================
@@ -8473,9 +8473,9 @@ TEST(ExecutorComplex, ComputeThenGraphicsPipeline) {
     ASSERT_EQ(names.size(), 2u);
     EXPECT_EQ(names[0], "GenerateData");
     EXPECT_EQ(names[1], "Render");
-    EXPECT_EQ(result->stats.passesRecorded, 2u);
-    EXPECT_GE(result->stats.transientBuffersAllocated, 1u);
-    EXPECT_GE(result->stats.transientTexturesAllocated, 1u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 2u);
+    EXPECT_GE(result->stats.allocation.transientBuffersAllocated, 1u);
+    EXPECT_GE(result->stats.allocation.transientTexturesAllocated, 1u);
 }
 
 // =============================================================================
@@ -8516,7 +8516,7 @@ TEST(ExecutorMergedGroup, ThreeSubpassChainAllInvoked) {
     auto result = CompileAndExecute(builder, {}, /*enableMerging=*/true);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(count, 3u);
-    EXPECT_EQ(result->stats.passesRecorded, 3u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 3u);
 }
 
 // =============================================================================
@@ -8547,7 +8547,7 @@ TEST(ExecutorMergedGroup, StatsMatchMergedGroupCount) {
         [](RenderPassContext&) {}
     );
 
-    // Run both with and without merging, stats.passesRecorded should be identical
+    // Run both with and without merging, stats.recording.passesRecorded should be identical
     auto mergedResult = CompileAndExecute(builder, {}, /*enableMerging=*/true);
     ASSERT_TRUE(mergedResult.has_value());
 
@@ -8573,7 +8573,7 @@ TEST(ExecutorMergedGroup, StatsMatchMergedGroupCount) {
     auto unmergedResult = CompileAndExecute(builder2, {}, /*enableMerging=*/false);
     ASSERT_TRUE(unmergedResult.has_value());
 
-    EXPECT_EQ(mergedResult->stats.passesRecorded, unmergedResult->stats.passesRecorded);
+    EXPECT_EQ(mergedResult->stats.recording.passesRecorded, unmergedResult->stats.recording.passesRecorded);
 }
 
 // =============================================================================
@@ -8596,7 +8596,7 @@ TEST(Executor, MultipleBatchesSubmitted) {
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
     // At least one batch should be submitted
-    EXPECT_GE(result->stats.batchesSubmitted, 1u);
+    EXPECT_GE(result->stats.submission.batchesSubmitted, 1u);
 }
 
 // =============================================================================
@@ -8736,8 +8736,8 @@ TEST(Executor, RepeatedExecuteDoesNotLeak) {
         ASSERT_TRUE(execResult.has_value()) << "Frame " << frame;
 
         auto& stats = executor.GetStats();
-        EXPECT_EQ(stats.passesRecorded, 1u) << "Frame " << frame;
-        EXPECT_EQ(stats.batchesSubmitted, 1u) << "Frame " << frame;
+        EXPECT_EQ(stats.recording.passesRecorded, 1u) << "Frame " << frame;
+        EXPECT_EQ(stats.submission.batchesSubmitted, 1u) << "Frame " << frame;
     }
 }
 
@@ -8760,7 +8760,7 @@ TEST(Executor, NullExecuteFnDoesNotCrash) {
 
     auto result = CompileAndExecute(builder);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->stats.passesRecorded, 1u);
+    EXPECT_EQ(result->stats.recording.passesRecorded, 1u);
 }
 
 // =============================================================================
@@ -9696,8 +9696,8 @@ TEST(ExecutorPhaseF, HeapPoolingDisabledFallsBackToPerFrame) {
     cfg.enableHeapPooling = false;
     auto result = CompileAndExecute(builder, cfg);
     ASSERT_TRUE(result.has_value());
-    EXPECT_GE(result->stats.heapsCreated, 1u);
-    EXPECT_EQ(result->stats.heapsReused, 0u);
+    EXPECT_GE(result->stats.allocation.heapsCreated, 1u);
+    EXPECT_EQ(result->stats.allocation.heapsReused, 0u);
 }
 
 TEST(ExecutorPhaseF, HeapPoolingReusesAcrossExecutions) {
@@ -9741,12 +9741,12 @@ TEST(ExecutorPhaseF, HeapPoolingReusesAcrossExecutions) {
 
     buildAndRun();
     auto s1 = executor.GetStats();
-    EXPECT_GE(s1.transientMemoryBytes, 1u);
+    EXPECT_GE(s1.allocation.transientMemoryBytes, 1u);
 
     buildAndRun();
     auto s2 = executor.GetStats();
     // Second execution should reuse heaps
-    EXPECT_GE(s2.heapsReused, 1u);
+    EXPECT_GE(s2.allocation.heapsReused, 1u);
     // Pool count should be stable (no growth)
     EXPECT_LE(executor.GetHeapPool().GetPooledHeapCount(), 4u);
 
@@ -9802,7 +9802,7 @@ TEST(ExecutorPhaseF, BufferSuballocationReducesBufferCreation) {
     auto result = CompileAndExecute(builder, cfg);
     ASSERT_TRUE(result.has_value());
     // Should have allocated some transient buffers
-    EXPECT_GE(result->stats.transientBuffersAllocated, 1u);
+    EXPECT_GE(result->stats.allocation.transientBuffersAllocated, 1u);
 }
 
 // =============================================================================
@@ -9954,8 +9954,8 @@ TEST(ExecutorPhaseF, ConfigFieldsPropagate) {
 
     RenderGraphExecutor executor(cfg);
     // Config should be stored (we verify indirectly through behavior)
-    EXPECT_EQ(executor.GetStats().heapsReused, 0u);
-    EXPECT_EQ(executor.GetStats().bufferSuballocations, 0u);
+    EXPECT_EQ(executor.GetStats().allocation.heapsReused, 0u);
+    EXPECT_EQ(executor.GetStats().allocation.bufferSuballocations, 0u);
 }
 
 TEST(ExecutorPhaseF, DefragmentHeapPoolDelegates) {

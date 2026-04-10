@@ -16,6 +16,10 @@ set(MIKI_RENDERGRAPH_SOURCES
     src/miki/rendergraph/PassBuilder.cpp
     src/miki/rendergraph/RenderGraphCompiler.cpp
     src/miki/rendergraph/RenderGraphExecutor.cpp
+    src/miki/rendergraph/BarrierEmitter.cpp
+    src/miki/rendergraph/TransientResourceAllocator.cpp
+    src/miki/rendergraph/PassRecorder.cpp
+    src/miki/rendergraph/BatchSubmitter.cpp
     src/miki/rendergraph/RenderGraphSerializer.cpp
     src/miki/rendergraph/TransientHeapPool.cpp
 )

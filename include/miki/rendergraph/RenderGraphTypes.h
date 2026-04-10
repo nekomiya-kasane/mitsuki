@@ -86,6 +86,16 @@ namespace miki::rg {
         Transfer,      ///< Dedicated transfer queue (Tier1 only)
     };
 
+    /// @brief Map graph-level RGQueueType to RHI QueueType.
+    [[nodiscard]] constexpr auto ToRhiQueueType(RGQueueType q) noexcept -> rhi::QueueType {
+        switch (q) {
+            case RGQueueType::Graphics: return rhi::QueueType::Graphics;
+            case RGQueueType::AsyncCompute: return rhi::QueueType::Compute;
+            case RGQueueType::Transfer: return rhi::QueueType::Transfer;
+        }
+        return rhi::QueueType::Graphics;
+    }
+
     // =========================================================================
     // Pass flags (bitmask)
     // =========================================================================

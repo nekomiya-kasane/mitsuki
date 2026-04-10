@@ -300,15 +300,30 @@ namespace miki::rg {
 
         auto ExecutionStatsToJson(const ExecutionStats& s) -> json {
             return {
-                {"transientTexturesAllocated", s.transientTexturesAllocated},
-                {"transientBuffersAllocated", s.transientBuffersAllocated},
-                {"transientTextureViewsCreated", s.transientTextureViewsCreated},
-                {"heapsCreated", s.heapsCreated},
-                {"barriersEmitted", s.barriersEmitted},
-                {"batchesSubmitted", s.batchesSubmitted},
-                {"passesRecorded", s.passesRecorded},
-                {"secondaryCmdBufsUsed", s.secondaryCmdBufsUsed},
-                {"transientMemoryBytes", s.transientMemoryBytes},
+                {"allocation",
+                 {
+                     {"transientTexturesAllocated", s.allocation.transientTexturesAllocated},
+                     {"transientBuffersAllocated", s.allocation.transientBuffersAllocated},
+                     {"transientTextureViewsCreated", s.allocation.transientTextureViewsCreated},
+                     {"heapsCreated", s.allocation.heapsCreated},
+                     {"heapsReused", s.allocation.heapsReused},
+                     {"heapsEvicted", s.allocation.heapsEvicted},
+                     {"transientMemoryBytes", s.allocation.transientMemoryBytes},
+                     {"bufferSuballocations", s.allocation.bufferSuballocations},
+                     {"bufferSuballocBytes", s.allocation.bufferSuballocBytes},
+                 }},
+                {"recording",
+                 {
+                     {"barriersEmitted", s.recording.barriersEmitted},
+                     {"aliasingBarriersEmitted", s.recording.aliasingBarriersEmitted},
+                     {"passesRecorded", s.recording.passesRecorded},
+                     {"secondaryCmdBufsUsed", s.recording.secondaryCmdBufsUsed},
+                 }},
+                {"submission",
+                 {
+                     {"batchesSubmitted", s.submission.batchesSubmitted},
+                 }},
+                {"defragTriggered", s.defragTriggered},
             };
         }
 
