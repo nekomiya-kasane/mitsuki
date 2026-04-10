@@ -130,6 +130,21 @@ namespace miki::rhi {
         std::array<uint32_t, 3> maxComputeWorkGroupSize = {1024, 1024, 64};
 
         // =====================================================================
+        // Synchronization (D3D12 Enhanced/Fence Barriers)
+        // =====================================================================
+        bool hasEnhancedBarriers = false;  ///< D3D12 Enhanced Barriers (Agility SDK 1.7+)
+
+        /// @brief D3D12 Fence Barrier tier (Agility SDK 1.719+).
+        /// Tier1: command-list-scoped signal/wait (replaces split barriers).
+        /// Tier2 (future): cross-queue WaitBarrier + CPU fence signaling.
+        enum class FenceBarrierTier : uint8_t {
+            None = 0,
+            Tier1 = 1,
+            Tier2 = 2
+        };
+        FenceBarrierTier fenceBarrierTier = FenceBarrierTier::None;
+
+        // =====================================================================
         // Ray Tracing
         // =====================================================================
         bool hasRayQuery = false;

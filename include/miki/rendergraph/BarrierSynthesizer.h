@@ -5,8 +5,10 @@
  *  per-pass acquire/release BarrierCommand lists. Supports:
  *    - Full barriers (same queue, adjacent passes)
  *    - Split barriers (same queue, non-adjacent passes)
+ *    - D3D12 Fence Barriers Tier 1/2 (Agility SDK 1.719+, replaces split barriers)
  *    - Cross-queue QFOT barriers (Vulkan EXCLUSIVE images)
  *    - Cross-queue single barriers (D3D12, CONCURRENT buffers)
+ *    - Read-to-read barrier elision (AMD RDNA guidance: no read→read barriers)
  *
  *  See: specs/04-render-graph.md §5.5, §5.6, §7.2.2
  *  Namespace: miki::rg
@@ -15,11 +17,11 @@
 
 #include <cstdint>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 #include "miki/rendergraph/AsyncComputeScheduler.h"
 #include "miki/rendergraph/RenderGraphTypes.h"
+#include "miki/rhi/GpuCapabilityProfile.h"
 #include "miki/rhi/RhiEnums.h"
 
 namespace miki::rg {
@@ -33,6 +35,22 @@ namespace miki::rg {
     struct BarrierSynthesizerConfig {
         rhi::BackendType backendType = rhi::BackendType::Mock;
         bool enableSplitBarriers = true;
+        rhi::GpuCapabilityProfile::FenceBarrierTier fenceBarrierTier
+            = rhi::GpuCapabilityProfile::FenceBarrierTier::None;  ///< D3D12 Fence Barrier Tier
+        bool enableEnhancedBarriers = false;                      ///< D3D12 Enhanced Barriers
+    };
+
+    // =========================================================================
+    // Barrier synthesis statistics (for profiling)
+    // =========================================================================
+
+    struct BarrierSynthesisStats {
+        uint32_t fullBarriers = 0;        ///< Full (non-split) same-queue barriers
+        uint32_t splitBarriers = 0;       ///< Split same-queue barrier pairs
+        uint32_t crossQueueBarriers = 0;  ///< Cross-queue barriers (any type)
+        uint32_t qfotPairs = 0;           ///< QFOT release/acquire pairs
+        uint32_t elidedReadRead = 0;      ///< Read-to-read barriers elided
+        uint32_t totalBarriers = 0;       ///< Sum of all emitted barriers
     };
 
     // =========================================================================
@@ -44,11 +62,13 @@ namespace miki::rg {
         explicit BarrierSynthesizer(const BarrierSynthesizerConfig& config) noexcept : config_(config) {}
 
         /// @brief Run Stage 6: synthesize barriers for all passes in topological order.
-        /// Populates compiledPasses with per-pass acquire/release barriers.
         void Synthesize(
             const RenderGraphBuilder& builder, std::span<const uint32_t> order,
             std::span<const RGQueueType> queueAssignments, std::vector<CompiledPassInfo>& compiledPasses
         );
+
+        /// @brief Get barrier synthesis statistics from the last Synthesize() call.
+        [[nodiscard]] auto GetStats() const noexcept -> const BarrierSynthesisStats& { return stats_; }
 
        private:
         // Per-resource tracked state during synthesis
@@ -91,7 +111,8 @@ namespace miki::rg {
         );
 
         BarrierSynthesizerConfig config_;
-        std::unordered_map<uint16_t, ResourceState> resourceStates_;
+        std::vector<ResourceState> resourceStates_;  ///< Flat vector indexed by resource index
+        BarrierSynthesisStats stats_;
     };
 
 }  // namespace miki::rg

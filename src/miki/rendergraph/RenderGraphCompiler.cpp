@@ -951,9 +951,19 @@ namespace miki::rg {
                 result.syncPoints, queueAssignments, builder.GetPasses()
             );
             if (dlResult.hasCycle) {
+                result.demotedPassCount = static_cast<uint32_t>(dlResult.demotedPasses.size());
                 // Re-synthesize sync points after demotion changed queue assignments
                 result.syncPoints.clear();
                 SynthesizeCrossQueueSync(result.edges, queueAssignments, result.syncPoints);
+            }
+        }
+
+        // Populate scheduling statistics
+        for (uint32_t i = 0; i < queueAssignments.size(); ++i) {
+            switch (queueAssignments[i]) {
+                case RGQueueType::AsyncCompute: result.asyncPassCount++; break;
+                case RGQueueType::Transfer: result.transferPassCount++; break;
+                default: break;
             }
         }
 
@@ -970,6 +980,9 @@ namespace miki::rg {
         BarrierSynthesizer barrierSynth({
             .backendType = options_.backendType,
             .enableSplitBarriers = options_.enableSplitBarriers,
+            .fenceBarrierTier = options_.capabilities ? options_.capabilities->fenceBarrierTier
+                                                      : rhi::GpuCapabilityProfile::FenceBarrierTier::None,
+            .enableEnhancedBarriers = options_.capabilities ? options_.capabilities->hasEnhancedBarriers : false,
         });
         barrierSynth.Synthesize(builder, order, queueAssignments, result.passes);
 

@@ -69,8 +69,9 @@ namespace miki::rg {
         auto qfot
             = DetermineQfotStrategy(isTexture ? RGResourceKind::Texture : RGResourceKind::Buffer, config_.backendType);
 
+        stats_.crossQueueBarriers++;
+
         if (qfot == QfotStrategy::Exclusive) {
-            // Vulkan EXCLUSIVE images: release on src queue, acquire on dst queue
             BarrierCommand release = barrier;
             release.isSplitRelease = true;
             release.isSplitAcquire = false;
@@ -83,9 +84,11 @@ namespace miki::rg {
 
             compiledPasses[srcPos].releaseBarriers.push_back(release);
             compiledPasses[dstPos].acquireBarriers.push_back(acquire);
+            stats_.qfotPairs++;
+            stats_.totalBarriers += 2;
         } else {
-            // D3D12 or CONCURRENT: single barrier at dst pass
             compiledPasses[dstPos].acquireBarriers.push_back(barrier);
+            stats_.totalBarriers++;
         }
     }
 
@@ -97,7 +100,6 @@ namespace miki::rg {
         const BarrierCommand& barrier, uint32_t srcPos, uint32_t dstPos, std::vector<CompiledPassInfo>& compiledPasses
     ) {
         if (config_.enableSplitBarriers && srcPos != std::numeric_limits<uint32_t>::max() && dstPos - srcPos > 1) {
-            // Same-queue split barrier: release at previous pass, acquire at current
             BarrierCommand release = barrier;
             release.isSplitRelease = true;
             release.isSplitAcquire = false;
@@ -108,9 +110,12 @@ namespace miki::rg {
 
             compiledPasses[srcPos].releaseBarriers.push_back(release);
             compiledPasses[dstPos].acquireBarriers.push_back(acquire);
+            stats_.splitBarriers++;
+            stats_.totalBarriers += 2;
         } else {
-            // Full barrier at current pass
             compiledPasses[dstPos].acquireBarriers.push_back(barrier);
+            stats_.fullBarriers++;
+            stats_.totalBarriers++;
         }
     }
 
@@ -123,6 +128,10 @@ namespace miki::rg {
         std::span<const RGResourceNode> resources, std::vector<CompiledPassInfo>& compiledPasses
     ) {
         auto resIdx = handle.GetIndex();
+        // Ensure flat vector covers this resource index
+        if (resIdx >= resourceStates_.size()) {
+            resourceStates_.resize(resIdx + 1);
+        }
         auto& state = resourceStates_[resIdx];
         bool isTexture = (resIdx < resources.size() && resources[resIdx].kind == RGResourceKind::Texture);
 
@@ -174,6 +183,7 @@ namespace miki::rg {
 
         // Reset per-synthesis state
         resourceStates_.clear();
+        stats_ = {};
 
         // Process passes in topological order
         for (uint32_t pos = 0; pos < order.size(); ++pos) {

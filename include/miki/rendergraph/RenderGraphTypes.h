@@ -514,8 +514,10 @@ namespace miki::rg {
         bool isSplitAcquire = false;  ///< true = acquire half of split barrier
         bool isCrossQueue = false;
         bool isAliasingBarrier = false;  ///< true = aliasing barrier (UNDEFINED->initial, no src dependency)
+        bool isFenceBarrier = false;     ///< true = D3D12 Fence Barrier (Agility SDK 1.719+, replaces split)
         RGQueueType srcQueue = RGQueueType::Graphics;
         RGQueueType dstQueue = RGQueueType::Graphics;
+        uint64_t fenceValue = 0;  ///< Command-list-scoped fence value (D3D12 Fence Barrier Tier 1/2)
     };
 
     // =========================================================================
@@ -713,6 +715,12 @@ namespace miki::rg {
             [[nodiscard]] auto operator==(const StructuralHash&) const noexcept -> bool = default;
         };
         StructuralHash hash = {};
+
+        /// @brief Per-frame scheduling statistics (populated by compiler, Phase G)
+        uint32_t asyncPassCount = 0;
+        uint32_t transferPassCount = 0;
+        uint32_t pipelinedComputePassCount = 0;
+        uint32_t demotedPassCount = 0;
     };
 
     // =========================================================================
