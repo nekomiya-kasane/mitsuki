@@ -83,6 +83,10 @@ namespace miki::frame {
         /// @brief Get the current counter value (last committed) for a queue.
         [[nodiscard]] auto GetCurrentValue(rhi::QueueType queue) const -> uint64_t;
 
+        /// @brief Peek at the value that the next AllocateSignal will return.
+        /// Used by FrameManager::BeginFrame to compute graphicsTimelineTarget.
+        [[nodiscard]] auto PeekNextSignal(rhi::QueueType queue) const -> uint64_t;
+
         /// @brief Clear pending waits after a submit has been executed.
         /// Call after each vkQueueSubmit2 / ExecuteCommandLists.
         void CommitSubmit(rhi::QueueType queue);

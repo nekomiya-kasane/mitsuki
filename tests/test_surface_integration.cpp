@@ -256,6 +256,12 @@ class SurfaceIntegrationTest : public ::testing::TestWithParam<BackendInfo> {
         return fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{&batch, 1});
     }
 
+    // Helper: EndFrame with a single empty SubmitBatch (still advances timeline, unlike empty span)
+    auto EmptyEndFrame(miki::frame::FrameManager* fm) -> miki::core::Result<void> {
+        miki::frame::FrameManager::SubmitBatch empty{.commandBuffers = {}};
+        return fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{&empty, 1});
+    }
+
     auto SafeDestroy(WindowHandle h) -> void {
         if (sm_->HasSurface(h)) {
             (void)sm_->DetachSurface(h);
@@ -268,6 +274,9 @@ class SurfaceIntegrationTest : public ::testing::TestWithParam<BackendInfo> {
         }
         (void)wm_->DestroyWindow(h);
     }
+
+    // Baseline window count: 1 for OpenGL (context window), 0 for others.
+    [[nodiscard]] auto BaselineWindowCount() const -> uint32_t { return contextWindow_.IsValid() ? 1u : 0u; }
 
     GlfwWindowBackend* glfwBackend_ = nullptr;
     std::unique_ptr<WindowManager> wm_;
@@ -510,7 +519,7 @@ TEST_P(SurfaceIntegrationTest, CascadeDestroyWithSurfaces) {
     ASSERT_TRUE(cascadeResult.has_value());
     EXPECT_FALSE(sm_->HasSurface(root));
     EXPECT_FALSE(sm_->HasSurface(child));
-    EXPECT_EQ(wm_->GetWindowCount(), 0u);
+    EXPECT_EQ(wm_->GetWindowCount(), BaselineWindowCount());
 }
 
 TEST_P(SurfaceIntegrationTest, DestroyChildPreservesParentSurface) {
@@ -580,9 +589,10 @@ TEST_P(SurfaceIntegrationTest, DestroyWindowWithAttachedSurfaceFails) {
     auto h = MakeWindow("Dangling");
     ASSERT_TRUE(AttachSurface(h));
 
-    // HasSurface callback is set in SetUp — DestroyWindow should fail
+    // HasSurface callback is set in SetUp — DestroyWindow should fail with InvalidState
     auto r = wm_->DestroyWindow(h);
     EXPECT_FALSE(r.has_value());
+    EXPECT_EQ(r.error(), miki::core::ErrorCode::InvalidState);
 
     // Properly detach then destroy
     EXPECT_TRUE(sm_->DetachSurface(h).has_value());
@@ -646,7 +656,7 @@ TEST_P(SurfaceIntegrationTest, FullLifecycleCascadeStress) {
             EXPECT_TRUE(cr.has_value());
         }
     }
-    EXPECT_EQ(wm_->GetWindowCount(), 0u);
+    EXPECT_EQ(wm_->GetWindowCount(), BaselineWindowCount());
 }
 
 // ============================================================================
@@ -834,7 +844,7 @@ TEST_P(SurfaceIntegrationTest, ErrorRecoveryChain) {
     // (4) Clean shutdown
     SafeDestroy(h1);
     (void)wm_->DestroyWindow(h2);
-    EXPECT_EQ(wm_->GetWindowCount(), 0u);
+    EXPECT_EQ(wm_->GetWindowCount(), BaselineWindowCount());
 }
 
 // ============================================================================
@@ -896,7 +906,7 @@ TEST_P(SurfaceIntegrationTest, TwoWindowTimelineMonotonicity) {
             ASSERT_TRUE(ctx.has_value()) << "A BeginFrame failed at " << i;
             EXPECT_GT(ctx->graphicsTimelineTarget, prevValue)
                 << "A frame " << i << " target must exceed previous timeline value";
-            (void)fmA->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+            (void)EmptyEndFrame(fmA);
             uint64_t v = fmA->CurrentTimelineValue();
             EXPECT_GT(v, prevValue) << "A timeline must be strictly increasing at frame " << i;
             prevValue = v;
@@ -907,7 +917,7 @@ TEST_P(SurfaceIntegrationTest, TwoWindowTimelineMonotonicity) {
             ASSERT_TRUE(ctx.has_value()) << "B BeginFrame failed at " << i;
             EXPECT_GT(ctx->graphicsTimelineTarget, prevValue)
                 << "B frame " << i << " target must exceed previous timeline value";
-            (void)fmB->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+            (void)EmptyEndFrame(fmB);
             uint64_t v = fmB->CurrentTimelineValue();
             EXPECT_GT(v, prevValue) << "B timeline must be strictly increasing at frame " << i;
             prevValue = v;
@@ -949,7 +959,7 @@ TEST_P(SurfaceIntegrationTest, DetachDoesNotBreakOtherWindow) {
         ASSERT_TRUE(ctx.has_value()) << "B BeginFrame failed after A detach, frame " << i;
         EXPECT_GT(ctx->width, 0u);
         EXPECT_GT(ctx->height, 0u);
-        (void)fmB->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+        (void)EmptyEndFrame(fmB);
     }
 
     SafeDestroy(b);
@@ -967,7 +977,7 @@ TEST_P(SurfaceIntegrationTest, ReattachBindsSameSyncScheduler) {
 
     // Do a frame, then detach
     ASSERT_TRUE(fm1->BeginFrame().has_value());
-    (void)fm1->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+    (void)EmptyEndFrame(fm1);
     ASSERT_TRUE(sm_->DetachSurface(h).has_value());
 
     // Reattach
@@ -994,7 +1004,7 @@ TEST_P(SurfaceIntegrationTest, EmptyEndFrameAdvancesTimeline) {
     ASSERT_TRUE(ctx.has_value());
     uint64_t beforeTarget = ctx->graphicsTimelineTarget;
 
-    (void)fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+    (void)EmptyEndFrame(fm);
     uint64_t afterValue = fm->CurrentTimelineValue();
 
     EXPECT_GE(afterValue, beforeTarget) << "Empty EndFrame must still advance timeline";
@@ -1016,7 +1026,7 @@ TEST_P(SurfaceIntegrationTest, FrameContextTargetExceedsPreviousTimeline) {
         ASSERT_TRUE(ctx.has_value());
         EXPECT_GT(ctx->graphicsTimelineTarget, prevTimeline)
             << "graphicsTimelineTarget must exceed previous CurrentTimelineValue at frame " << i;
-        (void)fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+        (void)EmptyEndFrame(fm);
         prevTimeline = fm->CurrentTimelineValue();
         EXPECT_GE(prevTimeline, ctx->graphicsTimelineTarget)
             << "After EndFrame, CurrentTimelineValue must be >= target at frame " << i;
@@ -1057,17 +1067,17 @@ TEST_P(SurfaceIntegrationTest, ThreeWindowCrossInterleavedFrames) {
         ASSERT_TRUE(ctxC.has_value()) << "C.Begin failed round " << round;
 
         // End in different order: A, C, B
-        (void)fmA->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+        (void)EmptyEndFrame(fmA);
         uint64_t vA = fmA->CurrentTimelineValue();
         EXPECT_GT(vA, prevValue) << "A end must advance beyond prev, round " << round;
         prevValue = vA;
 
-        (void)fmC->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+        (void)EmptyEndFrame(fmC);
         uint64_t vC = fmC->CurrentTimelineValue();
         EXPECT_GT(vC, prevValue) << "C end must advance beyond prev, round " << round;
         prevValue = vC;
 
-        (void)fmB->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+        (void)EmptyEndFrame(fmB);
         uint64_t vB = fmB->CurrentTimelineValue();
         EXPECT_GT(vB, prevValue) << "B end must advance beyond prev, round " << round;
         prevValue = vB;
@@ -1101,9 +1111,9 @@ TEST_P(SurfaceIntegrationTest, HotPlugStorm) {
         // 3 frames alternating
         for (int f = 0; f < 3; ++f) {
             ASSERT_TRUE(fmA->BeginFrame().has_value());
-            (void)fmA->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+            (void)EmptyEndFrame(fmA);
             ASSERT_TRUE(fmB->BeginFrame().has_value());
-            (void)fmB->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+            (void)EmptyEndFrame(fmB);
         }
 
         uint64_t mid = fmA->CurrentTimelineValue();
@@ -1125,9 +1135,9 @@ TEST_P(SurfaceIntegrationTest, HotPlugStorm) {
         // 3 more frames
         for (int f = 0; f < 3; ++f) {
             ASSERT_TRUE(fmA->BeginFrame().has_value());
-            (void)fmA->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+            (void)EmptyEndFrame(fmA);
             ASSERT_TRUE(fmB->BeginFrame().has_value());
-            (void)fmB->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+            (void)EmptyEndFrame(fmB);
         }
 
         uint64_t end = fmB->CurrentTimelineValue();
@@ -1159,7 +1169,7 @@ TEST_P(SurfaceIntegrationTest, AsymmetricFrameCount) {
     for (int i = 0; i < 20; ++i) {
         auto ctx = fmA->BeginFrame();
         ASSERT_TRUE(ctx.has_value()) << "A frame " << i << " BeginFrame failed";
-        (void)fmA->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+        (void)EmptyEndFrame(fmA);
     }
 
     uint64_t afterA = fmA->CurrentTimelineValue();
@@ -1170,7 +1180,7 @@ TEST_P(SurfaceIntegrationTest, AsymmetricFrameCount) {
     ASSERT_TRUE(ctxB.has_value()) << "B BeginFrame failed after A did 20 frames";
     EXPECT_GT(ctxB->graphicsTimelineTarget, afterA) << "B's target must exceed A's accumulated timeline";
 
-    (void)fmB->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+    (void)EmptyEndFrame(fmB);
     uint64_t afterB = fmB->CurrentTimelineValue();
     EXPECT_GT(afterB, afterA) << "B's EndFrame must advance beyond A's timeline";
 
@@ -1193,9 +1203,9 @@ TEST_P(SurfaceIntegrationTest, WaitAllDoesNotCorruptOtherWindow) {
     // Both do 3 frames
     for (int i = 0; i < 3; ++i) {
         ASSERT_TRUE(fmA->BeginFrame().has_value());
-        (void)fmA->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+        (void)EmptyEndFrame(fmA);
         ASSERT_TRUE(fmB->BeginFrame().has_value());
-        (void)fmB->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+        (void)EmptyEndFrame(fmB);
     }
 
     // Record B's state before A's WaitAll
@@ -1211,7 +1221,7 @@ TEST_P(SurfaceIntegrationTest, WaitAllDoesNotCorruptOtherWindow) {
 
     // B must still be able to render
     ASSERT_TRUE(fmB->BeginFrame().has_value());
-    (void)fmB->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
+    (void)EmptyEndFrame(fmB);
 
     SafeDestroy(a);
     SafeDestroy(b);

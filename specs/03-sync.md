@@ -252,6 +252,16 @@ public:
     /// Graphics queue will wait on this at the appropriate stage.
     auto SetTransferSyncPoint(rhi::TimelineSyncPoint point) noexcept -> void;
 
+    // ── SyncScheduler integration (§4.4, mandatory) ───────────
+
+    /// @brief Bind a SyncScheduler for global timeline value allocation (mandatory).
+    /// Must be called with a non-null scheduler before the first BeginFrame.
+    auto SetSyncScheduler(SyncScheduler* scheduler) noexcept -> void;
+
+    /// @brief Get the partial timeline value from the first signaled batch
+    /// of the last EndFrameSplit. Returns 0 if no partial signal occurred.
+    [[nodiscard]] auto GetLastPartialTimelineValue() const noexcept -> uint64_t;
+
     // ── Resource lifecycle hooks ────────────────────────────────
 
     auto SetStagingRing(resource::StagingRing* ring) noexcept -> void;
@@ -320,9 +330,9 @@ struct FrameContext {
 
 ### 4.4 FrameManager ↔ SyncScheduler Integration Contract
 
-#### 4.4.1 Problem: Local vs Global Timeline Allocation
+#### 4.4.1 Problem: Local vs Global Timeline Allocation (Resolved)
 
-The current implementation uses `++currentTimelineValue` locally within FrameManager::Impl. This has three limitations:
+The original implementation used `++currentTimelineValue` locally within FrameManager::Impl. This had three limitations (all resolved by making SyncScheduler mandatory in §4.4.2):
 
 | #   | Issue                                  | Severity | Impact                                                                                                                      |
 | --- | -------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -330,25 +340,27 @@ The current implementation uses `++currentTimelineValue` locally within FrameMan
 | 2   | **No intra-frame partial value query** | High     | `GetGraphicsSyncPoint()` returns the frame-end value, not intermediate batch values from `EndFrameSplit`                    |
 | 3   | **SyncScheduler bypass**               | Medium   | FrameManager does not go through `SyncScheduler::AllocateSignal()`, so the scheduler's `currentValue` diverges from reality |
 
-#### 4.4.2 Design: SyncScheduler-Backed Allocation
+#### 4.4.2 Design: SyncScheduler-Backed Allocation (Mandatory)
 
-FrameManager accepts an optional `SyncScheduler*`. When set, **all timeline value allocation is delegated** to the scheduler. When null (standalone / test mode), the local `++currentTimelineValue` fallback is retained for backward compatibility with existing tests.
+FrameManager **requires** a bound `SyncScheduler*`. All timeline value allocation is delegated to the scheduler — there is no local fallback. This eliminates the dual-path complexity and ensures multi-window correctness by construction.
+
+- `SetSyncScheduler(nullptr)` triggers `MIKI_LOG_ERROR` + `assert(false)`.
+- `BeginFrame` / `EndFrame` / `FlushTransfers` assert that `syncScheduler != nullptr`.
+- Tests must create and bind a `SyncScheduler` before calling `BeginFrame`.
 
 ```cpp
 class FrameManager {
 public:
     // ... existing API ...
 
-    /// @brief Bind a SyncScheduler for global timeline value allocation.
-    /// Must be called before the first BeginFrame. Typically set by FrameOrchestrator.
-    /// When bound:
-    ///   - EndFrame/EndFrameSplit calls SyncScheduler::AllocateSignal(Graphics)
-    ///     instead of local ++currentTimelineValue.
+    /// @brief Bind a SyncScheduler for global timeline value allocation (mandatory).
+    /// Must be called with a non-null scheduler before the first BeginFrame.
+    /// Typically set by SurfaceManager::AttachSurface or FrameOrchestrator.
+    ///   - EndFrame/EndFrameSplit calls SyncScheduler::AllocateSignal(Graphics).
+    ///   - BeginFrame uses SyncScheduler::PeekNextSignal(Graphics) for graphicsTimelineTarget.
     ///   - GetGraphicsSyncPoint() can return batch-level partial values.
     ///   - Transfer dispatches use AllocateSignal(Transfer).
     ///   - Multi-window safety is guaranteed (values globally monotonic).
-    /// When null (default):
-    ///   - Local ++currentTimelineValue is used (single-window only).
     auto SetSyncScheduler(SyncScheduler* scheduler) noexcept -> void;
 
     /// @brief Get the partial timeline value signaled by the last completed batch
@@ -363,27 +375,33 @@ public:
 ```cpp
 struct FrameManager::Impl {
     // ... existing fields ...
-    SyncScheduler* syncScheduler = nullptr;  // Optional, owned by FrameOrchestrator
+    SyncScheduler* syncScheduler = nullptr;  // Mandatory, owned by SurfaceManager/FrameOrchestrator
 
     // Partial timeline tracking for GetGraphicsSyncPoint / GetLastPartialTimelineValue
     uint64_t lastPartialTimelineValue = 0;  // Set by EndFrameSplit batch[0] signal
 
     [[nodiscard]] auto AllocateGraphicsSignal() -> uint64_t {
-        if (syncScheduler) return syncScheduler->AllocateSignal(rhi::QueueType::Graphics);
-        return ++currentTimelineValue;
+        assert(syncScheduler && "SyncScheduler is required");
+        auto v = syncScheduler->AllocateSignal(rhi::QueueType::Graphics);
+        currentTimelineValue = v;
+        return v;
     }
 
     [[nodiscard]] auto AllocateTransferSignal() -> uint64_t {
-        if (syncScheduler) return syncScheduler->AllocateSignal(rhi::QueueType::Transfer);
-        return ++currentTransferTimelineValue;
+        assert(syncScheduler && "SyncScheduler is required");
+        auto v = syncScheduler->AllocateSignal(rhi::QueueType::Transfer);
+        currentTransferTimelineValue = v;
+        return v;
     }
 
     void CommitGraphicsSubmit() {
-        if (syncScheduler) syncScheduler->CommitSubmit(rhi::QueueType::Graphics);
+        assert(syncScheduler && "SyncScheduler is required");
+        syncScheduler->CommitSubmit(rhi::QueueType::Graphics);
     }
 
     void CommitTransferSubmit() {
-        if (syncScheduler) syncScheduler->CommitSubmit(rhi::QueueType::Transfer);
+        assert(syncScheduler && "SyncScheduler is required");
+        syncScheduler->CommitSubmit(rhi::QueueType::Transfer);
     }
 };
 ```
@@ -1891,6 +1909,13 @@ public:
     /// @brief Get the signal value for a queue's next submit.
     [[nodiscard]] auto GetSignalValue(QueueType queue) -> uint64_t;
 
+    /// @brief Peek at the value that the next AllocateSignal will return.
+    /// Used by FrameManager::BeginFrame to compute graphicsTimelineTarget.
+    [[nodiscard]] auto PeekNextSignal(QueueType queue) const -> uint64_t;
+
+    /// @brief Get the current counter value (last committed) for a queue.
+    [[nodiscard]] auto GetCurrentValue(QueueType queue) const -> uint64_t;
+
     /// @brief Clear pending state after submit.
     auto CommitSubmit(QueueType queue) -> void;
 
@@ -2603,9 +2628,10 @@ FM-XQ-07  GIVEN T1 FM with SyncScheduler bound, 2 frames completed
           WHEN  SyncScheduler::GetCurrentValue(Graphics) is queried
           THEN  returns same value as FM.CurrentTimelineValue()
 
-FM-XQ-08  GIVEN T1 FM without SyncScheduler (null), 5 frames completed
-          WHEN  CurrentTimelineValue() is queried
-          THEN  returns 5 (local fallback works unchanged)
+FM-XQ-08  GIVEN FM created without SetSyncScheduler
+          WHEN  BeginFrame() is called
+          THEN  assertion fires ("SyncScheduler must be bound before BeginFrame")
+          AND   MIKI_LOG_ERROR is emitted if SetSyncScheduler(nullptr) was attempted
 
 FM-XQ-09  GIVEN T1 FM, AddComputeSyncPoint({sem1, 10}, ComputeShader)
           AND   AddComputeSyncPoint({sem2, 20}, FragmentShader)

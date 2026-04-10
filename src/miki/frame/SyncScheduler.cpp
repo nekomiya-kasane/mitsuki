@@ -52,6 +52,10 @@ namespace miki::frame {
         return queues_[QueueIndex(queue)].currentValue;
     }
 
+    auto SyncScheduler::PeekNextSignal(rhi::QueueType queue) const -> uint64_t {
+        return queues_[QueueIndex(queue)].nextValue;
+    }
+
     void SyncScheduler::CommitSubmit(rhi::QueueType queue) {
         auto& state = queues_[QueueIndex(queue)];
         state.currentValue = state.nextValue - 1;  // Mark last allocated as committed

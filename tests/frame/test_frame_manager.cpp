@@ -46,12 +46,22 @@ class FrameManagerTest : public RhiTest {
         if (GetParam() == BackendType::Mock) {
             GTEST_SKIP() << "FrameManager requires real sync primitives; Mock backend skipped";
         }
+
+        // Initialize device-global SyncScheduler (mandatory for FrameManager)
+        auto timelines = Dev().Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
+        syncScheduler_.Init(timelines);
     }
 
-    // Helper: create offscreen FrameManager with given framesInFlight
+    // Helper: create offscreen FrameManager with SyncScheduler bound
     [[nodiscard]] auto MakeOffscreen(uint32_t framesInFlight = 2) -> core::Result<FrameManager> {
-        return FrameManager::CreateOffscreen(Dev(), 1920, 1080, framesInFlight);
+        auto result = FrameManager::CreateOffscreen(Dev(), 1920, 1080, framesInFlight);
+        if (result.has_value()) {
+            result->SetSyncScheduler(&syncScheduler_);
+        }
+        return result;
     }
+
+    SyncScheduler syncScheduler_;
 
     // Helper: EndFrame with a single command buffer (no convenience overload).
     static auto EndFrameSingle(FrameManager& fm, rhi::CommandBufferHandle cmd) -> core::Result<void> {

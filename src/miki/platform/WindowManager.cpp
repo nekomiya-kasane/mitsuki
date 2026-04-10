@@ -222,10 +222,13 @@ namespace miki::platform {
         impl_->CollectPostOrder(iHandle, victims);
         victims.push_back(iHandle);
 
-        // Assert no GPU surfaces attached (debug only)
+        // Reject if any window in the subtree still has a GPU surface attached.
+        // Caller must DetachSurface before DestroyWindow (spec SS6.3).
         if (impl_->hasSurfaceCallback) {
             for (auto& v : victims) {
-                assert(!impl_->hasSurfaceCallback(v) && "DetachSurface before DestroyWindow");
+                if (impl_->hasSurfaceCallback(v)) {
+                    return std::unexpected(miki::core::ErrorCode::InvalidState);
+                }
             }
         }
 

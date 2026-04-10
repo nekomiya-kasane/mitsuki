@@ -42,6 +42,8 @@
 #include <array>
 #include <cassert>
 
+#include "miki/debug/StructuredLogger.h"
+
 #include "miki/frame/CommandPoolAllocator.h"
 #include "miki/frame/DeferredDestructor.h"
 #include "miki/resource/ReadbackRing.h"
@@ -131,33 +133,27 @@ namespace miki::frame {
         }
 
         [[nodiscard]] auto AllocateGraphicsSignal() -> uint64_t {
-            if (syncScheduler) {
-                auto v = syncScheduler->AllocateSignal(rhi::QueueType::Graphics);
-                currentTimelineValue = v;
-                return v;
-            }
-            return ++currentTimelineValue;
+            assert(syncScheduler && "SyncScheduler is required");
+            auto v = syncScheduler->AllocateSignal(rhi::QueueType::Graphics);
+            currentTimelineValue = v;
+            return v;
         }
 
         [[nodiscard]] auto AllocateTransferSignal() -> uint64_t {
-            if (syncScheduler) {
-                auto v = syncScheduler->AllocateSignal(rhi::QueueType::Transfer);
-                currentTransferTimelineValue = v;
-                return v;
-            }
-            return ++currentTransferTimelineValue;
+            assert(syncScheduler && "SyncScheduler is required");
+            auto v = syncScheduler->AllocateSignal(rhi::QueueType::Transfer);
+            currentTransferTimelineValue = v;
+            return v;
         }
 
         void CommitGraphicsSubmit() {
-            if (syncScheduler) {
-                syncScheduler->CommitSubmit(rhi::QueueType::Graphics);
-            }
+            assert(syncScheduler && "SyncScheduler is required");
+            syncScheduler->CommitSubmit(rhi::QueueType::Graphics);
         }
 
         void CommitTransferSubmit() {
-            if (syncScheduler) {
-                syncScheduler->CommitSubmit(rhi::QueueType::Transfer);
-            }
+            assert(syncScheduler && "SyncScheduler is required");
+            syncScheduler->CommitSubmit(rhi::QueueType::Transfer);
         }
 
         [[nodiscard]] auto HasPendingTransfers() const -> bool {
@@ -456,8 +452,9 @@ namespace miki::frame {
         // 2. Advance frame number
         impl_->frameNumber++;
 
-        // 3. Compute the timeline value this frame will signal upon completion
-        uint64_t targetTimeline = impl_->currentTimelineValue + 1;
+        // 3. Compute the timeline value this frame will signal upon completion.
+        assert(impl_->syncScheduler && "SyncScheduler must be bound before BeginFrame");
+        uint64_t targetTimeline = impl_->syncScheduler->PeekNextSignal(rhi::QueueType::Graphics);
 
         // 4. Acquire swapchain image (windowed mode only)
         rhi::TextureHandle swapchainImage;
@@ -725,6 +722,14 @@ namespace miki::frame {
 
     auto FrameManager::SetSyncScheduler(SyncScheduler* iScheduler) noexcept -> void {
         assert(impl_ && "FrameManager used after move");
+        if (!iScheduler) {
+            MIKI_LOG_ERROR(
+                debug::LogCategory::Render,
+                "[FrameManager] SetSyncScheduler called with null — SyncScheduler is mandatory"
+            );
+            assert(false && "SyncScheduler must not be null");
+            return;
+        }
         impl_->syncScheduler = iScheduler;
     }
 
@@ -744,8 +749,7 @@ namespace miki::frame {
             return;
         }
 
-        uint64_t fenceValue
-            = impl_->syncScheduler ? impl_->AllocateTransferSignal() : (impl_->currentTimelineValue + 1);
+        uint64_t fenceValue = impl_->AllocateTransferSignal();
         impl_->SubmitTransferCopies(fenceValue);
         impl_->CommitTransferSubmit();
         impl_->transfersFlushed = true;

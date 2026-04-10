@@ -140,10 +140,10 @@ namespace miki::frame {
 
         // ── SyncScheduler integration (specs/03-sync.md §4.4) ───────
 
-        /// @brief Bind a SyncScheduler for global timeline value allocation.
-        /// When bound, EndFrame delegates AllocateSignal/CommitSubmit to the scheduler.
-        /// When null (default), local ++currentTimelineValue fallback is used.
-        /// Must be called before the first BeginFrame. Typically set by FrameOrchestrator.
+        /// @brief Bind a SyncScheduler for global timeline value allocation (mandatory).
+        /// EndFrame delegates AllocateSignal/CommitSubmit to the scheduler.
+        /// Must be called with a non-null scheduler before the first BeginFrame.
+        /// Typically set by SurfaceManager::AttachSurface or FrameOrchestrator.
         auto SetSyncScheduler(SyncScheduler* iScheduler) noexcept -> void;
 
         /// @brief Get the partial timeline value from the first signaled batch of the last EndFrame.
