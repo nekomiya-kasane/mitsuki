@@ -26,6 +26,18 @@ namespace miki::rhi {
             WaitIdleImpl();
         }
 
+        // Destroy queue timelines before pools are torn down
+        if (queueTimelines_.graphics.IsValid()) {
+            DestroySemaphoreImpl(queueTimelines_.graphics);
+        }
+        if (queueTimelines_.compute.IsValid()) {
+            DestroySemaphoreImpl(queueTimelines_.compute);
+        }
+        if (queueTimelines_.transfer.IsValid()) {
+            DestroySemaphoreImpl(queueTimelines_.transfer);
+        }
+        queueTimelines_ = {};
+
         if (pushConstantBindGroup_) {
             wgpuBindGroupRelease(pushConstantBindGroup_);
         }
@@ -198,6 +210,20 @@ namespace miki::rhi {
 
         // --- Push constant emulation resources ---
         CreatePushConstantResources();
+
+        // Create emulated queue timelines (CPU-side counter)
+        {
+            SemaphoreDesc tlDesc{.type = SemaphoreType::Timeline, .initialValue = 0};
+            if (auto r = CreateSemaphoreImpl(tlDesc)) {
+                queueTimelines_.graphics = *r;
+            }
+            if (auto r = CreateSemaphoreImpl(tlDesc)) {
+                queueTimelines_.compute = *r;
+            }
+            if (auto r = CreateSemaphoreImpl(tlDesc)) {
+                queueTimelines_.transfer = *r;
+            }
+        }
 
         MIKI_LOG_INFO(::miki::debug::LogCategory::Rhi, "WebGPU (Dawn) device initialized successfully");
         return {};

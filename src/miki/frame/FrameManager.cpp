@@ -1,20 +1,26 @@
 /** @file FrameManager.cpp
- *  @brief Timeline-first frame pacing — tier-adaptive GPU/CPU synchronization.
+ *  @brief Unified-timeline frame pacing — all backends, single code path.
  *
  *  Architecture:
  *    - Ring of N frame slots (default 2, max 3).
  *    - Each slot tracks a monotonic timeline value.
  *    - BeginFrame: CPU waits until the oldest slot's timeline value is reached.
- *    - EndFrame:   Submits command buffers, signals next timeline value, presents.
+ *    - EndFrame:   Submits command batches, signals next timeline value, presents.
+ *
+ *  All backends use device-global timeline semaphores:
+ *    T1 (Vulkan 1.4 / D3D12): Native timeline semaphore.
+ *    T2 (Vulkan Compat):       Emulated via VK_KHR_timeline_semaphore.
+ *    T3/T4 (WebGPU / OpenGL):  Emulated via CPU-side counter + backend sync.
+ *  This eliminates all tier-specific branching in frame management.
  *
  *  Transfer dispatch (two entry points, mutually exclusive per frame):
  *
  *  FlushTransfers() — EAGER path (recommended, call after CPU memcpy)
- *  │  Only works on T1 + hasAsyncTransfer (dedicated DMA queue).
+ *  │  Only works when hasAsyncTransfer (dedicated DMA queue).
  *  │  Sets transfersFlushed = true; EndFrame skips re-dispatch.
  *  │  Transfer runs in parallel with cmd recording (~2ms overlap).
  *  │
- *  EndFrame / EndFrameSplit — LAZY path (fallback if FlushTransfers not called)
+ *  EndFrame — LAZY path (fallback if FlushTransfers not called)
  *  │
  *  ├─ hasAsyncTransfer && !transfersFlushed && pending copies?
  *  │   └─ SubmitTransferCopies() (same as FlushTransfers)
@@ -26,16 +32,6 @@
  *  │
  *  └─ transfersFlushed || no pending copies?
  *      └─ FlushFrame only (lifecycle bookkeeping)
- *
- *  Tier adaptation:
- *    T1 (Vulkan 1.4 / D3D12): Timeline semaphore — single object per queue.
- *      CPU waits via WaitSemaphore(timeline, oldValue). GPU signals via SubmitDesc.
- *    T2 (Vulkan Compat):       Binary semaphore + VkFence per frame slot.
- *      CPU waits via WaitFence. GPU signals fence in SubmitDesc.
- *    T3 (WebGPU):              Implicit sync — wgpuQueueSubmit is synchronous enough.
- *      No explicit CPU wait; Present blocks if needed.
- *    T4 (OpenGL):              Implicit sync — glfwSwapBuffers blocks.
- *      No explicit wait.
  *
  *  See: specs/03-sync.md §4, specs/01-window-manager.md §5–§6.
  */
@@ -65,8 +61,7 @@ namespace miki::frame {
 
     struct FrameSlot {
         uint64_t timelineValue = 0;       // Timeline value this slot was submitted at
-        rhi::FenceHandle fence;           // T2 only: per-slot binary fence
-        rhi::SemaphoreHandle imageAvail;  // T1/T2: binary sem for swapchain acquire
+        rhi::SemaphoreHandle imageAvail;  // Binary sem for swapchain acquire
         // NOTE: renderDone is NOT per-slot — it is per-swapchain-image.
         // See Impl::imageRenderDone[] and specs/03-sync.md present semaphore lifetime.
     };
@@ -78,7 +73,6 @@ namespace miki::frame {
     struct FrameManager::Impl {
         rhi::DeviceHandle device;
         rhi::RenderSurface* surface = nullptr;  // nullptr = offscreen mode
-        rhi::CapabilityTier tier = rhi::CapabilityTier::Tier4_OpenGL;
 
         // Frame ring
         uint32_t framesInFlight = kDefaultFramesInFlight;
@@ -86,13 +80,17 @@ namespace miki::frame {
         uint64_t frameNumber = 0;  // Monotonic, never wraps
         std::array<FrameSlot, kMaxFramesInFlight> slots{};
 
-        // Timeline semaphore (T1 only — single object, shared across all slots)
+        // Timeline semaphore (device-global, shared across all slots, all backends)
         rhi::SemaphoreHandle graphicsTimeline;
         uint64_t currentTimelineValue = 0;  // Last signaled value
 
         // Cross-queue sync points
-        TimelineSyncPoint computeSync;
         TimelineSyncPoint transferSync;
+        std::vector<rhi::SemaphoreSubmitInfo> computeSyncPoints;  // Additive multi-compute waits (§4.4.4)
+
+        // SyncScheduler integration (specs/03-sync.md §4.4)
+        SyncScheduler* syncScheduler = nullptr;
+        uint64_t lastPartialTimelineValue = 0;  // First partial signal from last EndFrame
 
         // Transfer queue integration (specs/03-sync.md §7.3)
         bool hasAsyncTransfer = false;
@@ -119,54 +117,46 @@ namespace miki::frame {
         // Command pool allocator (§19)
         CommandPoolAllocator commandPoolAllocator;
 
-        // ── Helpers ──────────────────────────────────────────────
+        // ── Helpers ───────────────────────────────────────────────────
 
-        [[nodiscard]] auto IsTimeline() const noexcept -> bool {
-            return tier == rhi::CapabilityTier::Tier1_Vulkan || tier == rhi::CapabilityTier::Tier1_D3D12;
-        }
-
-        [[nodiscard]] auto IsFenceBased() const noexcept -> bool { return tier == rhi::CapabilityTier::Tier2_Compat; }
-
-        [[nodiscard]] auto IsImplicitSync() const noexcept -> bool {
-            return tier == rhi::CapabilityTier::Tier3_WebGPU || tier == rhi::CapabilityTier::Tier4_OpenGL;
-        }
-
-        // Pure wait — blocks until the GPU work submitted on this slot is complete.
-        // Does NOT reset fences. This is safe to call from both BeginFrame and WaitAll.
-        // On an already-signaled fence (e.g. after WaitAll), vkWaitForFences returns immediately.
+        // Unified wait — blocks until the GPU work submitted on this slot is complete.
+        // All backends use timeline semaphore (native or emulated).
         void WaitForSlot(uint32_t slotIdx) {
             auto& slot = slots[slotIdx];
-
-            if (IsTimeline()) {
-                // T1: CPU wait on timeline semaphore for this slot's value
-                if (slot.timelineValue > 0) {
-                    device.Dispatch([&](auto& dev) {
-                        dev.WaitSemaphore(graphicsTimeline, slot.timelineValue, UINT64_MAX);
-                    });
-                }
-            } else if (IsFenceBased()) {
-                // T2: CPU wait on per-slot fence (does NOT reset — see ResetSlotFence)
-                if (slot.fence.IsValid() && slot.timelineValue > 0) {
-                    device.Dispatch([&](auto& dev) { dev.WaitFence(slot.fence, UINT64_MAX); });
-                }
+            if (graphicsTimeline.IsValid() && slot.timelineValue > 0) {
+                device.Dispatch([&](auto& dev) {
+                    dev.WaitSemaphore(graphicsTimeline, slot.timelineValue, UINT64_MAX);
+                });
             }
-            // T3/T4: implicit sync, no CPU wait needed
         }
 
-        // Reset the slot's fence so it can be reused by the next vkQueueSubmit.
-        // Must be called AFTER WaitForSlot confirms GPU completion.
-        // Separated from WaitForSlot so that WaitAll (drain-only) doesn't reset fences
-        // that have no subsequent submit — which would cause the next BeginFrame to
-        // deadlock on an unsignaled fence.
-        void ResetSlotFence(uint32_t slotIdx) {
-            if (!IsFenceBased()) {
-                return;
+        [[nodiscard]] auto AllocateGraphicsSignal() -> uint64_t {
+            if (syncScheduler) {
+                auto v = syncScheduler->AllocateSignal(rhi::QueueType::Graphics);
+                currentTimelineValue = v;
+                return v;
             }
-            auto& slot = slots[slotIdx];
-            // Reset is needed even on first frame (fence created signaled) because
-            // vkQueueSubmit2 requires an unsignaled fence (VUID-vkQueueSubmit2-fence-04895).
-            if (slot.fence.IsValid()) {
-                device.Dispatch([&](auto& dev) { dev.ResetFence(slot.fence); });
+            return ++currentTimelineValue;
+        }
+
+        [[nodiscard]] auto AllocateTransferSignal() -> uint64_t {
+            if (syncScheduler) {
+                auto v = syncScheduler->AllocateSignal(rhi::QueueType::Transfer);
+                currentTransferTimelineValue = v;
+                return v;
+            }
+            return ++currentTransferTimelineValue;
+        }
+
+        void CommitGraphicsSubmit() {
+            if (syncScheduler) {
+                syncScheduler->CommitSubmit(rhi::QueueType::Graphics);
+            }
+        }
+
+        void CommitTransferSubmit() {
+            if (syncScheduler) {
+                syncScheduler->CommitSubmit(rhi::QueueType::Transfer);
             }
         }
 
@@ -259,40 +249,27 @@ namespace miki::frame {
         }
 
         void CreateSyncObjects() {
-            if (IsTimeline()) {
-                // T1: Reuse the device-global timeline semaphores (specs/03-sync.md §8.2)
-                auto timelines = device.Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
-                graphicsTimeline = timelines.graphics;
-                if (hasAsyncTransfer) {
-                    transferTimeline = timelines.transfer;
-                }
+            // All backends now provide device-global timeline semaphores (native or emulated)
+            auto timelines = device.Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
+            graphicsTimeline = timelines.graphics;
+            if (hasAsyncTransfer) {
+                transferTimeline = timelines.transfer;
             }
 
+            // Binary semaphores for swapchain acquire (per-slot)
+            rhi::SemaphoreDesc binDesc{.type = rhi::SemaphoreType::Binary, .initialValue = 0};
             for (uint32_t i = 0; i < framesInFlight; ++i) {
-                if (IsFenceBased()) {
-                    // T2: Per-slot fence (signaled initially so first WaitFence doesn't block)
-                    auto fenceResult = device.Dispatch([&](auto& dev) { return dev.CreateFence(true); });
-                    if (fenceResult) {
-                        slots[i].fence = *fenceResult;
-                    }
-                }
-
-                if (!IsImplicitSync()) {
-                    // T1/T2: Binary semaphore for swapchain acquire (per-slot is correct)
-                    rhi::SemaphoreDesc binDesc{.type = rhi::SemaphoreType::Binary, .initialValue = 0};
-                    auto availResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
-                    if (availResult) {
-                        slots[i].imageAvail = *availResult;
-                    }
+                auto availResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
+                if (availResult) {
+                    slots[i].imageAvail = *availResult;
                 }
             }
 
             // Per-swapchain-image renderDone semaphores.
             // Present holds renderDone asynchronously until the image is re-acquired,
             // so we index by image (not slot) to avoid reuse conflicts.
-            if (!IsImplicitSync() && surface) {
+            if (surface) {
                 swapchainImageCount = surface->GetSwapchainImageCount();
-                rhi::SemaphoreDesc binDesc{.type = rhi::SemaphoreType::Binary, .initialValue = 0};
                 for (uint32_t i = 0; i < swapchainImageCount; ++i) {
                     auto doneResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
                     if (doneResult) {
@@ -305,7 +282,7 @@ namespace miki::frame {
         // Rebuild per-image renderDone semaphores after swapchain recreation.
         // Caller must ensure all GPU work is complete (WaitAll) before calling.
         void RecreatePresentSemaphores() {
-            if (IsImplicitSync() || !surface) {
+            if (!surface) {
                 return;
             }
             // Destroy old
@@ -329,10 +306,6 @@ namespace miki::frame {
         void DestroySyncObjects() {
             for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
                 auto& slot = slots[i];
-                if (slot.fence.IsValid()) {
-                    device.Dispatch([&](auto& dev) { dev.DestroyFence(slot.fence); });
-                    slot.fence = {};
-                }
                 if (slot.imageAvail.IsValid()) {
                     device.Dispatch([&](auto& dev) { dev.DestroySemaphore(slot.imageAvail); });
                     slot.imageAvail = {};
@@ -379,8 +352,7 @@ namespace miki::frame {
         impl->surface = &iSurface;
         impl->framesInFlight = std::clamp(iFramesInFlight, 1u, kMaxFramesInFlight);
         auto caps = iDevice.Dispatch([](const auto& dev) { return dev.GetCapabilities(); });
-        impl->tier = caps.tier;
-        impl->hasAsyncTransfer = caps.hasAsyncTransfer && caps.hasTimelineSemaphore;
+        impl->hasAsyncTransfer = caps.hasAsyncTransfer;
 
         impl->CreateSyncObjects();
 
@@ -415,8 +387,7 @@ namespace miki::frame {
         impl->surface = nullptr;  // Offscreen
         impl->framesInFlight = std::clamp(iFramesInFlight, 1u, kMaxFramesInFlight);
         auto caps = iDevice.Dispatch([](const auto& dev) { return dev.GetCapabilities(); });
-        impl->tier = caps.tier;
-        impl->hasAsyncTransfer = caps.hasAsyncTransfer && caps.hasTimelineSemaphore;
+        impl->hasAsyncTransfer = caps.hasAsyncTransfer;
         impl->offscreenWidth = iWidth;
         impl->offscreenHeight = iHeight;
 
@@ -454,10 +425,6 @@ namespace miki::frame {
         // 1. CPU wait: ensure this slot's previous GPU work is complete
         impl_->WaitForSlot(impl_->frameIndex);
 
-        // 1.0a. Reset fence for reuse by the next submit (T2 only; T1/T3/T4 no-op).
-        // Must happen after wait confirms GPU completion, before any new submit on this slot.
-        impl_->ResetSlotFence(impl_->frameIndex);
-
         // 1a. Reset command pools for this slot (§19 — after GPU completion confirmed)
         impl_->commandPoolAllocator.ResetSlot(impl_->frameIndex);
 
@@ -490,10 +457,7 @@ namespace miki::frame {
         impl_->frameNumber++;
 
         // 3. Compute the timeline value this frame will signal upon completion
-        uint64_t targetTimeline = 0;
-        if (impl_->IsTimeline()) {
-            targetTimeline = impl_->currentTimelineValue + 1;
-        }
+        uint64_t targetTimeline = impl_->currentTimelineValue + 1;
 
         // 4. Acquire swapchain image (windowed mode only)
         rhi::TextureHandle swapchainImage;
@@ -516,10 +480,10 @@ namespace miki::frame {
             impl_->surface->SetSubmitSyncInfo({
                 .imageAvailable = slot.imageAvail,
                 .renderFinished = {},  // Deferred — set below after image index is known
-                .inFlightFence = slot.fence,
+                .inFlightFence = {},
             });
 
-            // Acquire: T1/T2 signal binary semaphore, T3/T4 implicit
+            // Acquire: signals binary semaphore (all backends)
             auto acquireResult = impl_->surface->AcquireNextImage();
             if (!acquireResult) {
                 return std::unexpected(core::ErrorCode::SwapchainOutOfDate);
@@ -533,7 +497,7 @@ namespace miki::frame {
                 impl_->surface->SetSubmitSyncInfo({
                     .imageAvailable = slot.imageAvail,
                     .renderFinished = impl_->imageRenderDone[imgIdx],
-                    .inFlightFence = slot.fence,
+                    .inFlightFence = {},
                 });
             }
 
@@ -556,7 +520,7 @@ namespace miki::frame {
             .height = height,
             .graphicsTimelineTarget = targetTimeline,
             .transferWaitValue = impl_->transferSync.value,
-            .computeWaitValue = impl_->computeSync.value,
+            .computeWaitValue = 0,
         };
 
         return ctx;
@@ -572,174 +536,14 @@ namespace miki::frame {
         return pooled->acquisition;
     }
 
-    auto FrameManager::EndFrame(std::span<const rhi::CommandBufferHandle> iCmdBuffers) -> core::Result<void> {
+    auto FrameManager::EndFrame(std::span<const SubmitBatch> iBatches) -> core::Result<void> {
         assert(impl_ && "FrameManager used after move");
 
         auto& slot = impl_->slots[impl_->frameIndex];
-        uint64_t fenceValue = impl_->IsTimeline() ? (impl_->currentTimelineValue + 1) : impl_->frameNumber;
+        uint64_t fenceValue = impl_->currentTimelineValue + 1;
+        impl_->lastPartialTimelineValue = 0;  // Reset partial tracking for this frame
 
         // ── 0. Transfer copy dispatch ────────────────────────────────
-        // If FlushTransfers() was already called this frame, async transfers are already in-flight and transferSync is
-        // set. We only need to handle: (a) async path not yet flushed, (b) fallback graphics path, (c) no copies.
-        rhi::CommandListAcquisition transferAcq{};  // Only used in fallback path
-        std::vector<rhi::CommandBufferHandle> mergedCmds;
-
-        if (impl_->hasAsyncTransfer && !impl_->transfersFlushed && impl_->HasPendingTransfers()) {
-            // T1 + dedicated transfer queue → separate submit with timeline signal
-            impl_->SubmitTransferCopies(fenceValue);
-            impl_->transfersFlushed = true;
-        } else if (!impl_->transfersFlushed && impl_->HasPendingTransfers()) {
-            // Fallback: record copies on a graphics cmd prepended to the user's batch (via CPA §19)
-            auto acqResult = impl_->commandPoolAllocator.Acquire(impl_->frameIndex, rhi::QueueType::Graphics);
-            if (acqResult) {
-                transferAcq = acqResult->acquisition;
-                transferAcq.listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
-                impl_->RecordTransfersOnGraphics(transferAcq.listHandle, fenceValue);
-                transferAcq.listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-
-                // Prepend transfer cmd before user's rendering commands
-                mergedCmds.reserve(1 + iCmdBuffers.size());
-                mergedCmds.push_back(transferAcq.bufferHandle);
-                mergedCmds.insert(mergedCmds.end(), iCmdBuffers.begin(), iCmdBuffers.end());
-            } else {
-                // Acquisition failed — flush rings anyway (data not lost, copies deferred)
-                if (impl_->stagingRing) {
-                    impl_->stagingRing->FlushFrame(fenceValue);
-                }
-                if (impl_->readbackRing) {
-                    impl_->readbackRing->FlushFrame(fenceValue);
-                }
-            }
-        } else if (!impl_->transfersFlushed) {
-            // No pending copies and not yet flushed — flush ring lifecycle bookkeeping only
-            if (impl_->stagingRing) {
-                impl_->stagingRing->FlushFrame(fenceValue);
-            }
-            if (impl_->readbackRing) {
-                impl_->readbackRing->FlushFrame(fenceValue);
-            }
-        }
-        // else: transfersFlushed == true → SubmitTransferCopies already called FlushFrame
-
-        auto finalCmds = mergedCmds.empty() ? iCmdBuffers : std::span<const rhi::CommandBufferHandle>{mergedCmds};
-
-        // ── 1. Build SubmitDesc with sync primitives ─────────────────
-        std::vector<rhi::SemaphoreSubmitInfo> waits;
-        std::vector<rhi::SemaphoreSubmitInfo> signals;
-
-        if (impl_->IsTimeline()) {
-            uint64_t nextValue = impl_->currentTimelineValue + 1;
-
-            if (impl_->surface && slot.imageAvail.IsValid()) {
-                waits.push_back({
-                    .semaphore = slot.imageAvail,
-                    .value = 0,
-                    .stageMask = rhi::PipelineStage::ColorAttachmentOutput,
-                });
-            }
-
-            // Wait on cross-queue sync points (transfer queue and/or async compute)
-            if (impl_->transferSync.semaphore.IsValid() && impl_->transferSync.value > 0) {
-                waits.push_back({
-                    .semaphore = impl_->transferSync.semaphore,
-                    .value = impl_->transferSync.value,
-                    .stageMask = rhi::PipelineStage::Transfer,
-                });
-            }
-            if (impl_->computeSync.semaphore.IsValid() && impl_->computeSync.value > 0) {
-                waits.push_back({
-                    .semaphore = impl_->computeSync.semaphore,
-                    .value = impl_->computeSync.value,
-                    .stageMask = rhi::PipelineStage::ComputeShader,
-                });
-            }
-
-            signals.push_back({
-                .semaphore = impl_->graphicsTimeline,
-                .value = nextValue,
-                .stageMask = rhi::PipelineStage::AllCommands,
-            });
-            if (impl_->surface) {
-                uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
-                if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
-                    signals.push_back({
-                        .semaphore = impl_->imageRenderDone[imgIdx],
-                        .value = 0,
-                        .stageMask = rhi::PipelineStage::AllCommands,
-                    });
-                }
-            }
-
-            slot.timelineValue = nextValue;
-            impl_->currentTimelineValue = nextValue;
-
-        } else if (impl_->IsFenceBased()) {
-            if (impl_->surface && slot.imageAvail.IsValid()) {
-                waits.push_back({
-                    .semaphore = slot.imageAvail,
-                    .value = 0,
-                    .stageMask = rhi::PipelineStage::ColorAttachmentOutput,
-                });
-            }
-            if (impl_->surface) {
-                uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
-                if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
-                    signals.push_back({
-                        .semaphore = impl_->imageRenderDone[imgIdx],
-                        .value = 0,
-                        .stageMask = rhi::PipelineStage::AllCommands,
-                    });
-                }
-            }
-            slot.timelineValue = impl_->frameNumber;
-        }
-
-        // ── 2. Submit to graphics queue ──────────────────────────────
-        rhi::SubmitDesc submitDesc{
-            .commandBuffers = finalCmds,
-            .waitSemaphores = waits,
-            .signalSemaphores = signals,
-            .signalFence = impl_->IsFenceBased() ? slot.fence : rhi::FenceHandle{},
-        };
-        impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, submitDesc); });
-
-        // ── 3. Transfer cmd not individually released — CPA ResetSlot handles bulk reclamation (§19)
-
-        // ── 4. Present ───────────────────────────────────────────────
-        if (impl_->surface) {
-            auto presentResult = impl_->surface->Present();
-            if (!presentResult) {
-                return std::unexpected(core::ErrorCode::SwapchainOutOfDate);
-            }
-        }
-
-        // ── 5. Reset cross-queue sync points for next frame ──────────
-        impl_->transferSync.value = 0;
-        impl_->computeSync.value = 0;
-
-        // ── 6. Advance frame ring ────────────────────────────────────
-        impl_->frameIndex = (impl_->frameIndex + 1) % impl_->framesInFlight;
-
-        return {};
-    }
-
-    auto FrameManager::EndFrame(rhi::CommandBufferHandle iCmd) -> core::Result<void> {
-        std::array cmds = {iCmd};
-        return EndFrame(std::span<const rhi::CommandBufferHandle>{cmds});
-    }
-
-    auto FrameManager::EndFrameSplit(std::span<const SubmitBatch> iBatches) -> core::Result<void> {
-        assert(impl_ && "FrameManager used after move");
-        if (iBatches.empty()) {
-            return EndFrame(std::span<const rhi::CommandBufferHandle>{});
-        }
-
-        auto& slot = impl_->slots[impl_->frameIndex];
-        uint64_t lastTimelineValue = impl_->currentTimelineValue;
-        uint64_t fenceValue = impl_->IsTimeline() ? (lastTimelineValue + 1) : impl_->frameNumber;
-
-        // ── 0. Transfer copy dispatch (before first graphics batch) ──
-        // Same logic as EndFrame: respect transfersFlushed from FlushTransfers().
         rhi::CommandListAcquisition transferAcq{};
         std::vector<rhi::CommandBufferHandle> firstBatchMerged;
 
@@ -754,13 +558,17 @@ namespace miki::frame {
                 impl_->RecordTransfersOnGraphics(transferAcq.listHandle, fenceValue);
                 transferAcq.listHandle.Dispatch([](auto& cmd) { cmd.End(); });
 
-                // Prepend to first batch
-                auto& firstBatch = iBatches[0];
-                firstBatchMerged.reserve(1 + firstBatch.commandBuffers.size());
-                firstBatchMerged.push_back(transferAcq.bufferHandle);
-                firstBatchMerged.insert(
-                    firstBatchMerged.end(), firstBatch.commandBuffers.begin(), firstBatch.commandBuffers.end()
-                );
+                // Prepend to first batch (or create a single-element batch if iBatches is empty)
+                if (!iBatches.empty()) {
+                    auto& firstBatch = iBatches[0];
+                    firstBatchMerged.reserve(1 + firstBatch.commandBuffers.size());
+                    firstBatchMerged.push_back(transferAcq.bufferHandle);
+                    firstBatchMerged.insert(
+                        firstBatchMerged.end(), firstBatch.commandBuffers.begin(), firstBatch.commandBuffers.end()
+                    );
+                } else {
+                    firstBatchMerged.push_back(transferAcq.bufferHandle);
+                }
             } else {
                 if (impl_->stagingRing) {
                     impl_->stagingRing->FlushFrame(fenceValue);
@@ -770,7 +578,6 @@ namespace miki::frame {
                 }
             }
         } else if (!impl_->transfersFlushed) {
-            // No pending copies and not yet flushed — flush ring lifecycle bookkeeping only
             if (impl_->stagingRing) {
                 impl_->stagingRing->FlushFrame(fenceValue);
             }
@@ -778,84 +585,80 @@ namespace miki::frame {
                 impl_->readbackRing->FlushFrame(fenceValue);
             }
         }
-        // else: transfersFlushed == true → SubmitTransferCopies already called FlushFrame
 
-        // ── Submit batches ───────────────────────────────────────────
-        for (size_t i = 0; i < iBatches.size(); ++i) {
+        // ── 1. Submit batches (unified timeline path) ────────────────
+        size_t batchCount = iBatches.size();
+
+        // Handle edge case: no user batches but we have a transfer cmd
+        if (batchCount == 0 && !firstBatchMerged.empty()) {
+            batchCount = 1;  // Synthetic batch from transfer merge
+        }
+
+        for (size_t i = 0; i < batchCount; ++i) {
             bool isFirst = (i == 0);
-            bool isLast = (i == iBatches.size() - 1);
-            auto& batch = iBatches[i];
+            bool isLast = (i == batchCount - 1);
 
-            // Use merged first batch if transfer cmd was prepended
-            auto batchCmds = (isFirst && !firstBatchMerged.empty())
-                                 ? std::span<const rhi::CommandBufferHandle>{firstBatchMerged}
-                                 : batch.commandBuffers;
+            // Determine command buffers for this batch
+            std::span<const rhi::CommandBufferHandle> batchCmds;
+            bool batchSignalPartial = true;
+
+            if (isFirst && !firstBatchMerged.empty()) {
+                batchCmds = firstBatchMerged;
+                batchSignalPartial = (i < iBatches.size()) ? iBatches[i].signalPartialTimeline : true;
+            } else if (i < iBatches.size()) {
+                batchCmds = iBatches[i].commandBuffers;
+                batchSignalPartial = iBatches[i].signalPartialTimeline;
+            }
 
             std::vector<rhi::SemaphoreSubmitInfo> waits;
             std::vector<rhi::SemaphoreSubmitInfo> signals;
 
-            if (impl_->IsTimeline()) {
-                if (isFirst) {
-                    if (impl_->surface && slot.imageAvail.IsValid()) {
-                        waits.push_back(
-                            {.semaphore = slot.imageAvail,
-                             .value = 0,
-                             .stageMask = rhi::PipelineStage::ColorAttachmentOutput}
-                        );
-                    }
-                    if (impl_->transferSync.semaphore.IsValid() && impl_->transferSync.value > 0) {
-                        waits.push_back(
-                            {.semaphore = impl_->transferSync.semaphore,
-                             .value = impl_->transferSync.value,
-                             .stageMask = rhi::PipelineStage::Transfer}
-                        );
-                    }
+            // First batch: wait on swapchain acquire + transfer completion
+            if (isFirst) {
+                if (impl_->surface && slot.imageAvail.IsValid()) {
+                    waits.push_back({
+                        .semaphore = slot.imageAvail,
+                        .value = 0,
+                        .stageMask = rhi::PipelineStage::ColorAttachmentOutput,
+                    });
                 }
+                if (impl_->transferSync.semaphore.IsValid() && impl_->transferSync.value > 0) {
+                    waits.push_back({
+                        .semaphore = impl_->transferSync.semaphore,
+                        .value = impl_->transferSync.value,
+                        .stageMask = rhi::PipelineStage::Transfer,
+                    });
+                }
+            }
 
-                if (isLast && impl_->computeSync.semaphore.IsValid() && impl_->computeSync.value > 0) {
-                    waits.push_back(
-                        {.semaphore = impl_->computeSync.semaphore,
-                         .value = impl_->computeSync.value,
-                         .stageMask = rhi::PipelineStage::ComputeShader}
-                    );
-                }
+            // Last batch: wait on accumulated compute sync points
+            if (isLast) {
+                waits.insert(waits.end(), impl_->computeSyncPoints.begin(), impl_->computeSyncPoints.end());
+            }
 
-                if (batch.signalPartialTimeline || isLast) {
-                    uint64_t nextValue = ++lastTimelineValue;
-                    signals.push_back(
-                        {.semaphore = impl_->graphicsTimeline,
-                         .value = nextValue,
-                         .stageMask = rhi::PipelineStage::AllCommands}
-                    );
+            // Signal timeline for this batch
+            if (batchSignalPartial || isLast) {
+                uint64_t nextValue = impl_->AllocateGraphicsSignal();
+                signals.push_back({
+                    .semaphore = impl_->graphicsTimeline,
+                    .value = nextValue,
+                    .stageMask = rhi::PipelineStage::AllCommands,
+                });
+                // Track first partial signal for GetGraphicsSyncPoint (§4.4.3)
+                if (!isLast && impl_->lastPartialTimelineValue == 0) {
+                    impl_->lastPartialTimelineValue = nextValue;
                 }
+            }
 
-                if (isLast && impl_->surface) {
-                    uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
-                    if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
-                        signals.push_back(
-                            {.semaphore = impl_->imageRenderDone[imgIdx],
-                             .value = 0,
-                             .stageMask = rhi::PipelineStage::AllCommands}
-                        );
-                    }
-                }
-            } else if (impl_->IsFenceBased()) {
-                if (isFirst && impl_->surface && slot.imageAvail.IsValid()) {
-                    waits.push_back(
-                        {.semaphore = slot.imageAvail,
-                         .value = 0,
-                         .stageMask = rhi::PipelineStage::ColorAttachmentOutput}
-                    );
-                }
-                if (isLast && impl_->surface) {
-                    uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
-                    if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
-                        signals.push_back(
-                            {.semaphore = impl_->imageRenderDone[imgIdx],
-                             .value = 0,
-                             .stageMask = rhi::PipelineStage::AllCommands}
-                        );
-                    }
+            // Last batch: signal renderDone for present
+            if (isLast && impl_->surface) {
+                uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
+                if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
+                    signals.push_back({
+                        .semaphore = impl_->imageRenderDone[imgIdx],
+                        .value = 0,
+                        .stageMask = rhi::PipelineStage::AllCommands,
+                    });
                 }
             }
 
@@ -863,19 +666,15 @@ namespace miki::frame {
                 .commandBuffers = batchCmds,
                 .waitSemaphores = waits,
                 .signalSemaphores = signals,
-                .signalFence = (isLast && impl_->IsFenceBased()) ? slot.fence : rhi::FenceHandle{},
+                .signalFence = {},
             };
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, submitDesc); });
         }
 
-        // ── Cleanup — transfer cmd not individually released, CPA ResetSlot handles it (§19)
+        // ── 2. Update slot timeline value ────────────────────────────
+        slot.timelineValue = impl_->currentTimelineValue;
 
-        slot.timelineValue = lastTimelineValue;
-        impl_->currentTimelineValue = lastTimelineValue;
-        if (impl_->IsFenceBased()) {
-            slot.timelineValue = impl_->frameNumber;
-        }
-
+        // ── 3. Present ───────────────────────────────────────────────
         if (impl_->surface) {
             auto presentResult = impl_->surface->Present();
             if (!presentResult) {
@@ -883,8 +682,12 @@ namespace miki::frame {
             }
         }
 
+        // ── 4. Commit to SyncScheduler + reset cross-queue sync points
+        impl_->CommitGraphicsSubmit();
         impl_->transferSync.value = 0;
-        impl_->computeSync.value = 0;
+        impl_->computeSyncPoints.clear();
+
+        // ── 5. Advance frame ring ────────────────────────────────────
         impl_->frameIndex = (impl_->frameIndex + 1) % impl_->framesInFlight;
         return {};
     }
@@ -895,15 +698,24 @@ namespace miki::frame {
 
     auto FrameManager::GetGraphicsSyncPoint() const noexcept -> TimelineSyncPoint {
         assert(impl_ && "FrameManager used after move");
-        if (impl_->IsTimeline()) {
-            return {.semaphore = impl_->graphicsTimeline, .value = impl_->currentTimelineValue};
-        }
-        return {};
+        // After EndFrame with partial signal: return geometry-done value (§4.4.3)
+        uint64_t value
+            = impl_->lastPartialTimelineValue > 0 ? impl_->lastPartialTimelineValue : impl_->currentTimelineValue;
+        return {.semaphore = impl_->graphicsTimeline, .value = value};
     }
 
-    auto FrameManager::SetComputeSyncPoint(TimelineSyncPoint iPoint) noexcept -> void {
+    auto FrameManager::AddComputeSyncPoint(TimelineSyncPoint iPoint, rhi::PipelineStage iStage) noexcept -> void {
         assert(impl_ && "FrameManager used after move");
-        impl_->computeSync = iPoint;
+        if (iPoint.semaphore.IsValid() && iPoint.value > 0) {
+            impl_->computeSyncPoints.push_back(
+                {.semaphore = iPoint.semaphore, .value = iPoint.value, .stageMask = iStage}
+            );
+        }
+    }
+
+    auto FrameManager::ClearComputeSyncPoints() noexcept -> void {
+        assert(impl_ && "FrameManager used after move");
+        impl_->computeSyncPoints.clear();
     }
 
     auto FrameManager::SetTransferSyncPoint(TimelineSyncPoint iPoint) noexcept -> void {
@@ -911,20 +723,31 @@ namespace miki::frame {
         impl_->transferSync = iPoint;
     }
 
+    auto FrameManager::SetSyncScheduler(SyncScheduler* iScheduler) noexcept -> void {
+        assert(impl_ && "FrameManager used after move");
+        impl_->syncScheduler = iScheduler;
+    }
+
+    auto FrameManager::GetLastPartialTimelineValue() const noexcept -> uint64_t {
+        return impl_ ? impl_->lastPartialTimelineValue : 0;
+    }
+
     auto FrameManager::FlushTransfers() -> void {
         assert(impl_ && "FrameManager used after move");
         if (impl_->transfersFlushed) {
-            return;  // Already flushed this frame
+            return;
         }
         if (!impl_->hasAsyncTransfer) {
-            return;  // Fallback path must wait for EndFrame (needs graphics cmd)
+            return;
         }
         if (!impl_->HasPendingTransfers()) {
-            return;  // Nothing to flush
+            return;
         }
 
-        uint64_t fenceValue = impl_->IsTimeline() ? (impl_->currentTimelineValue + 1) : impl_->frameNumber;
+        uint64_t fenceValue
+            = impl_->syncScheduler ? impl_->AllocateTransferSignal() : (impl_->currentTimelineValue + 1);
         impl_->SubmitTransferCopies(fenceValue);
+        impl_->CommitTransferSubmit();
         impl_->transfersFlushed = true;
     }
 
@@ -934,49 +757,36 @@ namespace miki::frame {
             return 0;
         }
 
-        uint64_t fenceValue = impl_->IsTimeline() ? (impl_->currentTimelineValue + 1) : impl_->frameNumber;
+        uint64_t fenceValue = impl_->currentTimelineValue + 1;
 
         if (impl_->hasAsyncTransfer) {
-            // T1: submit on dedicated transfer queue
             auto count = impl_->SubmitTransferCopies(fenceValue);
             impl_->transfersFlushed = true;
             return count;
         }
 
-        // Fallback: submit on graphics queue (T2/T3/T4)
+        // Fallback: submit on graphics queue
         auto acqResult = impl_->commandPoolAllocator.Acquire(impl_->frameIndex, rhi::QueueType::Graphics);
         if (!acqResult) {
             return 0;
         }
 
         auto& acq = acqResult->acquisition;
-        // RecordTransfersOnGraphics handles FlushFrame + RecordTransfers internally
         acq.listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
         uint32_t count = impl_->RecordTransfersOnGraphics(acq.listHandle, fenceValue);
         acq.listHandle.Dispatch([](auto& cmd) { cmd.End(); });
 
-        // Submit with timeline signal (T1) or fence (T2) or plain submit (T3/T4)
-        if (impl_->IsTimeline()) {
-            uint64_t nextValue = ++impl_->currentTimelineValue;
-            std::array<rhi::SemaphoreSubmitInfo, 1> signals = {{
-                {.semaphore = impl_->graphicsTimeline, .value = nextValue, .stageMask = rhi::PipelineStage::Transfer},
-            }};
-            rhi::SubmitDesc desc{
-                .commandBuffers = std::span(&acq.bufferHandle, 1),
-                .waitSemaphores = {},
-                .signalSemaphores = signals,
-                .signalFence = {},
-            };
-            impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, desc); });
-        } else {
-            rhi::SubmitDesc desc{
-                .commandBuffers = std::span(&acq.bufferHandle, 1),
-                .waitSemaphores = {},
-                .signalSemaphores = {},
-                .signalFence = {},
-            };
-            impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, desc); });
-        }
+        uint64_t nextValue = ++impl_->currentTimelineValue;
+        std::array<rhi::SemaphoreSubmitInfo, 1> signals = {{
+            {.semaphore = impl_->graphicsTimeline, .value = nextValue, .stageMask = rhi::PipelineStage::Transfer},
+        }};
+        rhi::SubmitDesc desc{
+            .commandBuffers = std::span(&acq.bufferHandle, 1),
+            .waitSemaphores = {},
+            .signalSemaphores = signals,
+            .signalFence = {},
+        };
+        impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, desc); });
 
         impl_->transfersFlushed = true;
         return count;
@@ -1009,29 +819,23 @@ namespace miki::frame {
         assert(impl_ && "FrameManager used after move");
 
         if (!impl_->surface) {
-            // Offscreen: just update dimensions
             impl_->offscreenWidth = iWidth;
             impl_->offscreenHeight = iHeight;
             return {};
         }
 
         if (iWidth == 0 || iHeight == 0) {
-            return {};  // Minimized — no-op, will skip frames in BeginFrame
+            return {};  // Minimized — no-op
         }
 
-        // Same-size short-circuit: skip expensive WaitAll + swapchain recreation when the surface is already at the
-        // requested dimensions (e.g. live resize callback already handled this size during Win32 modal drag).
         auto currentExtent = impl_->surface->GetExtent();
         if (currentExtent.width == iWidth && currentExtent.height == iHeight) {
             return {};
         }
 
-        // Wait for all in-flight frames before recreating swapchain
         WaitAll();
-
         auto result = impl_->surface->Resize(iWidth, iHeight);
         if (result) {
-            // Swapchain image count may have changed — rebuild present semaphores
             impl_->RecreatePresentSemaphores();
         }
         return result;
@@ -1044,12 +848,9 @@ namespace miki::frame {
             return std::unexpected(core::ErrorCode::InvalidState);
         }
 
-        // Wait for all in-flight frames before recreating swapchain
         WaitAll();
-
         auto result = impl_->surface->Reconfigure(iConfig);
         if (result) {
-            // Swapchain image count may have changed — rebuild present semaphores
             impl_->RecreatePresentSemaphores();
         }
         return result;
@@ -1088,14 +889,12 @@ namespace miki::frame {
             return true;
         }
 
-        if (impl_->IsTimeline() && impl_->graphicsTimeline.IsValid()) {
+        if (impl_->graphicsTimeline.IsValid()) {
             uint64_t gpuValue
                 = impl_->device.Dispatch([&](auto& dev) { return dev.GetSemaphoreValue(impl_->graphicsTimeline); });
             return gpuValue >= iFrameNumber;
         }
 
-        // T2/T3/T4: conservative — assume complete if frameNumber is older than
-        // oldest in-flight. This is correct because WaitForSlot ensures completion.
         return iFrameNumber <= impl_->frameNumber - impl_->framesInFlight;
     }
 
@@ -1108,22 +907,11 @@ namespace miki::frame {
             return;
         }
 
-        if (impl_->IsTimeline() && impl_->graphicsTimeline.IsValid() && impl_->currentTimelineValue > 0) {
-            // T1: Single wait on the highest submitted timeline value
+        if (impl_->graphicsTimeline.IsValid() && impl_->currentTimelineValue > 0) {
+            // Single wait on the highest submitted timeline value (all backends)
             impl_->device.Dispatch([&](auto& dev) {
                 dev.WaitSemaphore(impl_->graphicsTimeline, impl_->currentTimelineValue, UINT64_MAX);
             });
-        } else if (impl_->IsFenceBased()) {
-            // T2: Pure wait on all slot fences — no reset.
-            // Fences remain signaled; the next BeginFrame's WaitForSlot returns immediately,
-            // then ResetSlotFence prepares the fence for reuse.
-            for (uint32_t i = 0; i < impl_->framesInFlight; ++i) {
-                impl_->WaitForSlot(i);
-            }
-        } else if (impl_->IsImplicitSync()) {
-            // T3/T4: No per-slot sync objects. A device-level wait ensures GPU idle.
-            // Only called during resize / detach — not per-frame.
-            impl_->device.Dispatch([](auto& dev) { dev.WaitIdle(); });
         }
     }
 

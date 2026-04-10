@@ -300,7 +300,11 @@ static WindowHandle g_mainWindow;
 static bool g_shouldQuit = false;
 
 static void RenderOneFrame(WindowHandle w) {
-    auto frameResult = g_sm->BeginFrame(w);
+    auto* fm = g_sm->GetFrameManager(w);
+    if (!fm) {
+        return;
+    }
+    auto frameResult = fm->BeginFrame();
     if (!frameResult) {
         return;
     }
@@ -309,7 +313,8 @@ static void RenderOneFrame(WindowHandle w) {
     if (!cmdBuf) {
         return;
     }
-    (void)g_sm->EndFrame(w, *cmdBuf);
+    miki::frame::FrameManager::SubmitBatch batch{.commandBuffers = std::span(&*cmdBuf, 1)};
+    (void)fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{&batch, 1});
 }
 
 static void MainLoopIteration() {

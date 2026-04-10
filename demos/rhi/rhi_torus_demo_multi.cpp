@@ -220,7 +220,7 @@ static void RenderWindow(WindowHandle win, Scene& scene) {
     if (!fm) {
         return;
     }
-    auto frameResult = g_sm->BeginFrame(win);
+    auto frameResult = fm->BeginFrame();
     if (!frameResult) {
         return;
     }
@@ -291,7 +291,8 @@ static void RenderWindow(WindowHandle win, Scene& scene) {
         cmd.End();
         return 0;
     });
-    (void)g_sm->EndFrame(win, cmdAcq.bufferHandle);
+    miki::frame::FrameManager::SubmitBatch batch{.commandBuffers = std::span(&cmdAcq.bufferHandle, 1)};
+    (void)fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{&batch, 1});
 }
 
 static void RenderAllWindows() {

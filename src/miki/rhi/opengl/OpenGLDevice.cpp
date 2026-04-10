@@ -189,6 +189,20 @@ namespace miki::rhi {
 
         PopulateCapabilities();
 
+        // Create emulated queue timelines (CPU-side counter + glFenceSync)
+        {
+            SemaphoreDesc tlDesc{.type = SemaphoreType::Timeline, .initialValue = 0};
+            if (auto r = CreateSemaphoreImpl(tlDesc)) {
+                queueTimelines_.graphics = *r;
+            }
+            if (auto r = CreateSemaphoreImpl(tlDesc)) {
+                queueTimelines_.compute = *r;
+            }
+            if (auto r = CreateSemaphoreImpl(tlDesc)) {
+                queueTimelines_.transfer = *r;
+            }
+        }
+
         MIKI_LOG_INFO(
             ::miki::debug::LogCategory::Rhi, "[OpenGL] Device initialized: {} (GL {}.{}, SPIR-V: {})",
             capabilities_.deviceName, glMajor_, glMinor_, ext_.HasSpirvSupport() ? "yes" : "no"
@@ -202,6 +216,18 @@ namespace miki::rhi {
     OpenGLDevice::~OpenGLDevice() {
         if (gl_) {
             WaitIdleImpl();
+
+            // Destroy queue timelines before pools are torn down
+            if (queueTimelines_.graphics.IsValid()) {
+                DestroySemaphoreImpl(queueTimelines_.graphics);
+            }
+            if (queueTimelines_.compute.IsValid()) {
+                DestroySemaphoreImpl(queueTimelines_.compute);
+            }
+            if (queueTimelines_.transfer.IsValid()) {
+                DestroySemaphoreImpl(queueTimelines_.transfer);
+            }
+            queueTimelines_ = {};
 
             DestroyAllCachedFBOs();
 

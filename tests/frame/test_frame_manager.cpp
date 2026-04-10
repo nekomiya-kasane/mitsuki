@@ -53,6 +53,12 @@ class FrameManagerTest : public RhiTest {
         return FrameManager::CreateOffscreen(Dev(), 1920, 1080, framesInFlight);
     }
 
+    // Helper: EndFrame with a single command buffer (no convenience overload).
+    static auto EndFrameSingle(FrameManager& fm, rhi::CommandBufferHandle cmd) -> core::Result<void> {
+        FrameManager::SubmitBatch batch{.commandBuffers = std::span(&cmd, 1)};
+        return fm.EndFrame(std::span<const FrameManager::SubmitBatch>{&batch, 1});
+    }
+
     // Helper: run N complete frames (BeginFrame + EndFrame with a real cmd buffer)
     void RunFrames(FrameManager& fm, uint32_t count) {
         for (uint32_t i = 0; i < count; ++i) {
@@ -65,7 +71,7 @@ class FrameManagerTest : public RhiTest {
             acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
             acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
 
-            auto endResult = fm.EndFrame(acq->bufferHandle);
+            auto endResult = EndFrameSingle(fm, acq->bufferHandle);
             ASSERT_TRUE(endResult.has_value()) << "EndFrame failed at frame " << i;
         }
     }
@@ -162,7 +168,7 @@ TEST_P(FrameManagerTest, FL01_FirstBeginFrame) {
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-    EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
+    EXPECT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
 }
 
 // FM-FL-02: GIVEN FM after BeginFrame WHEN EndFrame THEN frameIndex advances
@@ -196,7 +202,7 @@ TEST_P(FrameManagerTest, FL03_FrameRingWraps) {
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-    EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
+    EXPECT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
 }
 
 // FM-FL-07: GIVEN FM WHEN EndFrame(singleCmd) overload THEN succeeds
@@ -214,7 +220,7 @@ TEST_P(FrameManagerTest, FL07_SingleCmdEndFrame) {
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
 
     // Single-cmd overload
-    auto endResult = fm.EndFrame(acq->bufferHandle);
+    auto endResult = EndFrameSingle(fm, acq->bufferHandle);
     EXPECT_TRUE(endResult.has_value());
 }
 
@@ -299,7 +305,7 @@ TEST_P(FrameManagerTest, TX03_FlushTransfersNoRingsNoop) {
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-    EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
+    EXPECT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
 }
 
 // FM-TX-04: GIVEN FM WHEN FlushTransfers called twice THEN no crash (idempotent)
@@ -318,14 +324,14 @@ TEST_P(FrameManagerTest, TX04_FlushTransfersIdempotent) {
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-    EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
+    EXPECT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
 }
 
 // ============================================================================
-// §17.8 FM-SS — Split Submit (EndFrameSplit)
+// §17.8 FM-SS — Split Submit (EndFrame)
 // ============================================================================
 
-// FM-SS-04: GIVEN FM WHEN EndFrameSplit({}) THEN delegates to EndFrame({})
+// FM-SS-04: GIVEN FM WHEN EndFrame({}) THEN delegates to EndFrame({})
 TEST_P(FrameManagerTest, SS04_EmptyBatchesDelegatesToEndFrame) {
     auto result = MakeOffscreen(2);
     ASSERT_TRUE(result.has_value());
@@ -334,11 +340,11 @@ TEST_P(FrameManagerTest, SS04_EmptyBatchesDelegatesToEndFrame) {
     auto ctx = fm.BeginFrame();
     ASSERT_TRUE(ctx.has_value());
 
-    auto endResult = fm.EndFrameSplit(std::span<const FrameManager::SubmitBatch>{});
+    auto endResult = fm.EndFrame(std::span<const FrameManager::SubmitBatch>{});
     EXPECT_TRUE(endResult.has_value());
 }
 
-// FM-SS-01 / FM-SS-02: GIVEN T1 FM WHEN EndFrameSplit with 2 batches THEN both submitted
+// FM-SS-01 / FM-SS-02: GIVEN T1 FM WHEN EndFrame with 2 batches THEN both submitted
 TEST_P(FrameManagerTest, SS01_SplitSubmitTwoBatches) {
     if (!IsTier1()) {
         GTEST_SKIP() << "Split submit timeline test requires Tier1";
@@ -371,7 +377,7 @@ TEST_P(FrameManagerTest, SS01_SplitSubmitTwoBatches) {
         {.commandBuffers = cmds2, .signalPartialTimeline = true},
     }};
 
-    auto endResult = fm.EndFrameSplit(batches);
+    auto endResult = fm.EndFrame(batches);
     EXPECT_TRUE(endResult.has_value());
 
     // Timeline should advance by 2 (one per batch)
@@ -401,7 +407,7 @@ TEST_P(FrameManagerTest, XQ01_ComputeSyncPointConsumed) {
     // Simulate compute completion at value 42
     if (timelines.compute.IsValid()) {
         Dev().Dispatch([&](auto& dev) { dev.SignalSemaphore(timelines.compute, 42); });
-        fm.SetComputeSyncPoint({.semaphore = timelines.compute, .value = 42});
+        fm.AddComputeSyncPoint({.semaphore = timelines.compute, .value = 42}, PipelineStage::ComputeShader);
     }
 
     auto acq = fm.AcquireCommandList(QueueType::Graphics);
@@ -410,7 +416,7 @@ TEST_P(FrameManagerTest, XQ01_ComputeSyncPointConsumed) {
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
 
     // EndFrame should internally wait on compute sync
-    auto endResult = fm.EndFrame(acq->bufferHandle);
+    auto endResult = EndFrameSingle(fm, acq->bufferHandle);
     EXPECT_TRUE(endResult.has_value());
 }
 
@@ -480,7 +486,7 @@ TEST_P(FrameManagerTest, RS03_OffscreenResize) {
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
     acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-    EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
+    EXPECT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
 }
 
 // FM-RS-04: GIVEN offscreen FM WHEN Reconfigure THEN InvalidState
@@ -605,7 +611,7 @@ TEST_P(FrameManagerTest, MF02_ThreeFrameRing) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
         acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-        EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
+        EXPECT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
     }
 
     EXPECT_EQ(fm.FrameNumber(), 10u);
@@ -630,13 +636,13 @@ TEST_P(FrameManagerTest, MF03_AlternatingFlushTransfers) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
         acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-        EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
+        EXPECT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
     }
 
     EXPECT_EQ(fm.FrameNumber(), 10u);
 }
 
-// FM-MF-04: GIVEN T1 FM WHEN SetComputeSyncPoint every frame THEN no crash
+// FM-MF-04: GIVEN T1 FM WHEN AddComputeSyncPoint every frame THEN no crash
 TEST_P(FrameManagerTest, MF04_ComputeSyncEveryFrame) {
     if (!IsTier1()) {
         GTEST_SKIP() << "Compute sync test requires Tier1";
@@ -657,13 +663,13 @@ TEST_P(FrameManagerTest, MF04_ComputeSyncEveryFrame) {
 
         uint64_t computeVal = i + 1;
         Dev().Dispatch([&](auto& dev) { dev.SignalSemaphore(timelines.compute, computeVal); });
-        fm.SetComputeSyncPoint({.semaphore = timelines.compute, .value = computeVal});
+        fm.AddComputeSyncPoint({.semaphore = timelines.compute, .value = computeVal}, PipelineStage::ComputeShader);
 
         auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
         acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
-        EXPECT_TRUE(fm.EndFrame(acq->bufferHandle).has_value());
+        EXPECT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
     }
 }
 
@@ -1105,7 +1111,7 @@ TEST_P(FrameManagerTest, CTDD01_BinDrainAcrossFrames) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_EQ(dd.PendingCount(), 1u);
 
@@ -1118,7 +1124,7 @@ TEST_P(FrameManagerTest, CTDD01_BinDrainAcrossFrames) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_EQ(dd.PendingCount(), 2u);
 
@@ -1131,7 +1137,7 @@ TEST_P(FrameManagerTest, CTDD01_BinDrainAcrossFrames) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
 
     fm.SetDeferredDestructor(nullptr);
@@ -1153,7 +1159,7 @@ TEST_P(FrameManagerTest, CTDD02_ThreeFrameBinCycling) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_LE(dd.PendingCount(), 3u);
     fm.SetDeferredDestructor(nullptr);
@@ -1177,7 +1183,7 @@ TEST_P(FrameManagerTest, CTDD04_DestroyInvalidHandleFiltered) {
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
     acq->listHandle.Dispatch([](auto& c) { c.End(); });
-    (void)fm.EndFrame(acq->bufferHandle);
+    (void)EndFrameSingle(fm, acq->bufferHandle);
     fm.SetDeferredDestructor(nullptr);
     dd.DrainAll();
 }
@@ -1210,12 +1216,12 @@ TEST_P(FrameManagerTest, CTXQ01_ComputeSyncConsumedAndReset) {
     {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
-        fm.SetComputeSyncPoint({.semaphore = fakeSem, .value = 10});
+        fm.AddComputeSyncPoint({.semaphore = fakeSem, .value = 10}, PipelineStage::ComputeShader);
         auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     // Frame 2: no sync
     RunFrames(fm, 1);
@@ -1233,24 +1239,24 @@ TEST_P(FrameManagerTest, CTXQ02_BothSyncPointsThenPartial) {
     {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
-        fm.SetComputeSyncPoint({.semaphore = csem, .value = 5});
+        fm.AddComputeSyncPoint({.semaphore = csem, .value = 5}, PipelineStage::ComputeShader);
         fm.SetTransferSyncPoint({.semaphore = tsem, .value = 3});
         auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     // Frame 2: compute only
     {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
-        fm.SetComputeSyncPoint({.semaphore = csem, .value = 10});
+        fm.AddComputeSyncPoint({.semaphore = csem, .value = 10}, PipelineStage::ComputeShader);
         auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_EQ(fm.FrameNumber(), 2u);
 }
@@ -1264,13 +1270,13 @@ TEST_P(FrameManagerTest, CTXQ03_AlternatingComputeSync) {
         auto ctx = fm.BeginFrame();
         ASSERT_TRUE(ctx.has_value());
         if (i % 2 == 1) {
-            fm.SetComputeSyncPoint({.semaphore = csem, .value = i});
+            fm.AddComputeSyncPoint({.semaphore = csem, .value = i}, PipelineStage::ComputeShader);
         }
         auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_EQ(fm.FrameNumber(), 10u);
     EXPECT_EQ(fm.CurrentTimelineValue(), 10u);
@@ -1387,7 +1393,7 @@ TEST_P(FrameManagerTest, CTMV02_MoveWithDD) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)result->EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(*result, acq->bufferHandle);
     }
     EXPECT_EQ(dd.PendingCount(), 1u);
     auto moved = std::move(*result);
@@ -1406,7 +1412,7 @@ TEST_P(FrameManagerTest, CTMV03_WaitAllOnMovedInstances) {
     EXPECT_EQ(moved.CurrentTimelineValue(), 3u);
 }
 
-// ── §18.7 CT-SP — EndFrameSplit + Cross-Queue ───────────────────────────
+// ── §18.7 CT-SP — EndFrame + Cross-Queue ───────────────────────────
 
 TEST_P(FrameManagerTest, CTSP02_SplitThenSingleTimelineContinuity) {
     auto result = MakeOffscreen(2);
@@ -1426,7 +1432,7 @@ TEST_P(FrameManagerTest, CTSP02_SplitThenSingleTimelineContinuity) {
         std::array<FrameManager::SubmitBatch, 2> batches
             = {FrameManager::SubmitBatch{std::span(&acqA->bufferHandle, 1), true},
                FrameManager::SubmitBatch{std::span(&acqB->bufferHandle, 1), true}};
-        EXPECT_TRUE(fm.EndFrameSplit(batches).has_value());
+        EXPECT_TRUE(fm.EndFrame(batches).has_value());
     }
     auto tlAfterSplit = fm.CurrentTimelineValue();
     // Frame 2: single EndFrame
@@ -1455,7 +1461,7 @@ TEST_P(FrameManagerTest, CTSP03_InterleaveEndFrameAndSplit) {
         std::array<FrameManager::SubmitBatch, 2> batches
             = {FrameManager::SubmitBatch{std::span(&acqA->bufferHandle, 1), true},
                FrameManager::SubmitBatch{std::span(&acqB->bufferHandle, 1), true}};
-        EXPECT_TRUE(fm.EndFrameSplit(batches).has_value());
+        EXPECT_TRUE(fm.EndFrame(batches).has_value());
     }
     // Frame 5: back to normal
     RunFrames(fm, 1);
@@ -1480,7 +1486,7 @@ TEST_P(FrameManagerTest, CTBC01_TenFrameBinCycling) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_LE(dd.PendingCount(), 2u);
     fm.WaitAll();
@@ -1505,7 +1511,7 @@ TEST_P(FrameManagerTest, CTBC02_ThreeFrameThreeBin) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_EQ(dd.PendingCount(), 3u);
     // Frame 4: drains bin 0
@@ -1517,7 +1523,7 @@ TEST_P(FrameManagerTest, CTBC02_ThreeFrameThreeBin) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     // Frame 5: drains bin 1
     {
@@ -1528,7 +1534,7 @@ TEST_P(FrameManagerTest, CTBC02_ThreeFrameThreeBin) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     // Frame 6: drains bin 2
     {
@@ -1539,7 +1545,7 @@ TEST_P(FrameManagerTest, CTBC02_ThreeFrameThreeBin) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     fm.SetDeferredDestructor(nullptr);
 }
@@ -1562,7 +1568,7 @@ TEST_P(FrameManagerTest, CTBC03_BulkDestroyPerFrame) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_EQ(dd.PendingCount(), 100u);
     // Frame 2: 100 more
@@ -1576,7 +1582,7 @@ TEST_P(FrameManagerTest, CTBC03_BulkDestroyPerFrame) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_EQ(dd.PendingCount(), 200u);
     // Frame 3: drains bin 0 (100 resources)
@@ -1588,7 +1594,7 @@ TEST_P(FrameManagerTest, CTBC03_BulkDestroyPerFrame) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     fm.SetDeferredDestructor(nullptr);
     dd.DrainAll();
@@ -1602,7 +1608,8 @@ TEST_P(FrameManagerTest, CTEDGE01_EmptyEndFrame) {
     auto& fm = *result;
     auto ctx = fm.BeginFrame();
     ASSERT_TRUE(ctx.has_value());
-    auto endResult = fm.EndFrame(std::span<const CommandBufferHandle>{});
+    FrameManager::SubmitBatch empty{.commandBuffers = {}};
+    auto endResult = fm.EndFrame(std::span<const FrameManager::SubmitBatch>{&empty, 1});
     EXPECT_TRUE(endResult.has_value());
     EXPECT_EQ(fm.CurrentTimelineValue(), 1u);
     RunFrames(fm, 1);
@@ -1617,7 +1624,7 @@ TEST_P(FrameManagerTest, CTEDGE02_EmptySplitBatch) {
     ASSERT_TRUE(ctx.has_value());
     std::array<FrameManager::SubmitBatch, 1> batches
         = {FrameManager::SubmitBatch{std::span<const CommandBufferHandle>{}, true}};
-    auto endResult = fm.EndFrameSplit(batches);
+    auto endResult = fm.EndFrame(batches);
     EXPECT_TRUE(endResult.has_value());
     EXPECT_EQ(fm.CurrentTimelineValue(), 1u);
 }
@@ -1634,7 +1641,7 @@ TEST_P(FrameManagerTest, CTEDGE05_SingleFrameInFlight) {
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
     }
     EXPECT_EQ(fm.FrameNumber(), 10u);
     EXPECT_EQ(fm.CurrentTimelineValue(), 10u);
@@ -1647,14 +1654,14 @@ TEST_P(FrameManagerTest, CTEDGE07_SyncPointBeforeBeginFrame) {
     auto& fm = *result;
     auto csem = SemaphoreHandle::Pack(1, 200, 0, 0);
     // Set sync point BEFORE BeginFrame
-    fm.SetComputeSyncPoint({.semaphore = csem, .value = 42});
+    fm.AddComputeSyncPoint({.semaphore = csem, .value = 42}, PipelineStage::ComputeShader);
     auto ctx = fm.BeginFrame();
     ASSERT_TRUE(ctx.has_value());
     auto acq = fm.AcquireCommandList(QueueType::Graphics);
     ASSERT_TRUE(acq.has_value());
     acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
     acq->listHandle.Dispatch([](auto& c) { c.End(); });
-    (void)fm.EndFrame(acq->bufferHandle);
+    (void)EndFrameSingle(fm, acq->bufferHandle);
     EXPECT_EQ(fm.CurrentTimelineValue(), 1u);
     // Sync point should be consumed (reset to 0) — verify via next frame with no sync
     RunFrames(fm, 1);
@@ -1679,14 +1686,14 @@ TEST_P(FrameManagerTest, CTE2E01_FullLoopWithDDAndSS) {
         ASSERT_TRUE(ctx.has_value());
         (void)sched.AllocateSignal(QueueType::Graphics);
         if (i % 2 == 0) {
-            fm.SetComputeSyncPoint({.semaphore = csem, .value = i});
+            fm.AddComputeSyncPoint({.semaphore = csem, .value = i}, PipelineStage::ComputeShader);
         }
         dd.Destroy(BufferHandle::Pack(1, i, 0, 0));
         auto acq = fm.AcquireCommandList(QueueType::Graphics);
         ASSERT_TRUE(acq.has_value());
         acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
         acq->listHandle.Dispatch([](auto& c) { c.End(); });
-        (void)fm.EndFrame(acq->bufferHandle);
+        (void)EndFrameSingle(fm, acq->bufferHandle);
         sched.CommitSubmit(QueueType::Graphics);
     }
     EXPECT_EQ(fm.FrameNumber(), 20u);
@@ -1724,13 +1731,13 @@ TEST_P(FrameManagerTest, CTE2E02_AlternatingEndFrameAndSplit) {
             std::array<FrameManager::SubmitBatch, 2> batches
                 = {FrameManager::SubmitBatch{std::span(&acqA->bufferHandle, 1), true},
                    FrameManager::SubmitBatch{std::span(&acqB->bufferHandle, 1), true}};
-            EXPECT_TRUE(fm.EndFrameSplit(batches).has_value());
+            EXPECT_TRUE(fm.EndFrame(batches).has_value());
         } else {
             auto acq = fm.AcquireCommandList(QueueType::Graphics);
             ASSERT_TRUE(acq.has_value());
             acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
             acq->listHandle.Dispatch([](auto& c) { c.End(); });
-            (void)fm.EndFrame(acq->bufferHandle);
+            (void)EndFrameSingle(fm, acq->bufferHandle);
         }
         EXPECT_GT(fm.CurrentTimelineValue(), prevTl) << "Timeline not monotonic at frame " << i;
         prevTl = fm.CurrentTimelineValue();
@@ -1763,6 +1770,642 @@ TEST_P(FrameManagerTest, CTE2E03_FramesResizeMoveResume) {
 
     moved.SetDeferredDestructor(nullptr);
     dd.DrainAll();
+}
+
+// ============================================================================
+// §19 INV — Invariant / Property Tests (precise value assertions)
+// ============================================================================
+
+// INV01: GIVEN offscreen FM WHEN BeginFrame THEN ctx.graphicsTimelineTarget == currentTL + 1
+TEST_P(FrameManagerTest, INV01_BeginFrameTimelineTarget) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    for (uint32_t i = 0; i < 5; ++i) {
+        uint64_t tlBefore = fm.CurrentTimelineValue();
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+        EXPECT_EQ(ctx->graphicsTimelineTarget, tlBefore + 1)
+            << "graphicsTimelineTarget must be currentTL+1 at frame " << (i + 1);
+        EXPECT_EQ(ctx->frameIndex, i % 2) << "frameIndex mismatch at frame " << (i + 1);
+        EXPECT_EQ(ctx->frameNumber, static_cast<uint64_t>(i + 1)) << "frameNumber mismatch";
+        EXPECT_EQ(ctx->width, 1920u);
+        EXPECT_EQ(ctx->height, 1080u);
+        EXPECT_FALSE(ctx->swapchainImage.IsValid());
+
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq.has_value());
+        acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
+        acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
+        ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+    }
+}
+
+// INV02: GIVEN offscreen FM WHEN EndFrame(single cmd) per frame THEN timeline increments by exactly 1 each time
+TEST_P(FrameManagerTest, INV02_TimelineIncrementsExactlyOnePerFrame) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    for (uint32_t i = 0; i < 10; ++i) {
+        uint64_t tlBefore = fm.CurrentTimelineValue();
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq.has_value());
+        acq->listHandle.Dispatch([](auto& cmd) { cmd.Begin(); });
+        acq->listHandle.Dispatch([](auto& cmd) { cmd.End(); });
+        ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+        EXPECT_EQ(fm.CurrentTimelineValue(), tlBefore + 1)
+            << "Timeline must increment by exactly 1 at frame " << (i + 1);
+    }
+}
+
+// INV03: GIVEN offscreen FM WHEN FrameIndex() after N frames THEN == N % framesInFlight
+TEST_P(FrameManagerTest, INV03_FrameIndexModuloInvariant) {
+    for (uint32_t fif : {1u, 2u, 3u}) {
+        auto result = MakeOffscreen(fif);
+        ASSERT_TRUE(result.has_value());
+        auto& fm = *result;
+        for (uint32_t i = 0; i < 12; ++i) {
+            auto ctx = fm.BeginFrame();
+            ASSERT_TRUE(ctx.has_value());
+            EXPECT_EQ(ctx->frameIndex, i % fif) << "fif=" << fif << " frame=" << (i + 1);
+            auto acq = fm.AcquireCommandList(QueueType::Graphics);
+            ASSERT_TRUE(acq.has_value());
+            acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+            acq->listHandle.Dispatch([](auto& c) { c.End(); });
+            ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+            EXPECT_EQ(fm.FrameIndex(), (i + 1) % fif) << "After EndFrame fif=" << fif << " i=" << i;
+        }
+    }
+}
+
+// ============================================================================
+// §20 BND — Boundary Value Tests
+// ============================================================================
+
+// BND01: GIVEN FM WHEN EndFrame with 3 batches THEN timeline increments by exactly 3
+TEST_P(FrameManagerTest, BND01_ThreeBatchTimelineIncrement) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto ctx = fm.BeginFrame();
+    ASSERT_TRUE(ctx.has_value());
+    uint64_t tlBefore = fm.CurrentTimelineValue();
+
+    auto acq1 = fm.AcquireCommandList(QueueType::Graphics);
+    auto acq2 = fm.AcquireCommandList(QueueType::Graphics);
+    auto acq3 = fm.AcquireCommandList(QueueType::Graphics);
+    ASSERT_TRUE(acq1 && acq2 && acq3);
+    for (auto* a : {&acq1, &acq2, &acq3}) {
+        (*a)->listHandle.Dispatch([](auto& c) { c.Begin(); });
+        (*a)->listHandle.Dispatch([](auto& c) { c.End(); });
+    }
+
+    std::array<FrameManager::SubmitBatch, 3> batches = {{
+        {.commandBuffers = std::span(&acq1->bufferHandle, 1), .signalPartialTimeline = true},
+        {.commandBuffers = std::span(&acq2->bufferHandle, 1), .signalPartialTimeline = true},
+        {.commandBuffers = std::span(&acq3->bufferHandle, 1), .signalPartialTimeline = true},
+    }};
+
+    auto endResult = fm.EndFrame(batches);
+    EXPECT_TRUE(endResult.has_value());
+    EXPECT_EQ(fm.CurrentTimelineValue(), tlBefore + 3);
+}
+
+// BND02: GIVEN FM WHEN AddComputeSyncPoint with invalid semaphore THEN ignored (no crash)
+TEST_P(FrameManagerTest, BND02_InvalidSemaphoreComputeSyncIgnored) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto ctx = fm.BeginFrame();
+    ASSERT_TRUE(ctx.has_value());
+
+    // Invalid semaphore handle
+    fm.AddComputeSyncPoint({.semaphore = SemaphoreHandle{}, .value = 42}, PipelineStage::ComputeShader);
+    // Value = 0 (should be ignored)
+    auto fakeSem = SemaphoreHandle::Pack(1, 200, 0, 0);
+    fm.AddComputeSyncPoint({.semaphore = fakeSem, .value = 0}, PipelineStage::ComputeShader);
+
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
+    ASSERT_TRUE(acq.has_value());
+    acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+    acq->listHandle.Dispatch([](auto& c) { c.End(); });
+    ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+    EXPECT_EQ(fm.CurrentTimelineValue(), 1u);
+}
+
+// BND03: GIVEN FM WHEN DrainPendingTransfers with no rings THEN returns 0
+TEST_P(FrameManagerTest, BND03_DrainPendingTransfersNoRings) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    uint32_t count = fm.DrainPendingTransfers();
+    EXPECT_EQ(count, 0u);
+}
+
+// BND04: GIVEN FM WHEN IsFrameComplete(0) on fresh FM THEN true
+TEST_P(FrameManagerTest, BND04_IsFrameCompleteZero) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    // Frame 0 was never submitted, GPU value >= 0 is trivially true
+    EXPECT_TRUE(result->IsFrameComplete(0));
+}
+
+// BND05: GIVEN FM after 3 frames WHEN IsFrameComplete(999) THEN false
+TEST_P(FrameManagerTest, BND05_IsFrameCompleteFuture) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+    RunFrames(fm, 3);
+    fm.WaitAll();
+    EXPECT_FALSE(fm.IsFrameComplete(999));
+}
+
+// BND06: GIVEN moved-from FM WHEN IsFrameComplete(anything) THEN true
+TEST_P(FrameManagerTest, BND06_IsFrameCompleteMovedFrom) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    RunFrames(*result, 2);
+    auto moved = std::move(*result);
+    // moved-from: impl_ is null → returns true
+    EXPECT_TRUE(result->IsFrameComplete(0));
+    EXPECT_TRUE(result->IsFrameComplete(100));
+}
+
+// BND07: GIVEN FM WHEN WaitAll on freshly created (no frames run) THEN no hang
+TEST_P(FrameManagerTest, BND07_WaitAllFreshNoFrames) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    result->WaitAll();  // currentTimelineValue == 0 → no-op
+    EXPECT_EQ(result->CurrentTimelineValue(), 0u);
+}
+
+// BND08: GIVEN FM with kMaxFramesInFlight WHEN full ring rotation THEN correct
+TEST_P(FrameManagerTest, BND08_MaxFramesInFlightRing) {
+    auto result = MakeOffscreen(FrameManager::kMaxFramesInFlight);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+    EXPECT_EQ(fm.FramesInFlight(), FrameManager::kMaxFramesInFlight);
+
+    constexpr uint32_t kRounds = 2;
+    for (uint32_t i = 0; i < FrameManager::kMaxFramesInFlight * kRounds; ++i) {
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+        EXPECT_EQ(ctx->frameIndex, i % FrameManager::kMaxFramesInFlight);
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq.has_value());
+        acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+        acq->listHandle.Dispatch([](auto& c) { c.End(); });
+        ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+    }
+    EXPECT_EQ(fm.FrameNumber(), static_cast<uint64_t>(FrameManager::kMaxFramesInFlight * kRounds));
+    EXPECT_EQ(fm.CurrentTimelineValue(), static_cast<uint64_t>(FrameManager::kMaxFramesInFlight * kRounds));
+}
+
+// ============================================================================
+// §21 STT — State Transition Tests
+// ============================================================================
+
+// STT01: GIVEN FM WHEN EndFrame(2 batches) THEN GetLastPartialTimelineValue == first batch value
+TEST_P(FrameManagerTest, STT01_PartialTimelineAfterMultiBatch) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto ctx = fm.BeginFrame();
+    ASSERT_TRUE(ctx.has_value());
+    uint64_t tlBefore = fm.CurrentTimelineValue();
+
+    auto acq1 = fm.AcquireCommandList(QueueType::Graphics);
+    auto acq2 = fm.AcquireCommandList(QueueType::Graphics);
+    ASSERT_TRUE(acq1 && acq2);
+    acq1->listHandle.Dispatch([](auto& c) { c.Begin(); });
+    acq1->listHandle.Dispatch([](auto& c) { c.End(); });
+    acq2->listHandle.Dispatch([](auto& c) { c.Begin(); });
+    acq2->listHandle.Dispatch([](auto& c) { c.End(); });
+
+    std::array<FrameManager::SubmitBatch, 2> batches = {{
+        {.commandBuffers = std::span(&acq1->bufferHandle, 1), .signalPartialTimeline = true},
+        {.commandBuffers = std::span(&acq2->bufferHandle, 1), .signalPartialTimeline = true},
+    }};
+    ASSERT_TRUE(fm.EndFrame(batches).has_value());
+
+    // First batch signals tlBefore+1, second signals tlBefore+2
+    EXPECT_EQ(fm.GetLastPartialTimelineValue(), tlBefore + 1);
+    EXPECT_EQ(fm.CurrentTimelineValue(), tlBefore + 2);
+
+    // GetGraphicsSyncPoint should return the partial value (geometry-done)
+    auto sp = fm.GetGraphicsSyncPoint();
+    EXPECT_TRUE(sp.semaphore.IsValid());
+    EXPECT_EQ(sp.value, tlBefore + 1);
+}
+
+// STT02: GIVEN FM WHEN EndFrame(1 batch) THEN GetLastPartialTimelineValue == 0
+TEST_P(FrameManagerTest, STT02_NoPartialTimelineAfterSingleBatch) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    RunFrames(fm, 1);
+    EXPECT_EQ(fm.GetLastPartialTimelineValue(), 0u);
+    // GetGraphicsSyncPoint falls back to currentTimelineValue
+    auto sp = fm.GetGraphicsSyncPoint();
+    EXPECT_EQ(sp.value, fm.CurrentTimelineValue());
+}
+
+// STT03: GIVEN FM WHEN ClearComputeSyncPoints then EndFrame THEN no compute waits
+TEST_P(FrameManagerTest, STT03_ClearComputeSyncPointsExplicit) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto ctx = fm.BeginFrame();
+    ASSERT_TRUE(ctx.has_value());
+
+    auto fakeSem = SemaphoreHandle::Pack(1, 200, 0, 0);
+    fm.AddComputeSyncPoint({.semaphore = fakeSem, .value = 10}, PipelineStage::ComputeShader);
+    fm.AddComputeSyncPoint({.semaphore = fakeSem, .value = 20}, PipelineStage::ComputeShader);
+    fm.ClearComputeSyncPoints();  // Explicit clear before EndFrame
+
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
+    ASSERT_TRUE(acq.has_value());
+    acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+    acq->listHandle.Dispatch([](auto& c) { c.End(); });
+    ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+    EXPECT_EQ(fm.CurrentTimelineValue(), 1u);
+}
+
+// STT04: GIVEN FM WHEN EndFrame auto-clears compute sync THEN next frame has no residual
+TEST_P(FrameManagerTest, STT04_EndFrameAutoClearsComputeSync) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto fakeSem = SemaphoreHandle::Pack(1, 200, 0, 0);
+
+    // Frame 1: add sync point
+    {
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+        fm.AddComputeSyncPoint({.semaphore = fakeSem, .value = 5}, PipelineStage::ComputeShader);
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq.has_value());
+        acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+        acq->listHandle.Dispatch([](auto& c) { c.End(); });
+        ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+    }
+    EXPECT_EQ(fm.CurrentTimelineValue(), 1u);
+
+    // Frame 2: no sync point added — should work fine (auto-cleared by EndFrame)
+    {
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq.has_value());
+        acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+        acq->listHandle.Dispatch([](auto& c) { c.End(); });
+        ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+    }
+    EXPECT_EQ(fm.CurrentTimelineValue(), 2u);
+    EXPECT_EQ(fm.FrameNumber(), 2u);
+}
+
+// STT05: GIVEN FM WHEN SetSyncScheduler(non-null) THEN EndFrame uses scheduler allocations
+TEST_P(FrameManagerTest, STT05_SyncSchedulerIntegration) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto timelines = Dev().Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
+    SyncScheduler sched;
+    sched.Init(timelines);
+    fm.SetSyncScheduler(&sched);
+
+    RunFrames(fm, 5);
+
+    // SyncScheduler should track timeline values
+    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 5u);
+    EXPECT_EQ(fm.CurrentTimelineValue(), 5u);
+
+    // Detach scheduler
+    fm.SetSyncScheduler(nullptr);
+
+    // Should fall back to local ++
+    RunFrames(fm, 3);
+    EXPECT_EQ(fm.CurrentTimelineValue(), 8u);
+    // Scheduler should remain at 5 (detached)
+    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 5u);
+}
+
+// STT06: GIVEN FM WHEN SetTransferSyncPoint THEN BeginFrame populates transferWaitValue
+TEST_P(FrameManagerTest, STT06_TransferSyncPointInContext) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto fakeSem = SemaphoreHandle::Pack(1, 300, 0, 0);
+    fm.SetTransferSyncPoint({.semaphore = fakeSem, .value = 7});
+
+    auto ctx = fm.BeginFrame();
+    ASSERT_TRUE(ctx.has_value());
+    EXPECT_EQ(ctx->transferWaitValue, 7u);
+
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
+    ASSERT_TRUE(acq.has_value());
+    acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+    acq->listHandle.Dispatch([](auto& c) { c.End(); });
+    ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+
+    // After EndFrame, transferSync.value is reset to 0
+    auto ctx2 = fm.BeginFrame();
+    ASSERT_TRUE(ctx2.has_value());
+    EXPECT_EQ(ctx2->transferWaitValue, 0u);
+
+    auto acq2 = fm.AcquireCommandList(QueueType::Graphics);
+    ASSERT_TRUE(acq2.has_value());
+    acq2->listHandle.Dispatch([](auto& c) { c.Begin(); });
+    acq2->listHandle.Dispatch([](auto& c) { c.End(); });
+    ASSERT_TRUE(EndFrameSingle(fm, acq2->bufferHandle).has_value());
+}
+
+// ============================================================================
+// §22 STR — Stress / Adversarial Tests
+// ============================================================================
+
+// STR01: GIVEN FM WHEN 200 frames THEN timeline monotonically increases, exact value
+TEST_P(FrameManagerTest, STR01_200FrameMonotonicity) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    uint64_t prevTl = 0;
+    for (uint32_t i = 0; i < 200; ++i) {
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+        EXPECT_EQ(ctx->frameNumber, static_cast<uint64_t>(i + 1));
+
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq.has_value());
+        acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+        acq->listHandle.Dispatch([](auto& c) { c.End(); });
+        ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+
+        uint64_t curTl = fm.CurrentTimelineValue();
+        EXPECT_EQ(curTl, prevTl + 1) << "Non-monotonic at frame " << (i + 1);
+        prevTl = curTl;
+    }
+    EXPECT_EQ(fm.FrameNumber(), 200u);
+    EXPECT_EQ(fm.CurrentTimelineValue(), 200u);
+    EXPECT_EQ(fm.FrameIndex(), 0u);  // 200 % 2 == 0
+}
+
+// STR02: GIVEN FM WHEN alternating 1-batch and 3-batch EndFrame THEN state consistent
+TEST_P(FrameManagerTest, STR02_AlternatingBatchSizes) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    uint64_t prevTl = 0;
+    for (uint32_t i = 0; i < 20; ++i) {
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+
+        if (i % 2 == 0) {
+            // Single batch
+            auto acq = fm.AcquireCommandList(QueueType::Graphics);
+            ASSERT_TRUE(acq.has_value());
+            acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+            acq->listHandle.Dispatch([](auto& c) { c.End(); });
+            ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+            EXPECT_EQ(fm.CurrentTimelineValue(), prevTl + 1) << "Single batch frame " << i;
+            EXPECT_EQ(fm.GetLastPartialTimelineValue(), 0u);
+        } else {
+            // Triple batch
+            auto a1 = fm.AcquireCommandList(QueueType::Graphics);
+            auto a2 = fm.AcquireCommandList(QueueType::Graphics);
+            auto a3 = fm.AcquireCommandList(QueueType::Graphics);
+            ASSERT_TRUE(a1 && a2 && a3);
+            for (auto* a : {&a1, &a2, &a3}) {
+                (*a)->listHandle.Dispatch([](auto& c) { c.Begin(); });
+                (*a)->listHandle.Dispatch([](auto& c) { c.End(); });
+            }
+            std::array<FrameManager::SubmitBatch, 3> batches = {{
+                {.commandBuffers = std::span(&a1->bufferHandle, 1), .signalPartialTimeline = true},
+                {.commandBuffers = std::span(&a2->bufferHandle, 1), .signalPartialTimeline = true},
+                {.commandBuffers = std::span(&a3->bufferHandle, 1), .signalPartialTimeline = true},
+            }};
+            ASSERT_TRUE(fm.EndFrame(batches).has_value());
+            EXPECT_EQ(fm.CurrentTimelineValue(), prevTl + 3) << "Triple batch frame " << i;
+            EXPECT_EQ(fm.GetLastPartialTimelineValue(), prevTl + 1);
+        }
+        prevTl = fm.CurrentTimelineValue();
+    }
+    EXPECT_EQ(fm.FrameNumber(), 20u);
+}
+
+// STR03: GIVEN FM WHEN 3 compute sync points in one frame THEN all consumed
+TEST_P(FrameManagerTest, STR03_MultiComputeSyncPointsSingleFrame) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto ctx = fm.BeginFrame();
+    ASSERT_TRUE(ctx.has_value());
+
+    auto sem1 = SemaphoreHandle::Pack(1, 200, 0, 0);
+    auto sem2 = SemaphoreHandle::Pack(1, 201, 0, 0);
+    auto sem3 = SemaphoreHandle::Pack(1, 202, 0, 0);
+
+    fm.AddComputeSyncPoint({.semaphore = sem1, .value = 1}, PipelineStage::ComputeShader);
+    fm.AddComputeSyncPoint({.semaphore = sem2, .value = 2}, PipelineStage::ComputeShader);
+    fm.AddComputeSyncPoint({.semaphore = sem3, .value = 3}, PipelineStage::FragmentShader);
+
+    auto acq = fm.AcquireCommandList(QueueType::Graphics);
+    ASSERT_TRUE(acq.has_value());
+    acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+    acq->listHandle.Dispatch([](auto& c) { c.End(); });
+    ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+
+    // All consumed — next frame should have no residual
+    {
+        auto ctx2 = fm.BeginFrame();
+        ASSERT_TRUE(ctx2.has_value());
+        auto acq2 = fm.AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq2.has_value());
+        acq2->listHandle.Dispatch([](auto& c) { c.Begin(); });
+        acq2->listHandle.Dispatch([](auto& c) { c.End(); });
+        ASSERT_TRUE(EndFrameSingle(fm, acq2->bufferHandle).has_value());
+    }
+    EXPECT_EQ(fm.CurrentTimelineValue(), 2u);
+    EXPECT_EQ(fm.FrameNumber(), 2u);
+}
+
+// STR04: GIVEN FM WHEN rapid create → run frames → destroy → recreate THEN no leak
+TEST_P(FrameManagerTest, STR04_RapidCreateDestroyRecreate) {
+    for (uint32_t round = 0; round < 5; ++round) {
+        auto result = MakeOffscreen(2);
+        ASSERT_TRUE(result.has_value()) << "Create failed round " << round;
+        auto& fm = *result;
+        RunFrames(fm, 10);
+        EXPECT_EQ(fm.FrameNumber(), 10u);
+        EXPECT_EQ(fm.CurrentTimelineValue(), 10u);
+        fm.WaitAll();
+        // fm destructor runs here, destroying sync objects
+    }
+}
+
+// STR05: GIVEN FM WHEN WaitAll mid-loop then resume THEN counters continue correctly
+TEST_P(FrameManagerTest, STR05_WaitAllMidLoopResume) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    RunFrames(fm, 10);
+    EXPECT_EQ(fm.CurrentTimelineValue(), 10u);
+
+    fm.WaitAll();
+
+    RunFrames(fm, 10);
+    EXPECT_EQ(fm.CurrentTimelineValue(), 20u);
+    EXPECT_EQ(fm.FrameNumber(), 20u);
+
+    fm.WaitAll();
+    fm.WaitAll();  // Double WaitAll — idempotent
+
+    RunFrames(fm, 5);
+    EXPECT_EQ(fm.CurrentTimelineValue(), 25u);
+    EXPECT_EQ(fm.FrameNumber(), 25u);
+}
+
+// STR06: GIVEN FM WHEN move mid-loop with DD + SyncScheduler THEN moved-to works, moved-from inert
+TEST_P(FrameManagerTest, STR06_MoveWithFullIntegration) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+
+    auto [mock, mockDev] = MakeMockDeviceHandle();
+    auto dd = DeferredDestructor::Create(mockDev, 2);
+    result->SetDeferredDestructor(&dd);
+
+    auto timelines = Dev().Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
+    SyncScheduler sched;
+    sched.Init(timelines);
+    result->SetSyncScheduler(&sched);
+
+    // Run 5 frames
+    for (uint32_t i = 0; i < 5; ++i) {
+        auto ctx = result->BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+        dd.Destroy(BufferHandle::Pack(1, i + 1, 0, 0));
+        auto acq = result->AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq.has_value());
+        acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+        acq->listHandle.Dispatch([](auto& c) { c.End(); });
+        ASSERT_TRUE(EndFrameSingle(*result, acq->bufferHandle).has_value());
+    }
+
+    // Move
+    auto moved = std::move(*result);
+    EXPECT_EQ(result->FrameNumber(), 0u);
+    EXPECT_EQ(result->CurrentTimelineValue(), 0u);
+    EXPECT_EQ(result->FramesInFlight(), 0u);
+
+    EXPECT_EQ(moved.FrameNumber(), 5u);
+    EXPECT_EQ(moved.CurrentTimelineValue(), 5u);
+    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 5u);
+
+    // Continue on moved instance
+    RunFrames(moved, 5);
+    EXPECT_EQ(moved.FrameNumber(), 10u);
+    EXPECT_EQ(moved.CurrentTimelineValue(), 10u);
+    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 10u);
+
+    moved.SetDeferredDestructor(nullptr);
+    moved.SetSyncScheduler(nullptr);
+    dd.DrainAll();
+}
+
+// STR07: GIVEN FM WHEN Resize between every frame THEN counters unaffected
+TEST_P(FrameManagerTest, STR07_ResizeBetweenEveryFrame) {
+    auto result = MakeOffscreen(2);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    for (uint32_t i = 0; i < 10; ++i) {
+        uint32_t w = 800 + i * 100;
+        uint32_t h = 600 + i * 50;
+        ASSERT_TRUE(fm.Resize(w, h).has_value());
+
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+        EXPECT_EQ(ctx->width, w);
+        EXPECT_EQ(ctx->height, h);
+        EXPECT_EQ(ctx->frameNumber, static_cast<uint64_t>(i + 1));
+
+        auto acq = fm.AcquireCommandList(QueueType::Graphics);
+        ASSERT_TRUE(acq.has_value());
+        acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+        acq->listHandle.Dispatch([](auto& c) { c.End(); });
+        ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+    }
+    EXPECT_EQ(fm.FrameNumber(), 10u);
+    EXPECT_EQ(fm.CurrentTimelineValue(), 10u);
+}
+
+// STR08: GIVEN FM WHEN interleaved compute sync + multi-batch over many frames THEN no corruption
+TEST_P(FrameManagerTest, STR08_InterleavedComputeAndMultiBatch) {
+    auto result = MakeOffscreen(3);
+    ASSERT_TRUE(result.has_value());
+    auto& fm = *result;
+
+    auto csem = SemaphoreHandle::Pack(1, 200, 0, 0);
+    uint64_t prevTl = 0;
+
+    for (uint32_t i = 0; i < 30; ++i) {
+        auto ctx = fm.BeginFrame();
+        ASSERT_TRUE(ctx.has_value());
+
+        // Every 3rd frame: add a compute sync point
+        if (i % 3 == 0) {
+            fm.AddComputeSyncPoint({.semaphore = csem, .value = i + 1}, PipelineStage::ComputeShader);
+        }
+
+        uint64_t expectedDelta;
+        if (i % 4 == 0) {
+            // Single batch
+            auto acq = fm.AcquireCommandList(QueueType::Graphics);
+            ASSERT_TRUE(acq.has_value());
+            acq->listHandle.Dispatch([](auto& c) { c.Begin(); });
+            acq->listHandle.Dispatch([](auto& c) { c.End(); });
+            ASSERT_TRUE(EndFrameSingle(fm, acq->bufferHandle).has_value());
+            expectedDelta = 1;
+        } else {
+            // Two batches
+            auto a1 = fm.AcquireCommandList(QueueType::Graphics);
+            auto a2 = fm.AcquireCommandList(QueueType::Graphics);
+            ASSERT_TRUE(a1 && a2);
+            a1->listHandle.Dispatch([](auto& c) { c.Begin(); });
+            a1->listHandle.Dispatch([](auto& c) { c.End(); });
+            a2->listHandle.Dispatch([](auto& c) { c.Begin(); });
+            a2->listHandle.Dispatch([](auto& c) { c.End(); });
+            std::array<FrameManager::SubmitBatch, 2> batches = {{
+                {.commandBuffers = std::span(&a1->bufferHandle, 1), .signalPartialTimeline = true},
+                {.commandBuffers = std::span(&a2->bufferHandle, 1), .signalPartialTimeline = true},
+            }};
+            ASSERT_TRUE(fm.EndFrame(batches).has_value());
+            expectedDelta = 2;
+        }
+
+        EXPECT_EQ(fm.CurrentTimelineValue(), prevTl + expectedDelta) << "Timeline delta wrong at frame " << (i + 1);
+        prevTl = fm.CurrentTimelineValue();
+    }
+    EXPECT_EQ(fm.FrameNumber(), 30u);
+    EXPECT_EQ(fm.FrameIndex(), 0u);  // 30 % 3 == 0
 }
 
 // ============================================================================

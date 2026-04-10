@@ -350,8 +350,13 @@ static void MainLoopIteration() {
         return;
     }
 
+    auto* fm = g_sm->GetFrameManager(g_mainWindow);
+    if (!fm) {
+        return;
+    }
+
     // BeginFrame: waits on in-flight fence, acquires swapchain image
-    auto frameResult = g_sm->BeginFrame(g_mainWindow);
+    auto frameResult = fm->BeginFrame();
     if (!frameResult) {
         return;
     }
@@ -364,7 +369,8 @@ static void MainLoopIteration() {
     }
 
     // EndFrame: submits command buffer with correct sync, then presents
-    (void)g_sm->EndFrame(g_mainWindow, *cmdBuf);
+    miki::frame::FrameManager::SubmitBatch batch{.commandBuffers = std::span(&*cmdBuf, 1)};
+    (void)fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{&batch, 1});
 }
 
 // ============================================================================
@@ -468,7 +474,11 @@ int main(int argc, char** argv) {
 #ifndef __EMSCRIPTEN__
     backendPtr->SetLiveResizeCallback([](WindowHandle w, uint32_t width, uint32_t height) {
         (void)g_sm->ResizeSurface(w, width, height);
-        auto frameResult = g_sm->BeginFrame(w);
+        auto* fm = g_sm->GetFrameManager(w);
+        if (!fm) {
+            return;
+        }
+        auto frameResult = fm->BeginFrame();
         if (!frameResult) {
             return;
         }
@@ -477,7 +487,8 @@ int main(int argc, char** argv) {
         if (!cmdBuf) {
             return;
         }
-        (void)g_sm->EndFrame(w, *cmdBuf);
+        miki::frame::FrameManager::SubmitBatch batch{.commandBuffers = std::span(&*cmdBuf, 1)};
+        (void)fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{&batch, 1});
     });
 #endif
 

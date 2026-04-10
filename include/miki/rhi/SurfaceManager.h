@@ -22,13 +22,15 @@
 #include <vector>
 
 #include "miki/core/Result.h"
-#include "miki/frame/FrameContext.h"
 #include "miki/frame/FrameManager.h"
 #include "miki/platform/WindowHandle.h"
-#include "miki/rhi/CommandBuffer.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/RenderSurface.h"
 #include "miki/rhi/Swapchain.h"
+
+namespace miki::frame {
+    class SyncScheduler;
+}
 
 namespace miki::platform {
     class WindowManager;
@@ -99,17 +101,10 @@ namespace miki::rhi {
         /// @brief Get the FrameManager for a window (nullptr if not attached).
         [[nodiscard]] auto GetFrameManager(platform::WindowHandle iWindow) -> frame::FrameManager*;
 
-        // ── Frame operations ────────────────────────────────────────
-
-        /// @brief Begin frame for a specific window's surface.
-        /// Waits on in-flight fence, acquires swapchain image.
-        /// Returns error if window has no surface or is minimized.
-        [[nodiscard]] auto BeginFrame(platform::WindowHandle iWindow) -> core::Result<frame::FrameContext>;
-
-        /// @brief End frame for a specific window's surface.
-        /// Submits command buffer with correct sync primitives, then presents.
-        /// @return void on success, SwapchainOutOfDate if resize needed.
-        [[nodiscard]] auto EndFrame(platform::WindowHandle iWindow, CommandBufferHandle iCmd) -> core::Result<void>;
+        /// @brief Get the shared SyncScheduler (device-global, multi-window safe).
+        /// All FrameManagers created by this SurfaceManager share this scheduler,
+        /// ensuring monotonic timeline values across windows.
+        [[nodiscard]] auto GetSyncScheduler() noexcept -> frame::SyncScheduler&;
 
         /// @brief Resize a window's surface (typically after WindowEvent::Resize).
         /// Recreates the swapchain at new dimensions. Waits for this surface's

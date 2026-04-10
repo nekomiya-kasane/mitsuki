@@ -1,14 +1,15 @@
 /** @file FrameManager.h
- *  @brief Timeline-first frame pacing: BeginFrame / EndFrame.
+ *  @brief Unified-timeline frame pacing: BeginFrame / EndFrame.
  *
  *  FrameManager handles CPU/GPU synchronization for a single window (windowed)
  *  or a headless render target (offscreen). It owns per-frame sync primitives
  *  and orchestrates swapchain acquire/present via the bound RenderSurface.
  *
- *  Tier-adaptive:
- *    T1 (Vulkan 1.4 / D3D12): Timeline semaphore — single object per queue.
- *    T2 (Vulkan Compat):       Binary semaphore + VkFence per frame slot.
- *    T3/T4 (WebGPU / OpenGL):  Implicit sync (blocking present).
+ *  All backends use the same timeline semaphore code path:
+ *    T1 (Vulkan 1.4 / D3D12): Native timeline semaphore.
+ *    T2 (Vulkan Compat):       Emulated via VK_KHR_timeline_semaphore or fence ring.
+ *    T3/T4 (WebGPU / OpenGL):  Emulated via CPU-side counter + backend sync.
+ *  This eliminates tier-specific branching in frame management.
  *
  *  See: specs/03-sync.md SS4
  *  Namespace: miki::frame
@@ -69,30 +70,24 @@ namespace miki::frame {
         // ── Frame lifecycle ─────────────────────────────────────────
 
         /// @brief Begin a new frame.
-        /// T1: CPU waits on timeline semaphore for oldest in-flight frame.
-        /// T2: CPU waits on VkFence. T3/T4: Implicit sync.
+        /// CPU waits on timeline semaphore for oldest in-flight frame.
         /// Acquires swapchain image (windowed) or advances offscreen slot.
         [[nodiscard]] auto BeginFrame() -> core::Result<FrameContext>;
 
-        /// @brief Submit recorded command buffers and present (single submit).
-        /// Pass the bufferHandle from CommandListAcquisition (NOT the listHandle).
-        [[nodiscard]] auto EndFrame(std::span<const rhi::CommandBufferHandle> iCmdBuffers) -> core::Result<void>;
-
-        /// @brief Single command buffer convenience overload.
-        [[nodiscard]] auto EndFrame(rhi::CommandBufferHandle iCmd) -> core::Result<void>;
-
-        /// @brief A batch of command buffers for split-submit (specs/03-sync.md §5.3).
-        /// Each batch becomes a separate vkQueueSubmit2 with its own timeline signal.
+        /// @brief A batch of command buffers for submit (specs/03-sync.md §5.3).
+        /// Each batch becomes a separate queue submit with its own timeline signal.
         /// The last batch additionally signals renderDone binary sem for present.
         struct SubmitBatch {
             std::span<const rhi::CommandBufferHandle> commandBuffers;
             bool signalPartialTimeline = true;  ///< Allocate + signal a timeline value after this batch
         };
 
-        /// @brief Split-submit EndFrame: multiple graphics queue submits per frame.
-        /// Enables async compute to start after early batches (e.g., geometry done)
-        /// without waiting for the full frame. Last batch handles present sync.
-        [[nodiscard]] auto EndFrameSplit(std::span<const SubmitBatch> iBatches) -> core::Result<void>;
+        /// @brief Submit recorded command buffers and present.
+        /// Accepts one or more batches; each batch is a separate queue submit.
+        /// Single-batch usage is equivalent to the old EndFrame(span<CmdBuf>).
+        /// Multi-batch usage enables async compute to start after early batches
+        /// (e.g., geometry done) without waiting for the full frame.
+        [[nodiscard]] auto EndFrame(std::span<const SubmitBatch> iBatches) -> core::Result<void>;
 
         // ── Command buffer acquisition (pool-backed, §19) ────────────
 
@@ -107,14 +102,18 @@ namespace miki::frame {
         // ── Async compute integration ───────────────────────────────
 
         /// @brief Get a sync point for async compute to wait on.
-        /// Returns {timeline semaphore, value} — compute queue waits before
-        /// reading graphics outputs (e.g., depth buffer after DepthPrePass).
+        /// Returns {timeline semaphore, value} — compute queue waits before reading graphics outputs (e.g., depth
+        /// buffer after DepthPrePass).
         [[nodiscard]] auto GetGraphicsSyncPoint() const noexcept -> TimelineSyncPoint;
 
-        /// @brief Register an async compute completion for this frame.
-        /// Graphics queue will wait on this before passes that depend on
-        /// compute results (e.g., Deferred Resolve waits for GTAO + Material Resolve).
-        auto SetComputeSyncPoint(TimelineSyncPoint iPoint) noexcept -> void;
+        /// @brief Accumulate a compute sync dependency for this frame (additive).
+        /// Multiple calls add multiple waits. EndFrame consumes all accumulated waits
+        /// on the last batch, then auto-clears. Use for frames with multiple compute dependencies
+        /// (e.g., GTAO + GDeflate decode). See specs/03-sync.md §4.4.4.
+        auto AddComputeSyncPoint(TimelineSyncPoint iPoint, rhi::PipelineStage iStage) noexcept -> void;
+
+        /// @brief Clear accumulated compute sync points. Called automatically by EndFrame.
+        auto ClearComputeSyncPoints() noexcept -> void;
 
         // ── Transfer queue integration ──────────────────────────────
 
@@ -138,6 +137,19 @@ namespace miki::frame {
         /// @brief Register a transfer completion for this frame.
         /// Graphics queue will wait at the appropriate stage.
         auto SetTransferSyncPoint(TimelineSyncPoint iPoint) noexcept -> void;
+
+        // ── SyncScheduler integration (specs/03-sync.md §4.4) ───────
+
+        /// @brief Bind a SyncScheduler for global timeline value allocation.
+        /// When bound, EndFrame delegates AllocateSignal/CommitSubmit to the scheduler.
+        /// When null (default), local ++currentTimelineValue fallback is used.
+        /// Must be called before the first BeginFrame. Typically set by FrameOrchestrator.
+        auto SetSyncScheduler(SyncScheduler* iScheduler) noexcept -> void;
+
+        /// @brief Get the partial timeline value from the first signaled batch of the last EndFrame.
+        /// Returns 0 if the last frame used a single batch (no partial signal).
+        /// Use case: async compute waits on geometry-done (batch #1), not frame-done.
+        [[nodiscard]] auto GetLastPartialTimelineValue() const noexcept -> uint64_t;
 
         // ── Resource lifecycle hooks ────────────────────────────────
 

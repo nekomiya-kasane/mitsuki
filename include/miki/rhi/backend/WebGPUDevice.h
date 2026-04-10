@@ -224,7 +224,7 @@ namespace miki::rhi {
         // -- Capability --
         auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
-        auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
+        auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
 
         // -- Swapchain (WebGPUSwapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
@@ -405,6 +405,7 @@ namespace miki::rhi {
         HandlePool<WGPUShaderModuleData, ShaderModuleTag, kMaxShaderModules> shaderModules_;
         HandlePool<WGPUFenceData, FenceTag, kMaxFences> fences_;
         HandlePool<WGPUSemaphoreData, SemaphoreTag, kMaxSemaphores> semaphores_;
+        QueueTimelines queueTimelines_;
         HandlePool<WGPUPipelineData, PipelineTag, kMaxPipelines> pipelines_;
         HandlePool<WGPUPipelineLayoutData, PipelineLayoutTag, kMaxPipelineLayouts> pipelineLayouts_;
         HandlePool<WGPUDescriptorLayoutData, DescriptorLayoutTag, kMaxDescriptorLayouts> descriptorLayouts_;

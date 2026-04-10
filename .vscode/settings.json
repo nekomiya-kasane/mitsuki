@@ -60,5 +60,6 @@
         "__builtin_.*": true,
         "_M_.*": true
     },
-    "debug.console.wordWrap": true
+    "debug.console.wordWrap": true,
+    "editor.fontFamily": "DejaVu Sans Mono"
 }

@@ -318,6 +318,122 @@ struct FrameContext {
 | Frame completion query | None                                                  | `IsFrameComplete()` for non-blocking poll              |
 | WaitAll                | `device->WaitIdle()` (global stall)                   | Per-surface timeline wait (surgical)                   |
 
+### 4.4 FrameManager ↔ SyncScheduler Integration Contract
+
+#### 4.4.1 Problem: Local vs Global Timeline Allocation
+
+The current implementation uses `++currentTimelineValue` locally within FrameManager::Impl. This has three limitations:
+
+| #   | Issue                                  | Severity | Impact                                                                                                                      |
+| --- | -------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Multi-window conflict**              | High     | Two FrameManagers sharing one graphics queue timeline would produce duplicate values                                        |
+| 2   | **No intra-frame partial value query** | High     | `GetGraphicsSyncPoint()` returns the frame-end value, not intermediate batch values from `EndFrameSplit`                    |
+| 3   | **SyncScheduler bypass**               | Medium   | FrameManager does not go through `SyncScheduler::AllocateSignal()`, so the scheduler's `currentValue` diverges from reality |
+
+#### 4.4.2 Design: SyncScheduler-Backed Allocation
+
+FrameManager accepts an optional `SyncScheduler*`. When set, **all timeline value allocation is delegated** to the scheduler. When null (standalone / test mode), the local `++currentTimelineValue` fallback is retained for backward compatibility with existing tests.
+
+```cpp
+class FrameManager {
+public:
+    // ... existing API ...
+
+    /// @brief Bind a SyncScheduler for global timeline value allocation.
+    /// Must be called before the first BeginFrame. Typically set by FrameOrchestrator.
+    /// When bound:
+    ///   - EndFrame/EndFrameSplit calls SyncScheduler::AllocateSignal(Graphics)
+    ///     instead of local ++currentTimelineValue.
+    ///   - GetGraphicsSyncPoint() can return batch-level partial values.
+    ///   - Transfer dispatches use AllocateSignal(Transfer).
+    ///   - Multi-window safety is guaranteed (values globally monotonic).
+    /// When null (default):
+    ///   - Local ++currentTimelineValue is used (single-window only).
+    auto SetSyncScheduler(SyncScheduler* scheduler) noexcept -> void;
+
+    /// @brief Get the partial timeline value signaled by the last completed batch
+    /// in the most recent EndFrameSplit call. Returns 0 if no partial signal occurred.
+    /// Use case: async compute waits on geometry-done (batch #1), not frame-done.
+    [[nodiscard]] auto GetLastPartialTimelineValue() const noexcept -> uint64_t;
+};
+```
+
+**Impl changes**:
+
+```cpp
+struct FrameManager::Impl {
+    // ... existing fields ...
+    SyncScheduler* syncScheduler = nullptr;  // Optional, owned by FrameOrchestrator
+
+    // Partial timeline tracking for GetGraphicsSyncPoint / GetLastPartialTimelineValue
+    uint64_t lastPartialTimelineValue = 0;  // Set by EndFrameSplit batch[0] signal
+
+    [[nodiscard]] auto AllocateGraphicsSignal() -> uint64_t {
+        if (syncScheduler) return syncScheduler->AllocateSignal(rhi::QueueType::Graphics);
+        return ++currentTimelineValue;
+    }
+
+    [[nodiscard]] auto AllocateTransferSignal() -> uint64_t {
+        if (syncScheduler) return syncScheduler->AllocateSignal(rhi::QueueType::Transfer);
+        return ++currentTransferTimelineValue;
+    }
+
+    void CommitGraphicsSubmit() {
+        if (syncScheduler) syncScheduler->CommitSubmit(rhi::QueueType::Graphics);
+    }
+
+    void CommitTransferSubmit() {
+        if (syncScheduler) syncScheduler->CommitSubmit(rhi::QueueType::Transfer);
+    }
+};
+```
+
+#### 4.4.3 GetGraphicsSyncPoint Semantics (Revised)
+
+| Mode                                                                | `GetGraphicsSyncPoint()` returns                                             | Use case                                   |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------ |
+| After `EndFrame`                                                    | `{graphicsTimeline, currentTimelineValue}` — the frame-end value             | Simple single-submit frame                 |
+| After `EndFrameSplit` with `signalPartialTimeline=true` on batch[0] | `{graphicsTimeline, lastPartialTimelineValue}` — the **geometry-done** value | Async compute waits on depth/geometry only |
+| Before any `EndFrame`                                               | `{graphicsTimeline, currentTimelineValue}` — previous frame's final value    | Pre-frame query                            |
+
+The critical change: after `EndFrameSplit`, `GetGraphicsSyncPoint()` returns the **first partial signal value** (geometry done), not the frame-end value. This is exactly what async compute needs to start GTAO immediately after depth is available.
+
+For the frame-end value (e.g., for `BeginFrame` CPU wait), `CurrentTimelineValue()` continues to return the last signaled value.
+
+#### 4.4.4 Multi-Compute Sync Points
+
+The current `SetComputeSyncPoint(single)` model is sufficient for the common case (one frame-sync compute submit per frame). For frames with multiple compute dependencies (e.g., GTAO done + GDeflate decode done), `AddComputeSyncPoint` accumulates waits:
+
+```cpp
+class FrameManager {
+public:
+    // Existing — single sync point (backward compatible, overwrites)
+    auto SetComputeSyncPoint(TimelineSyncPoint point) noexcept -> void;
+
+    // New — additive accumulator for multiple compute waits per frame
+    auto AddComputeSyncPoint(TimelineSyncPoint point, rhi::PipelineStage stage) noexcept -> void;
+
+    // Clears accumulated compute sync points (called automatically by EndFrame)
+    auto ClearComputeSyncPoints() noexcept -> void;
+};
+```
+
+When `AddComputeSyncPoint` is used, `EndFrame`/`EndFrameSplit` adds ALL accumulated waits to the appropriate batch. The old `SetComputeSyncPoint` continues to work as a single-value override (converted internally to a single `AddComputeSyncPoint` with stage `ComputeShader`).
+
+#### 4.4.5 Transfer Wait Stage Semantics
+
+| Submit model               | Transfer wait placement                   | Stage mask                                                      | Rationale                                                                              |
+| -------------------------- | ----------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `EndFrame` (single submit) | On the single graphics submit             | `PipelineStage::Transfer`                                       | GPU pipelines transfer wait with other work; no bubble because pipeline depth hides it |
+| `EndFrameSplit` batch[0]   | On the first batch only                   | `PipelineStage::Transfer`                                       | First batch contains DepthPrePass which is the earliest consumer of uploaded data      |
+| RenderGraph (future)       | Injected per-pass by RenderGraph executor | Per-pass consumer stage (e.g., `VertexInput`, `FragmentShader`) | Maximum granularity — transfer wait delayed to exact point of consumption              |
+
+**Current**: `PipelineStage::Transfer` on the first submit is correct and does not cause GPU bubbles because:
+
+1. The GPU can speculatively execute non-dependent work past the wait point
+2. Transfer stage is early in the pipeline — the wait resolves before any shader stages begin
+3. In eager flush mode, transfers complete during CPU recording (~2ms), so the wait is trivially satisfied by submit time
+
 ---
 
 ## 5. Multi-Queue Synchronization — Detailed Timeline Diagrams
@@ -2476,6 +2592,41 @@ FM-XQ-05  GIVEN T2 FM, SetComputeSyncPoint() called
           WHEN  EndFrame() is called
           THEN  compute sync is ignored (T2 has no async compute)
           AND   submit has no timeline waits
+
+FM-XQ-06  GIVEN T1 FM with SyncScheduler bound
+          WHEN  EndFrame(cmd) is called
+          THEN  timeline value was obtained via SyncScheduler::AllocateSignal(Graphics)
+          AND   SyncScheduler::CommitSubmit(Graphics) was called after submit
+          AND   SyncScheduler::GetCurrentValue(Graphics) == currentTimelineValue
+
+FM-XQ-07  GIVEN T1 FM with SyncScheduler bound, 2 frames completed
+          WHEN  SyncScheduler::GetCurrentValue(Graphics) is queried
+          THEN  returns same value as FM.CurrentTimelineValue()
+
+FM-XQ-08  GIVEN T1 FM without SyncScheduler (null), 5 frames completed
+          WHEN  CurrentTimelineValue() is queried
+          THEN  returns 5 (local fallback works unchanged)
+
+FM-XQ-09  GIVEN T1 FM, AddComputeSyncPoint({sem1, 10}, ComputeShader)
+          AND   AddComputeSyncPoint({sem2, 20}, FragmentShader)
+          WHEN  EndFrame(cmd) is called
+          THEN  graphics submit has 2 compute waits: sem1@10 at ComputeShader + sem2@20 at FragmentShader
+          AND   after EndFrame, accumulated compute sync points are cleared
+
+FM-XQ-10  GIVEN T1 FM, SetComputeSyncPoint({sem1, 10}) then AddComputeSyncPoint({sem2, 20}, FragmentShader)
+          WHEN  EndFrame(cmd) is called
+          THEN  graphics submit has 2 compute waits (SetComputeSyncPoint converted to Add internally)
+
+FM-XQ-11  GIVEN T1 FM after EndFrameSplit({batchA(signalPartial=true), batchB})
+          WHEN  GetGraphicsSyncPoint() is called
+          THEN  returns {graphicsTimeline, batchA's partial timeline value}
+          AND   GetLastPartialTimelineValue() == batchA's partial value
+          AND   CurrentTimelineValue() == batchB's final value (higher)
+
+FM-XQ-12  GIVEN T1 FM after EndFrame(cmd) (no split)
+          WHEN  GetLastPartialTimelineValue() is called
+          THEN  returns 0 (no partial signal occurred)
+          AND   GetGraphicsSyncPoint() returns {graphicsTimeline, currentTimelineValue}
 ```
 
 ### 17.10 FrameManager — Resource Lifecycle Hooks
@@ -3000,7 +3151,7 @@ CPA-GS-05  GIVEN CPA with enableHwmShrink=true
 | **FrameManager**         | Implicit sync (T3/T4)           | FM-IS-01..03  | 3       |
 | **FrameManager**         | Transfer dispatch               | FM-TX-01..09  | 9       |
 | **FrameManager**         | Split submit                    | FM-SS-01..05  | 5       |
-| **FrameManager**         | Cross-queue sync                | FM-XQ-01..05  | 5       |
+| **FrameManager**         | Cross-queue sync                | FM-XQ-01..12  | 12      |
 | **FrameManager**         | Resource lifecycle hooks        | FM-RL-01..04  | 4       |
 | **FrameManager**         | Resize / reconfigure            | FM-RS-01..05  | 5       |
 | **FrameManager**         | Queries                         | FM-QR-01..05  | 5       |
@@ -3018,7 +3169,7 @@ CPA-GS-05  GIVEN CPA with enableHwmShrink=true
 | **CommandPoolAllocator** | CommandListArena                | CPA-CA-01..08 | 8       |
 | **CommandPoolAllocator** | Steady-state / stress           | CPA-ST-01..02 | 2       |
 | **CommandPoolAllocator** | GetStats / DumpStats / OOM      | CPA-GS-01..05 | 5       |
-| **Total**                |                                 |               | **131** |
+| **Total**                |                                 |               | **138** |
 
 ### 17.20 Test Execution Strategy
 
@@ -3598,9 +3749,9 @@ CT-CPA-17  GIVEN CT-CPA-16 scenario extended:
 
 | Section | Test Type       | Count   |
 | :------ | :-------------- | :------ |
-| §17     | Unit tests      | 131     |
+| §17     | Unit tests      | 138     |
 | §18     | Composite tests | 61      |
-| **Sum** |                 | **192** |
+| **Sum** |                 | **199** |
 
 ---
 

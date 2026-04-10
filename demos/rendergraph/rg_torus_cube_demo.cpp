@@ -421,7 +421,7 @@ static void RenderOneFrame(WindowHandle win) {
 
     // EndFrame with no command buffers — executor already submitted via SyncScheduler
     // We still need to signal present, so pass an empty span
-    (void)fm->EndFrame(std::span<const CommandBufferHandle>{});
+    (void)fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
 }
 
 static void MainLoopIteration() {

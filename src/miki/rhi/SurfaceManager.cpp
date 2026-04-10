@@ -12,7 +12,9 @@
 #include <cassert>
 #include <unordered_map>
 
+#include "miki/frame/SyncScheduler.h"
 #include "miki/platform/WindowManager.h"
+#include "miki/rhi/backend/AllBackends.h"
 
 namespace miki::rhi {
 
@@ -71,9 +73,13 @@ namespace miki::rhi {
     struct SurfaceManager::Impl {
         DeviceHandle device;
         platform::WindowManager* windowManager = nullptr;  // TODO (Nekomiya) bad smell
+        frame::SyncScheduler syncScheduler;
         std::unordered_map<platform::WindowHandle, SurfaceEntry, WindowHandleHash> surfaces;
 
-        Impl(DeviceHandle iDevice, platform::WindowManager& iWM) : device(iDevice), windowManager(&iWM) {}
+        Impl(DeviceHandle iDevice, platform::WindowManager& iWM) : device(iDevice), windowManager(&iWM) {
+            auto timelines = iDevice.Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
+            syncScheduler.Init(timelines);
+        }
 
         auto Find(platform::WindowHandle iWindow) -> SurfaceEntry* {
             auto it = surfaces.find(iWindow);
@@ -155,7 +161,10 @@ namespace miki::rhi {
             return std::unexpected(fmResult.error());
         }
 
-        // 5. Insert into map
+        // 5. Bind shared SyncScheduler (fixes multi-window timeline collision)
+        fmResult->SetSyncScheduler(&impl_->syncScheduler);
+
+        // 6. Insert into map
         impl_->surfaces.emplace(iWindow, SurfaceEntry{std::move(surface), std::move(*fmResult), iConfig});
         return {};
     }
@@ -211,27 +220,14 @@ namespace miki::rhi {
         return entry ? &entry->frameManager : nullptr;
     }
 
-    // =========================================================================
-    // Frame operations
-    // =========================================================================
-
-    auto SurfaceManager::BeginFrame(platform::WindowHandle iWindow) -> core::Result<frame::FrameContext> {
+    auto SurfaceManager::GetSyncScheduler() noexcept -> frame::SyncScheduler& {
         assert(impl_ && "SurfaceManager used after move");
-        auto* entry = impl_->Find(iWindow);
-        if (!entry) {
-            return std::unexpected(core::ErrorCode::ResourceNotFound);
-        }
-        return entry->frameManager.BeginFrame();
+        return impl_->syncScheduler;
     }
 
-    auto SurfaceManager::EndFrame(platform::WindowHandle iWindow, CommandBufferHandle iCmd) -> core::Result<void> {
-        assert(impl_ && "SurfaceManager used after move");
-        auto* entry = impl_->Find(iWindow);
-        if (!entry) {
-            return std::unexpected(core::ErrorCode::ResourceNotFound);
-        }
-        return entry->frameManager.EndFrame(iCmd);
-    }
+    // =========================================================================
+    // Surface operations
+    // =========================================================================
 
     auto SurfaceManager::ResizeSurface(platform::WindowHandle iWindow, uint32_t iWidth, uint32_t iHeight)
         -> core::Result<void> {

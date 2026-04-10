@@ -533,7 +533,7 @@ namespace miki::rhi {
         // -- Capability --
         auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
-        auto GetQueueTimelinesImpl() const -> QueueTimelines { return {}; }
+        auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
 
         // -- Swapchain (OpenGLSwapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
@@ -712,6 +712,7 @@ namespace miki::rhi {
         HandlePool<GLShaderModuleData, ShaderModuleTag, kMaxShaderModules> shaderModules_;
         HandlePool<GLFenceData, FenceTag, kMaxFences> fences_;
         HandlePool<GLSemaphoreData, SemaphoreTag, kMaxSemaphores> semaphores_;
+        QueueTimelines queueTimelines_;
         HandlePool<GLPipelineData, PipelineTag, kMaxPipelines> pipelines_;
         HandlePool<GLPipelineLayoutData, PipelineLayoutTag, kMaxPipelineLayouts> pipelineLayouts_;
         HandlePool<GLDescriptorLayoutData, DescriptorLayoutTag, kMaxDescriptorLayouts> descriptorLayouts_;
