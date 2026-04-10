@@ -496,6 +496,11 @@ namespace miki::rg {
         std::vector<RGAttachmentInfo> colorAttachments;
         RGAttachmentInfo depthStencilAttachment = {};
         bool hasDepthStencil = false;
+
+        // Scheduling hints for adaptive async compute + transfer queue (§7.2, §7.6)
+        float estimatedGpuTimeUs = 0.0f;       ///< Estimated GPU time (for EMA scheduler warm-up)
+        uint32_t estimatedWorkGroupCount = 0;  ///< Dispatch size hint (for AMD pipelined compute heuristic)
+        uint64_t estimatedTransferBytes = 0;   ///< Transfer payload size (for dedicated DMA queue threshold)
     };
 
     // =========================================================================
@@ -515,6 +520,7 @@ namespace miki::rg {
         bool isCrossQueue = false;
         bool isAliasingBarrier = false;  ///< true = aliasing barrier (UNDEFINED->initial, no src dependency)
         bool isFenceBarrier = false;     ///< true = D3D12 Fence Barrier (Agility SDK 1.719+, replaces split)
+        bool needsGlobalAccess = false;  ///< true = D3D12_BARRIER_ACCESS_GLOBAL (cross-queue involving COPY/VIDEO)
         RGQueueType srcQueue = RGQueueType::Graphics;
         RGQueueType dstQueue = RGQueueType::Graphics;
         uint64_t fenceValue = 0;  ///< Command-list-scoped fence value (D3D12 Fence Barrier Tier 1/2)

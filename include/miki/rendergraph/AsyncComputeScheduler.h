@@ -203,7 +203,7 @@ namespace miki::rg {
         /// Takes into account EMA benefit, warm-up, hysteresis, queue level, and
         /// vendor-specific pipelined compute heuristics.
         [[nodiscard]] auto ShouldRunAsync(
-            uint32_t passIndex, RGPassFlags flags, float estimatedGpuTimeUs = 0.0f
+            uint32_t passIndex, RGPassFlags flags, float estimatedGpuTimeUs = 0.0f, uint32_t workGroupCount = 0
         ) const noexcept -> bool;
 
         /// @brief Classify dispatch mode: pipelined (graphics queue) vs async (separate queue).

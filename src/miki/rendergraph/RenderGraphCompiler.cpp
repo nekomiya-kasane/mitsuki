@@ -280,13 +280,26 @@ namespace miki::rg {
         for (auto passIdx : order) {
             auto& pass = passes[passIdx];
             if (!options_.enableAsyncCompute) {
-                // Demote async compute to graphics queue
+                // Demote async compute to graphics queue; transfer passes still use transfer if available
                 queueAssignments[passIdx]
                     = (pass.queue == RGQueueType::Transfer) ? RGQueueType::Transfer : RGQueueType::Graphics;
             } else if (pass.queue == RGQueueType::AsyncCompute && options_.asyncScheduler != nullptr) {
-                // Adaptive scheduling: consult the EMA-based scheduler (§7.2.1)
-                bool shouldAsync = options_.asyncScheduler->ShouldRunAsync(passIdx, pass.flags);
+                // Adaptive scheduling: consult EMA-based scheduler with GPU time + workgroup hints (§7.2.1)
+                bool shouldAsync = options_.asyncScheduler->ShouldRunAsync(
+                    passIdx, pass.flags, pass.estimatedGpuTimeUs, pass.estimatedWorkGroupCount
+                );
                 queueAssignments[passIdx] = shouldAsync ? RGQueueType::AsyncCompute : RGQueueType::Graphics;
+            } else if (pass.queue == RGQueueType::Transfer && options_.asyncScheduler != nullptr) {
+                // Transfer queue scheduling (§7.6): demote small transfers to graphics queue.
+                // Cross-queue sync overhead exceeds DMA benefit for tiny payloads.
+                auto& cfg = options_.asyncScheduler->GetConfig();
+                if (!cfg.enableTransferQueue
+                    || (pass.estimatedTransferBytes > 0
+                        && pass.estimatedTransferBytes < static_cast<uint64_t>(cfg.transferMinSizeBytes))) {
+                    queueAssignments[passIdx] = RGQueueType::Graphics;
+                } else {
+                    queueAssignments[passIdx] = RGQueueType::Transfer;
+                }
             } else {
                 queueAssignments[passIdx] = pass.queue;
             }

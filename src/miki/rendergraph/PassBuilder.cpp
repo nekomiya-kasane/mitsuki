@@ -160,6 +160,18 @@ namespace miki::rg {
         builder_.GetPasses()[passIndex_].orderHint = hint;
     }
 
+    void PassBuilder::SetEstimatedGpuTime(float microseconds) {
+        builder_.GetPasses()[passIndex_].estimatedGpuTimeUs = microseconds;
+    }
+
+    void PassBuilder::SetEstimatedWorkGroupCount(uint32_t count) {
+        builder_.GetPasses()[passIndex_].estimatedWorkGroupCount = count;
+    }
+
+    void PassBuilder::SetEstimatedTransferBytes(uint64_t bytes) {
+        builder_.GetPasses()[passIndex_].estimatedTransferBytes = bytes;
+    }
+
     // =========================================================================
     // Subresource-level access
     // =========================================================================

@@ -102,7 +102,7 @@ namespace miki::rg {
     // =========================================================================
 
     auto AsyncComputeScheduler::ShouldRunAsync(
-        uint32_t passIndex, RGPassFlags flags, float estimatedGpuTimeUs
+        uint32_t passIndex, RGPassFlags flags, float estimatedGpuTimeUs, uint32_t workGroupCount
     ) const noexcept -> bool {
         if (queueLevel_ == ComputeQueueLevel::D_GraphicsOnly) {
             return false;
@@ -119,7 +119,7 @@ namespace miki::rg {
         }
 
         // Pipelined compute check: if dispatch is small, keep on graphics queue
-        auto mode = ClassifyDispatchMode(passIndex, flags, estimatedGpuTimeUs, 0);
+        auto mode = ClassifyDispatchMode(passIndex, flags, estimatedGpuTimeUs, workGroupCount);
         if (mode == ComputeDispatchMode::Pipelined) {
             stats_.pipelinedComputePasses++;
             return false;

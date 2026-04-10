@@ -112,6 +112,15 @@ namespace miki::rg {
         /// @brief Set an ordering hint for topological sort tiebreaking.
         void SetOrderHint(int32_t hint);
 
+        /// @brief Set estimated GPU time for adaptive async compute scheduling (§7.2).
+        void SetEstimatedGpuTime(float microseconds);
+
+        /// @brief Set dispatch workgroup count for AMD pipelined compute heuristic (§7.2).
+        void SetEstimatedWorkGroupCount(uint32_t count);
+
+        /// @brief Set estimated transfer payload size for DMA queue threshold (§7.6).
+        void SetEstimatedTransferBytes(uint64_t bytes);
+
         // -- Subresource-level access --
 
         /// @brief Read a specific mip level of a texture.

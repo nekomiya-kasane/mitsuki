@@ -46,7 +46,8 @@ namespace miki::rg {
 
     struct BarrierSynthesisStats {
         uint32_t fullBarriers = 0;        ///< Full (non-split) same-queue barriers
-        uint32_t splitBarriers = 0;       ///< Split same-queue barrier pairs
+        uint32_t splitBarriers = 0;       ///< Split same-queue barrier pairs (legacy + fence)
+        uint32_t fenceBarriers = 0;       ///< D3D12 Fence Barrier pairs (subset of splitBarriers)
         uint32_t crossQueueBarriers = 0;  ///< Cross-queue barriers (any type)
         uint32_t qfotPairs = 0;           ///< QFOT release/acquire pairs
         uint32_t elidedReadRead = 0;      ///< Read-to-read barriers elided
@@ -112,7 +113,8 @@ namespace miki::rg {
 
         BarrierSynthesizerConfig config_;
         std::vector<ResourceState> resourceStates_;  ///< Flat vector indexed by resource index
-        BarrierSynthesisStats stats_;
+        mutable BarrierSynthesisStats stats_;
+        uint64_t fenceValueCounter_ = 0;  ///< Monotonic fence value for D3D12 Fence Barrier emission
     };
 
 }  // namespace miki::rg
