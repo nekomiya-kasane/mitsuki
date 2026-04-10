@@ -36,6 +36,7 @@
 #include "miki/rendergraph/RenderGraphBuilder.h"
 #include "miki/rendergraph/RenderGraphTypes.h"
 #include "miki/rendergraph/RenderPassContext.h"
+#include "miki/rendergraph/TransientHeapPool.h"
 #include "miki/rhi/CommandBuffer.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Handle.h"
@@ -73,6 +74,9 @@ namespace miki::rg {
         bool enableAsyncExecution = false;             ///< Offload allocation + recording to worker threads
         bool enableDebugLabels = true;                 ///< Emit per-pass debug labels for PIX/RenderDoc/NSight
         uint64_t frameAllocatorCapacity = 256 * 1024;  ///< Per-frame arena capacity (bytes)
+        bool enableHeapPooling = true;                 ///< Cross-frame heap reuse (§5.6.5)
+        bool enableBufferSuballocation = true;         ///< Transient buffer suballocation (§5.6.7)
+        TransientHeapPoolConfig heapPoolConfig;        ///< Heap pool tuning parameters
     };
 
     // =========================================================================
@@ -84,12 +88,17 @@ namespace miki::rg {
         uint32_t transientBuffersAllocated = 0;
         uint32_t transientTextureViewsCreated = 0;
         uint32_t heapsCreated = 0;
+        uint32_t heapsReused = 0;   ///< Heaps reused from pool (zero-alloc)
+        uint32_t heapsEvicted = 0;  ///< Stale heaps LRU-evicted
         uint32_t barriersEmitted = 0;
         uint32_t aliasingBarriersEmitted = 0;
         uint32_t batchesSubmitted = 0;
         uint32_t passesRecorded = 0;
         uint32_t secondaryCmdBufsUsed = 0;
         uint64_t transientMemoryBytes = 0;
+        uint32_t bufferSuballocations = 0;  ///< Buffers served by suballocator
+        uint64_t bufferSuballocBytes = 0;   ///< Bytes served by buffer suballocator
+        uint32_t defragTriggered = 0;       ///< Defrag runs this frame
     };
 
     // =========================================================================
@@ -124,6 +133,22 @@ namespace miki::rg {
 
         /// @brief Set optional ReadbackRing for GPU->CPU readback integration (E-10).
         void SetReadbackRing(resource::ReadbackRing* ring) noexcept { readbackRing_ = ring; }
+
+        /// @brief Get the transient heap pool for inspection/defrag control.
+        [[nodiscard]] auto GetHeapPool() noexcept -> TransientHeapPool& { return heapPool_; }
+        [[nodiscard]] auto GetHeapPool() const noexcept -> const TransientHeapPool& { return heapPool_; }
+
+        /// @brief Trigger heap pool defragmentation (§5.6.8).
+        /// Call after Execute() or at scene transitions.
+        void DefragmentHeapPool(
+            const CompiledRenderGraph& graph, rhi::DeviceHandle device, uint32_t frameNumber, float vramUsageRatio,
+            bool force = false
+        ) {
+            heapPool_.DefragmentIfNeeded(graph.aliasing, device, frameNumber, vramUsageRatio, force);
+        }
+
+        /// @brief Release all pooled resources. Call at shutdown.
+        void ReleasePooledResources(rhi::DeviceHandle device) { heapPool_.ReleaseAll(device); }
 
         /// @brief Async execution (E-7): offload Phase 1 + 2 to a worker thread.
         /// Returns a future that resolves when allocation + recording are done.
@@ -232,6 +257,14 @@ namespace miki::rg {
             uint64_t size = 0;
         };
         std::vector<HeapAllocation> heapAllocations_;
+
+        // Cross-frame heap pool (§5.6.5)
+        TransientHeapPool heapPool_;
+        std::array<rhi::DeviceMemoryHandle, kHeapGroupCount> activeHeaps_ = {};
+
+        // Buffer suballocation tracking (§5.6.7)
+        std::vector<BufferSuballocation> bufferSuballocs_;
+        uint32_t frameNumber_ = 0;
 
         // Per-batch recorded command buffers
         struct BatchRecording {

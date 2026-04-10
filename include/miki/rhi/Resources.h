@@ -106,9 +106,20 @@ namespace miki::rhi {
     // Memory heap (for transient aliasing)
     // =========================================================================
 
+    /// @brief Heap group hint for backend-specific heap flag selection (§5.6.2).
+    /// D3D12: maps to ALLOW_ONLY_RT_DS_TEXTURES / ALLOW_ONLY_NON_RT_DS_TEXTURES / ALLOW_ONLY_BUFFERS / ALLOW_ALL.
+    /// Vulkan: maps to memoryTypeBits grouping. OpenGL/WebGPU: ignored.
+    enum class HeapGroupHint : uint8_t {
+        RtDs = 0,           ///< Render target / depth-stencil textures
+        NonRtDs = 1,        ///< Shader-read-only textures
+        Buffer = 2,         ///< Transient buffers
+        MixedFallback = 3,  ///< All resource types (D3D12 Tier1 fallback)
+    };
+
     struct MemoryHeapDesc {
         uint64_t size = 0;
         MemoryLocation memory = MemoryLocation::GpuOnly;
+        HeapGroupHint groupHint = HeapGroupHint::MixedFallback;  ///< Backend heap flag hint
         const char* debugName = nullptr;
     };
 

@@ -17,6 +17,7 @@ set(MIKI_RENDERGRAPH_SOURCES
     src/miki/rendergraph/RenderGraphCompiler.cpp
     src/miki/rendergraph/RenderGraphExecutor.cpp
     src/miki/rendergraph/RenderGraphSerializer.cpp
+    src/miki/rendergraph/TransientHeapPool.cpp
 )
 
 add_library(miki_rendergraph OBJECT ${MIKI_RENDERGRAPH_SOURCES})

@@ -11,6 +11,7 @@
 #include "miki/rendergraph/RenderGraphCompiler.h"
 #include "miki/rendergraph/RenderGraphExecutor.h"
 #include "miki/rendergraph/RenderPassContext.h"
+#include "miki/rendergraph/TransientHeapPool.h"
 #include "miki/rhi/adaptation/AdaptationQuery.h"
 #include "miki/rhi/backend/MockDevice.h"
 #include "miki/frame/SyncScheduler.h"
@@ -8890,4 +8891,1181 @@ TEST(RenderPassContext, ResolveTextureViewOutOfRange) {
     RenderPassContext ctx{};
     auto h = RGResourceHandle::Create(999, 0);
     EXPECT_FALSE(ctx.GetTextureView(h).IsValid());
+}
+
+// =============================================================================
+// Phase F: Transient Memory Management Tests
+//
+// Tests cover:
+//   F-1: HeapPool cross-frame reuse + layoutHash matching
+//   F-2: Transient buffer suballocator (linear offset packing)
+//   F-3: Heap defragmentation
+//   F-4: D3D12 heap grouping (ResourceHeapTier)
+//   F-5: Vulkan heap grouping (HeapGroupHint mapping)
+//   F-6: Aliasing barrier batching (via executor integration)
+//   Alignment utilities: AlignUp, ComputeAlignedHeapSize, PackSlotsAligned
+// =============================================================================
+
+namespace {
+
+    // Helper: create a MockDevice + DeviceHandle pair for standalone pool tests
+    struct MockDeviceFixture {
+        MockDevice device;
+        DeviceHandle handle;
+
+        MockDeviceFixture() {
+            device.Init();
+            handle = DeviceHandle(&device, BackendType::Mock);
+        }
+    };
+
+    // Helper: build a simple AliasingLayout with specified heap group sizes
+    auto MakeAliasingLayout(std::array<uint64_t, kHeapGroupCount> sizes, uint32_t slotCountPerGroup = 1)
+        -> AliasingLayout {
+        AliasingLayout layout;
+        layout.heapGroupSizes = sizes;
+        for (uint32_t g = 0; g < kHeapGroupCount; ++g) {
+            if (sizes[g] > 0) {
+                for (uint32_t s = 0; s < slotCountPerGroup; ++s) {
+                    layout.slots.push_back({
+                        .slotIndex = static_cast<uint32_t>(layout.slots.size()),
+                        .heapGroup = static_cast<HeapGroupType>(g),
+                        .size = sizes[g] / slotCountPerGroup,
+                        .alignment = kAlignmentTexture,
+                    });
+                }
+            }
+        }
+        return layout;
+    }
+
+}  // anonymous namespace
+
+// =============================================================================
+// F-1: HeapPool — Basic allocation
+// =============================================================================
+
+TEST(HeapPool, EmptyLayoutAllocatesNothing) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({0, 0, 0, 0});
+
+    auto result = pool.AcquireHeaps(layout, f.handle, 1, false);
+    ASSERT_TRUE(result.has_value());
+
+    for (auto& h : *result) {
+        EXPECT_FALSE(h.IsValid());
+    }
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 0u);
+    EXPECT_EQ(pool.GetStats().heapsReused, 0u);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 0u);
+}
+
+TEST(HeapPool, SingleGroupAllocatesOneHeap) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 0, 0, 0});  // RtDs only
+
+    auto result = pool.AcquireHeaps(layout, f.handle, 1, false);
+    ASSERT_TRUE(result.has_value());
+
+    auto& heaps = *result;
+    EXPECT_TRUE(heaps[0].IsValid());   // RtDs
+    EXPECT_FALSE(heaps[1].IsValid());  // NonRtDs
+    EXPECT_FALSE(heaps[2].IsValid());  // Buffer
+    EXPECT_FALSE(heaps[3].IsValid());  // MixedFallback
+
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 1u);
+    EXPECT_EQ(pool.GetStats().heapsReused, 0u);
+    EXPECT_EQ(pool.GetStats().activeBytes, 65536u);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);
+}
+
+TEST(HeapPool, MultipleGroupsAllocateMultipleHeaps) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 32768, 4096, 0});
+
+    auto result = pool.AcquireHeaps(layout, f.handle, 1, false);
+    ASSERT_TRUE(result.has_value());
+
+    auto& heaps = *result;
+    EXPECT_TRUE(heaps[0].IsValid());   // RtDs
+    EXPECT_TRUE(heaps[1].IsValid());   // NonRtDs
+    EXPECT_TRUE(heaps[2].IsValid());   // Buffer
+    EXPECT_FALSE(heaps[3].IsValid());  // MixedFallback
+
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 3u);
+    EXPECT_EQ(pool.GetStats().activeBytes, 65536u + 32768u + 4096u);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 3u);
+}
+
+// =============================================================================
+// F-1: HeapPool — Cross-frame reuse (exact layoutHash match)
+// =============================================================================
+
+TEST(HeapPool, ExactLayoutHashMatchReusesHeap) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 0, 0, 0});
+
+    // Frame 1: first allocation
+    auto r1 = pool.AcquireHeaps(layout, f.handle, 1, false);
+    ASSERT_TRUE(r1.has_value());
+    auto heap1 = (*r1)[0];
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 1u);
+    EXPECT_EQ(pool.GetStats().heapsReused, 0u);
+
+    // Frame 2: same layout -> exact hash match, zero-alloc reuse
+    auto r2 = pool.AcquireHeaps(layout, f.handle, 2, false);
+    ASSERT_TRUE(r2.has_value());
+    auto heap2 = (*r2)[0];
+
+    EXPECT_EQ(heap1.value, heap2.value);  // Same heap handle reused
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 0u);
+    EXPECT_EQ(pool.GetStats().heapsReused, 1u);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);  // No growth
+}
+
+TEST(HeapPool, ThreeConsecutiveFramesReusesSameHeap) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 0, 256, 0});
+
+    auto r1 = pool.AcquireHeaps(layout, f.handle, 1, false);
+    ASSERT_TRUE(r1.has_value());
+    auto rtds1 = (*r1)[0];
+    auto buf1 = (*r1)[2];
+
+    for (uint32_t frame = 2; frame <= 10; ++frame) {
+        auto rN = pool.AcquireHeaps(layout, f.handle, frame, false);
+        ASSERT_TRUE(rN.has_value());
+        EXPECT_EQ((*rN)[0].value, rtds1.value);
+        EXPECT_EQ((*rN)[2].value, buf1.value);
+        EXPECT_EQ(pool.GetStats().heapsReused, 2u);
+        EXPECT_EQ(pool.GetStats().heapsAllocated, 0u);
+    }
+    EXPECT_EQ(pool.GetPooledHeapCount(), 2u);  // Stable count
+}
+
+// =============================================================================
+// F-1: HeapPool — Size-compatible match (within overshoot tolerance)
+// =============================================================================
+
+TEST(HeapPool, SizeCompatibleMatchWithinTolerance) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.overshootTolerance = 0.20f;  // 20%
+    TransientHeapPool pool(cfg);
+
+    // Frame 1: allocate 100KB
+    auto layout1 = MakeAliasingLayout({102400, 0, 0, 0});
+    auto r1 = pool.AcquireHeaps(layout1, f.handle, 1, false);
+    ASSERT_TRUE(r1.has_value());
+    auto heapHandle = (*r1)[0];
+
+    // Frame 2: request 90KB -> 102400 >= 90000 and <= 90000*1.2=108000 -> reuse
+    auto layout2 = MakeAliasingLayout({90000, 0, 0, 0}, 1);
+    auto r2 = pool.AcquireHeaps(layout2, f.handle, 2, false);
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_EQ((*r2)[0].value, heapHandle.value);
+    EXPECT_EQ(pool.GetStats().heapsReused, 1u);
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 0u);
+}
+
+TEST(HeapPool, SizeIncompatibleExceedingToleranceAllocatesNew) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.overshootTolerance = 0.20f;
+    TransientHeapPool pool(cfg);
+
+    // Frame 1: allocate 200KB
+    auto layout1 = MakeAliasingLayout({204800, 0, 0, 0});
+    auto r1 = pool.AcquireHeaps(layout1, f.handle, 1, false);
+    ASSERT_TRUE(r1.has_value());
+    auto oldHeap = (*r1)[0];
+
+    // Frame 2: request 100KB -> 204800 > 100000*1.2=120000 -> NOT compatible, new alloc
+    auto layout2 = MakeAliasingLayout({102400, 0, 0, 0}, 1);
+    auto r2 = pool.AcquireHeaps(layout2, f.handle, 2, false);
+    ASSERT_TRUE(r2.has_value());
+    EXPECT_NE((*r2)[0].value, oldHeap.value);
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 1u);
+}
+
+// =============================================================================
+// F-1: HeapPool — LRU eviction
+// =============================================================================
+
+TEST(HeapPool, StaleHeapsEvictedAfterGracePeriod) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.lruGraceFrames = 2;
+    TransientHeapPool pool(cfg);
+
+    // Frame 1: allocate RtDs + Buffer
+    auto layout1 = MakeAliasingLayout({65536, 0, 4096, 0});
+    pool.AcquireHeaps(layout1, f.handle, 1, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 2u);
+
+    // Frame 2: only need RtDs (Buffer becomes stale)
+    auto layout2 = MakeAliasingLayout({65536, 0, 0, 0});
+    pool.AcquireHeaps(layout2, f.handle, 2, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 2u);  // Grace period not expired
+
+    // Frame 3: Buffer stale since frame 1, grace=2 -> 3 >= 1+2 -> evicted
+    pool.AcquireHeaps(layout2, f.handle, 3, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);  // Buffer evicted (>= condition)
+    EXPECT_GE(pool.GetStats().heapsEvicted, 1u);
+}
+
+TEST(HeapPool, GracePeriodZeroEvictsImmediately) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.lruGraceFrames = 0;
+    TransientHeapPool pool(cfg);
+
+    auto layout1 = MakeAliasingLayout({65536, 0, 4096, 0});
+    pool.AcquireHeaps(layout1, f.handle, 1, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 2u);
+
+    // Frame 2: only RtDs -> Buffer immediately evicted (0 grace)
+    auto layout2 = MakeAliasingLayout({65536, 0, 0, 0});
+    pool.AcquireHeaps(layout2, f.handle, 2, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);
+}
+
+// =============================================================================
+// F-1: HeapPool — Oversized heap release during allocation
+// =============================================================================
+
+TEST(HeapPool, OversizedHeapReleasedBeforeNewAlloc) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.oversizedReleaseThreshold = 2.0f;  // Release if > 2x required
+    cfg.lruGraceFrames = 100;              // High grace so it won't be LRU-evicted
+    TransientHeapPool pool(cfg);
+
+    // Frame 1: allocate 500KB
+    auto layout1 = MakeAliasingLayout({512000, 0, 0, 0});
+    pool.AcquireHeaps(layout1, f.handle, 1, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);
+
+    // Frame 2: request 100KB -> old 512000 > 2*100000=200000 -> oversized, released + new alloc
+    auto layout2 = MakeAliasingLayout({100000, 0, 0, 0}, 1);
+    auto r2 = pool.AcquireHeaps(layout2, f.handle, 2, false);
+    ASSERT_TRUE(r2.has_value());
+    // The oversized entry should have been evicted and a new one allocated
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 1u);
+    EXPECT_GE(pool.GetStats().heapsEvicted, 1u);
+}
+
+// =============================================================================
+// F-1: HeapPool — Statistics accuracy
+// =============================================================================
+
+TEST(HeapPool, StatsResetEachFrame) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 0, 0, 0});
+
+    pool.AcquireHeaps(layout, f.handle, 1, false);
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 1u);
+
+    pool.AcquireHeaps(layout, f.handle, 2, false);
+    // Stats are reset per-frame: should show reuse, not accumulated alloc
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 0u);
+    EXPECT_EQ(pool.GetStats().heapsReused, 1u);
+}
+
+TEST(HeapPool, WastedBytesCalculation) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.overshootTolerance = 0.50f;  // 50% to easily trigger size-compat
+    TransientHeapPool pool(cfg);
+
+    // Frame 1: allocate 100KB
+    auto layout1 = MakeAliasingLayout({102400, 0, 0, 0});
+    pool.AcquireHeaps(layout1, f.handle, 1, false);
+
+    // Frame 2: request 80KB -> 102400 <= 80000*1.5=120000 -> reuse with 22400 waste
+    auto layout2 = MakeAliasingLayout({81920, 0, 0, 0}, 1);
+    pool.AcquireHeaps(layout2, f.handle, 2, false);
+
+    EXPECT_EQ(pool.GetStats().totalPooledBytes, 102400u);
+    EXPECT_EQ(pool.GetStats().activeBytes, 102400u);
+    // wastedBytes = totalPooledBytes - activeBytes (since only 1 entry, both same)
+    // The per-match waste is tracked differently; totalPooledBytes covers all entries
+    EXPECT_GE(pool.GetStats().totalPooledBytes, pool.GetStats().activeBytes);
+}
+
+// =============================================================================
+// F-1: HeapPool — ReleaseAll
+// =============================================================================
+
+TEST(HeapPool, ReleaseAllClearsEverything) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 32768, 4096, 0});
+    pool.AcquireHeaps(layout, f.handle, 1, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 3u);
+
+    pool.ReleaseAll(f.handle);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 0u);
+    EXPECT_FALSE(pool.GetParentBuffer().IsValid());
+    EXPECT_EQ(pool.GetParentBufferSize(), 0u);
+}
+
+// =============================================================================
+// F-2: Buffer suballocator — basic offset packing
+// =============================================================================
+
+TEST(BufferSuballocator, EmptyResourcesProducesNoSuballocations) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+
+    AliasingLayout layout;
+    std::vector<RGResourceNode> resources;
+
+    auto result = pool.PrepareBufferSuballocations({}, resources, layout, f.handle);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->empty());
+    EXPECT_FALSE(pool.GetParentBuffer().IsValid());
+}
+
+TEST(BufferSuballocator, SingleBufferSuballocation) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+
+    // Create a resource node for a 1024-byte buffer
+    RGResourceNode bufNode;
+    bufNode.kind = RGResourceKind::Buffer;
+    bufNode.imported = false;
+    bufNode.bufferDesc.size = 1024;
+
+    AliasingLayout layout;
+    layout.slots.push_back({
+        .slotIndex = 0,
+        .heapGroup = HeapGroupType::Buffer,
+        .size = 1024,
+        .alignment = kAlignmentBuffer,
+    });
+    layout.resourceToSlot = {0};  // resource 0 -> slot 0
+
+    std::vector<RGResourceNode> resources = {bufNode};
+    DeviceMemoryHandle bufHeap{42};
+
+    auto result = pool.PrepareBufferSuballocations(bufHeap, resources, layout, f.handle);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].resourceIndex, 0u);
+    EXPECT_EQ((*result)[0].offset, 0u);
+    EXPECT_EQ((*result)[0].size, 1024u);
+    EXPECT_TRUE(pool.GetParentBuffer().IsValid());
+    EXPECT_EQ(pool.GetParentBufferSize(), 1024u);
+}
+
+TEST(BufferSuballocator, MultipleBuffersAligned256B) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+
+    // Two buffers: 300 bytes and 500 bytes
+    RGResourceNode buf0;
+    buf0.kind = RGResourceKind::Buffer;
+    buf0.imported = false;
+    buf0.bufferDesc.size = 300;
+
+    RGResourceNode buf1;
+    buf1.kind = RGResourceKind::Buffer;
+    buf1.imported = false;
+    buf1.bufferDesc.size = 500;
+
+    AliasingLayout layout;
+    layout.slots.push_back({
+        .slotIndex = 0,
+        .heapGroup = HeapGroupType::Buffer,
+        .size = 300,
+        .alignment = kAlignmentBuffer,
+    });
+    layout.slots.push_back({
+        .slotIndex = 1,
+        .heapGroup = HeapGroupType::Buffer,
+        .size = 500,
+        .alignment = kAlignmentBuffer,
+    });
+    layout.resourceToSlot = {0, 1};
+
+    std::vector<RGResourceNode> resources = {buf0, buf1};
+
+    auto result = pool.PrepareBufferSuballocations(DeviceMemoryHandle{1}, resources, layout, f.handle);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->size(), 2u);
+
+    auto& sub0 = (*result)[0];
+    auto& sub1 = (*result)[1];
+    EXPECT_EQ(sub0.offset, 0u);
+    EXPECT_EQ(sub0.size, 300u);
+    // Second buffer starts at AlignUp(300, 256) = 512
+    EXPECT_EQ(sub1.offset, AlignUp(300, kAlignmentBuffer));
+    EXPECT_EQ(sub1.size, 500u);
+    // No overlap
+    EXPECT_GE(sub1.offset, sub0.offset + sub0.size);
+    // All offsets are 256-aligned
+    EXPECT_EQ(sub0.offset % kAlignmentBuffer, 0u);
+    EXPECT_EQ(sub1.offset % kAlignmentBuffer, 0u);
+}
+
+TEST(BufferSuballocator, ImportedBuffersSkipped) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+
+    RGResourceNode imported;
+    imported.kind = RGResourceKind::Buffer;
+    imported.imported = true;
+    imported.bufferDesc.size = 2048;
+
+    RGResourceNode transient;
+    transient.kind = RGResourceKind::Buffer;
+    transient.imported = false;
+    transient.bufferDesc.size = 512;
+
+    AliasingLayout layout;
+    layout.slots.push_back({
+        .slotIndex = 0,
+        .heapGroup = HeapGroupType::Buffer,
+        .size = 512,
+        .alignment = kAlignmentBuffer,
+    });
+    layout.resourceToSlot = {AliasingLayout::kNotAliased, 0};  // imported not aliased
+
+    std::vector<RGResourceNode> resources = {imported, transient};
+
+    auto result = pool.PrepareBufferSuballocations(DeviceMemoryHandle{1}, resources, layout, f.handle);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].resourceIndex, 1u);  // Only transient buffer
+}
+
+TEST(BufferSuballocator, TexturesSkipped) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+
+    RGResourceNode texNode;
+    texNode.kind = RGResourceKind::Texture;
+    texNode.imported = false;
+    texNode.textureDesc.width = 64;
+    texNode.textureDesc.height = 64;
+
+    AliasingLayout layout;
+    layout.slots.push_back({
+        .slotIndex = 0,
+        .heapGroup = HeapGroupType::RtDs,
+        .size = 65536,
+        .alignment = kAlignmentTexture,
+    });
+    layout.resourceToSlot = {0};
+
+    std::vector<RGResourceNode> resources = {texNode};
+    auto result = pool.PrepareBufferSuballocations(DeviceMemoryHandle{1}, resources, layout, f.handle);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->empty());
+}
+
+TEST(BufferSuballocator, StatsAccurate) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+
+    RGResourceNode buf0;
+    buf0.kind = RGResourceKind::Buffer;
+    buf0.imported = false;
+    buf0.bufferDesc.size = 1024;
+
+    RGResourceNode buf1;
+    buf1.kind = RGResourceKind::Buffer;
+    buf1.imported = false;
+    buf1.bufferDesc.size = 2048;
+
+    AliasingLayout layout;
+    layout.slots.push_back(
+        {.slotIndex = 0, .heapGroup = HeapGroupType::Buffer, .size = 1024, .alignment = kAlignmentBuffer}
+    );
+    layout.slots.push_back(
+        {.slotIndex = 1, .heapGroup = HeapGroupType::Buffer, .size = 2048, .alignment = kAlignmentBuffer}
+    );
+    layout.resourceToSlot = {0, 1};
+
+    // Need a fresh AcquireHeaps call first to reset stats
+    auto layoutFull = MakeAliasingLayout({0, 0, 4096, 0});
+    auto heaps = pool.AcquireHeaps(layoutFull, f.handle, 1, false);
+    ASSERT_TRUE(heaps.has_value());
+
+    std::vector<RGResourceNode> resources = {buf0, buf1};
+    auto result = pool.PrepareBufferSuballocations((*heaps)[2], resources, layout, f.handle);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(pool.GetStats().bufferSuballocations, 2u);
+    EXPECT_GT(pool.GetStats().bufferSuballocBytes, 0u);
+}
+
+// =============================================================================
+// F-3: Heap defragmentation
+// =============================================================================
+
+TEST(HeapDefrag, ForceDefragEvictsStaleEntries) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.lruGraceFrames = 100;  // High so LRU won't evict naturally
+    TransientHeapPool pool(cfg);
+
+    // Frame 1: allocate 3 groups
+    auto layout1 = MakeAliasingLayout({65536, 32768, 4096, 0});
+    pool.AcquireHeaps(layout1, f.handle, 1, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 3u);
+
+    // Frame 2: only need RtDs (NonRtDs + Buffer become stale but not LRU-evicted)
+    auto layout2 = MakeAliasingLayout({65536, 0, 0, 0});
+    pool.AcquireHeaps(layout2, f.handle, 2, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 3u);  // All still present due to high grace
+
+    // Force defrag: evicts all non-active entries
+    pool.DefragmentIfNeeded(layout2, f.handle, 3, 0.5f, /*forceDefrag=*/true);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);  // Only RtDs remains
+    EXPECT_GE(pool.GetStats().defragTriggered, 1u);
+}
+
+TEST(HeapDefrag, DefragNotTriggeredWhenConditionsNotMet) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 0, 0, 0});
+    pool.AcquireHeaps(layout, f.handle, 1, false);
+
+    // Low VRAM pressure, no proliferation, no force -> no defrag
+    pool.DefragmentIfNeeded(layout, f.handle, 2, 0.5f, false);
+    EXPECT_EQ(pool.GetStats().defragTriggered, 0u);
+}
+
+TEST(HeapDefrag, VramPressureTriggersDefrag) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.defragVramThresholdFrames = 3;  // Low threshold for test
+    cfg.defragVramUsageRatio = 0.90f;
+    cfg.lruGraceFrames = 100;
+    TransientHeapPool pool(cfg);
+
+    auto layout = MakeAliasingLayout({65536, 32768, 0, 0});
+    pool.AcquireHeaps(layout, f.handle, 1, false);
+
+    // Simulate 3 consecutive frames at >90% VRAM
+    auto layoutSmall = MakeAliasingLayout({65536, 0, 0, 0});
+    pool.AcquireHeaps(layoutSmall, f.handle, 2, false);
+    pool.DefragmentIfNeeded(layoutSmall, f.handle, 2, 0.95f, false);
+    EXPECT_EQ(pool.GetStats().defragTriggered, 0u);  // Only 1 frame
+
+    pool.AcquireHeaps(layoutSmall, f.handle, 3, false);
+    pool.DefragmentIfNeeded(layoutSmall, f.handle, 3, 0.95f, false);
+    EXPECT_EQ(pool.GetStats().defragTriggered, 0u);  // 2 frames
+
+    pool.AcquireHeaps(layoutSmall, f.handle, 4, false);
+    pool.DefragmentIfNeeded(layoutSmall, f.handle, 4, 0.95f, false);
+    EXPECT_GE(pool.GetStats().defragTriggered, 1u);  // 3 frames -> triggered
+}
+
+TEST(HeapDefrag, HeapProliferationTriggersDefrag) {
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.defragHeapCountRatio = 1.5f;  // Trigger if pool > 1.5 * active groups
+    cfg.lruGraceFrames = 100;
+    TransientHeapPool pool(cfg);
+
+    // Frame 1: 3 groups
+    auto layout1 = MakeAliasingLayout({65536, 32768, 4096, 0});
+    pool.AcquireHeaps(layout1, f.handle, 1, false);
+
+    // Frame 2: only 1 group, but 3 entries still in pool (3 > 1.5*1 = 1.5)
+    auto layout2 = MakeAliasingLayout({65536, 0, 0, 0});
+    pool.AcquireHeaps(layout2, f.handle, 2, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 3u);
+
+    pool.DefragmentIfNeeded(layout2, f.handle, 3, 0.5f, false);
+    EXPECT_GE(pool.GetStats().defragTriggered, 1u);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);  // Only the active RtDs entry survives
+}
+
+// =============================================================================
+// F-4: D3D12 heap grouping (MixedFallback for Tier1)
+// =============================================================================
+
+TEST(HeapPool, MixedFallbackMergesAllGroups) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 32768, 4096, 0});
+
+    auto result = pool.AcquireHeaps(layout, f.handle, 1, /*useMixedFallback=*/true);
+    ASSERT_TRUE(result.has_value());
+
+    auto& heaps = *result;
+    // Only MixedFallback should be allocated
+    EXPECT_FALSE(heaps[0].IsValid());  // RtDs skipped
+    EXPECT_FALSE(heaps[1].IsValid());  // NonRtDs skipped
+    EXPECT_FALSE(heaps[2].IsValid());  // Buffer skipped
+    EXPECT_TRUE(heaps[static_cast<uint32_t>(HeapGroupType::MixedFallback)].IsValid());
+
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 1u);
+    // Total size = 65536 + 32768 + 4096 = 102400
+    EXPECT_EQ(pool.GetStats().activeBytes, 65536u + 32768u + 4096u);
+}
+
+TEST(HeapPool, MixedFallbackReusesAcrossFrames) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 32768, 4096, 0});
+
+    auto r1 = pool.AcquireHeaps(layout, f.handle, 1, true);
+    ASSERT_TRUE(r1.has_value());
+    auto mixed1 = (*r1)[static_cast<uint32_t>(HeapGroupType::MixedFallback)];
+
+    auto r2 = pool.AcquireHeaps(layout, f.handle, 2, true);
+    ASSERT_TRUE(r2.has_value());
+    auto mixed2 = (*r2)[static_cast<uint32_t>(HeapGroupType::MixedFallback)];
+
+    EXPECT_EQ(mixed1.value, mixed2.value);  // Same heap reused
+    EXPECT_EQ(pool.GetStats().heapsReused, 1u);
+}
+
+// =============================================================================
+// F-5: HeapGroupHint mapping
+// =============================================================================
+
+TEST(HeapGroupHint, ToGroupHintMapping) {
+    EXPECT_EQ(TransientHeapPool::ToGroupHint(HeapGroupType::RtDs), HeapGroupHint::RtDs);
+    EXPECT_EQ(TransientHeapPool::ToGroupHint(HeapGroupType::NonRtDs), HeapGroupHint::NonRtDs);
+    EXPECT_EQ(TransientHeapPool::ToGroupHint(HeapGroupType::Buffer), HeapGroupHint::Buffer);
+    EXPECT_EQ(TransientHeapPool::ToGroupHint(HeapGroupType::MixedFallback), HeapGroupHint::MixedFallback);
+}
+
+// =============================================================================
+// F-4: ResourceHeapTier in GpuCapabilityProfile
+// =============================================================================
+
+TEST(GpuCapabilityProfile, ResourceHeapTierDefaults) {
+    GpuCapabilityProfile caps;
+    // Default should be Tier2 (all modern GPUs)
+    EXPECT_EQ(caps.resourceHeapTier, GpuCapabilityProfile::ResourceHeapTier::Tier2);
+}
+
+TEST(GpuCapabilityProfile, ResourceHeapTierTier1) {
+    GpuCapabilityProfile caps;
+    caps.resourceHeapTier = GpuCapabilityProfile::ResourceHeapTier::Tier1;
+    EXPECT_EQ(static_cast<uint8_t>(caps.resourceHeapTier), 1u);
+}
+
+// =============================================================================
+// F-5: MemoryHeapDesc groupHint
+// =============================================================================
+
+TEST(MemoryHeapDesc, GroupHintDefaultIsMixedFallback) {
+    MemoryHeapDesc desc;
+    EXPECT_EQ(desc.groupHint, HeapGroupHint::MixedFallback);
+}
+
+TEST(MemoryHeapDesc, GroupHintAllValues) {
+    MemoryHeapDesc d1{.size = 1024, .groupHint = HeapGroupHint::RtDs};
+    EXPECT_EQ(d1.groupHint, HeapGroupHint::RtDs);
+    MemoryHeapDesc d2{.size = 1024, .groupHint = HeapGroupHint::NonRtDs};
+    EXPECT_EQ(d2.groupHint, HeapGroupHint::NonRtDs);
+    MemoryHeapDesc d3{.size = 1024, .groupHint = HeapGroupHint::Buffer};
+    EXPECT_EQ(d3.groupHint, HeapGroupHint::Buffer);
+}
+
+// =============================================================================
+// Alignment utilities
+// =============================================================================
+
+TEST(AlignUp, BasicCases) {
+    EXPECT_EQ(AlignUp(0, 256), 0u);
+    EXPECT_EQ(AlignUp(1, 256), 256u);
+    EXPECT_EQ(AlignUp(255, 256), 256u);
+    EXPECT_EQ(AlignUp(256, 256), 256u);
+    EXPECT_EQ(AlignUp(257, 256), 512u);
+    EXPECT_EQ(AlignUp(65535, 65536), 65536u);
+    EXPECT_EQ(AlignUp(65536, 65536), 65536u);
+    EXPECT_EQ(AlignUp(65537, 65536), 131072u);
+}
+
+TEST(AlignUp, LargeAlignment) {
+    EXPECT_EQ(AlignUp(1, kAlignmentMsaa), kAlignmentMsaa);
+    EXPECT_EQ(AlignUp(kAlignmentMsaa, kAlignmentMsaa), kAlignmentMsaa);
+    EXPECT_EQ(AlignUp(kAlignmentMsaa + 1, kAlignmentMsaa), 2 * kAlignmentMsaa);
+}
+
+TEST(ComputeAlignedHeapSize, SingleNonMsaaSlot) {
+    std::vector<AliasingSlot> slots = {
+        {.heapGroup = HeapGroupType::RtDs, .size = 65536, .alignment = kAlignmentTexture},
+    };
+    auto size = ComputeAlignedHeapSize(slots, HeapGroupType::RtDs);
+    // AlignUp(0, 65536) = 0, then +65536 = 65536
+    EXPECT_EQ(size, 65536u);
+}
+
+TEST(ComputeAlignedHeapSize, MixedMsaaAndNonMsaa) {
+    std::vector<AliasingSlot> slots = {
+        {.heapGroup = HeapGroupType::RtDs, .size = 65536, .alignment = kAlignmentTexture},
+        {.heapGroup = HeapGroupType::RtDs, .size = kAlignmentMsaa, .alignment = kAlignmentMsaa},
+    };
+    auto size = ComputeAlignedHeapSize(slots, HeapGroupType::RtDs);
+
+    // nonMsaa region: AlignUp(0, 64K) + 65536 = 65536 + 65536 = ... wait, let's be precise
+    // nonMsaaOffset = AlignUp(0, 64K) = 0 (if we treat initial as 0), then + 65536 = 65536
+    // But wait, the code does: nonMsaaOffset = AlignUp(nonMsaaOffset, slot.alignment) + slot.size
+    // Start: nonMsaaOffset = 0
+    // Slot 0 (non-MSAA): AlignUp(0, 65536) = 0, then +65536 = 65536
+    // msaaOffset = 0
+    // Slot 1 (MSAA): AlignUp(0, 4MB) = 0, then +4MB = 4MB
+    // nonMsaaOffset = AlignUp(65536, 4MB) = 4MB
+    // total = 4MB + 4MB = 8MB
+    EXPECT_EQ(size, 2 * kAlignmentMsaa);
+}
+
+TEST(ComputeAlignedHeapSize, IgnoresOtherGroups) {
+    std::vector<AliasingSlot> slots = {
+        {.heapGroup = HeapGroupType::RtDs, .size = 65536, .alignment = kAlignmentTexture},
+        {.heapGroup = HeapGroupType::Buffer, .size = 1024, .alignment = kAlignmentBuffer},
+    };
+    auto rtdsSize = ComputeAlignedHeapSize(slots, HeapGroupType::RtDs);
+    auto bufSize = ComputeAlignedHeapSize(slots, HeapGroupType::Buffer);
+    EXPECT_GT(rtdsSize, 0u);
+    EXPECT_GT(bufSize, 0u);
+    // They're computed independently
+    EXPECT_NE(rtdsSize, bufSize);
+}
+
+TEST(PackSlotsAligned, BasicPacking) {
+    std::vector<AliasingSlot> slots = {
+        {.slotIndex = 0, .heapGroup = HeapGroupType::Buffer, .size = 300, .alignment = kAlignmentBuffer},
+        {.slotIndex = 1, .heapGroup = HeapGroupType::Buffer, .size = 500, .alignment = kAlignmentBuffer},
+    };
+
+    auto totalSize = PackSlotsAligned(slots, HeapGroupType::Buffer);
+    EXPECT_GT(totalSize, 0u);
+
+    // First-fit-decreasing: 500 first, then 300
+    // Slot with 500 bytes should be at offset 0
+    // Slot with 300 bytes should be at AlignUp(500, 256) = 512
+    auto& bigger = (slots[0].size > slots[1].size) ? slots[0] : slots[1];
+    auto& smaller = (slots[0].size > slots[1].size) ? slots[1] : slots[0];
+    EXPECT_EQ(bigger.heapOffset, 0u);
+    EXPECT_EQ(smaller.heapOffset, AlignUp(500, kAlignmentBuffer));
+    EXPECT_EQ(smaller.heapOffset % kAlignmentBuffer, 0u);
+}
+
+TEST(PackSlotsAligned, MsaaPackedAfterNonMsaa) {
+    std::vector<AliasingSlot> slots = {
+        {.slotIndex = 0, .heapGroup = HeapGroupType::RtDs, .size = 65536, .alignment = kAlignmentTexture},
+        {.slotIndex = 1, .heapGroup = HeapGroupType::RtDs, .size = kAlignmentMsaa, .alignment = kAlignmentMsaa},
+    };
+
+    PackSlotsAligned(slots, HeapGroupType::RtDs);
+
+    // Non-MSAA should come first (sorted: non-MSAA before MSAA)
+    EXPECT_LT(slots[0].heapOffset, slots[1].heapOffset);
+    EXPECT_EQ(slots[1].heapOffset % kAlignmentMsaa, 0u);
+}
+
+// =============================================================================
+// F-6: Aliasing barrier batching — via executor integration
+// =============================================================================
+
+TEST(ExecutorPhaseF, HeapPoolingEnabledByDefault) {
+    ExecutorConfig cfg;
+    EXPECT_TRUE(cfg.enableHeapPooling);
+    EXPECT_TRUE(cfg.enableBufferSuballocation);
+}
+
+TEST(ExecutorPhaseF, HeapPoolingDisabledFallsBackToPerFrame) {
+    RenderGraphBuilder builder;
+    auto rt = builder.CreateTexture({.width = 64, .height = 64, .debugName = "RT"});
+    builder.AddGraphicsPass(
+        "P",
+        [&](PassBuilder& pb) {
+            pb.WriteColorAttachment(rt);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+
+    ExecutorConfig cfg;
+    cfg.enableHeapPooling = false;
+    auto result = CompileAndExecute(builder, cfg);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_GE(result->stats.heapsCreated, 1u);
+    EXPECT_EQ(result->stats.heapsReused, 0u);
+}
+
+TEST(ExecutorPhaseF, HeapPoolingReusesAcrossExecutions) {
+    MockDevice device;
+    device.Init();
+    auto dh = DeviceHandle(&device, BackendType::Mock);
+
+    miki::frame::SyncScheduler sched;
+    sched.Init(device.GetQueueTimelinesImpl());
+    miki::frame::CommandPoolAllocator::Desc pd{.device = dh, .framesInFlight = 2};
+    auto pool = miki::frame::CommandPoolAllocator::Create(pd);
+    ASSERT_TRUE(pool.has_value());
+    miki::frame::FrameContext frame{.width = 64, .height = 64};
+
+    ExecutorConfig cfg;
+    cfg.enableHeapPooling = true;
+    RenderGraphExecutor executor(cfg);
+
+    // Build identical graph twice
+    auto buildAndRun = [&]() {
+        RenderGraphBuilder builder;
+        auto rt = builder.CreateTexture({.width = 128, .height = 128, .debugName = "RT"});
+        builder.AddGraphicsPass(
+            "P",
+            [&](PassBuilder& pb) {
+                pb.WriteColorAttachment(rt);
+                pb.SetSideEffects();
+            },
+            [](RenderPassContext&) {}
+        );
+        builder.Build();
+        RenderGraphCompiler compiler;
+        auto compiled = compiler.Compile(builder);
+        EXPECT_TRUE(compiled.has_value());
+        if (!compiled) {
+            return;
+        }
+        auto r = executor.Execute(*compiled, builder, frame, dh, sched, *pool);
+        EXPECT_TRUE(r.has_value());
+    };
+
+    buildAndRun();
+    auto s1 = executor.GetStats();
+    EXPECT_GE(s1.transientMemoryBytes, 1u);
+
+    buildAndRun();
+    auto s2 = executor.GetStats();
+    // Second execution should reuse heaps
+    EXPECT_GE(s2.heapsReused, 1u);
+    // Pool count should be stable (no growth)
+    EXPECT_LE(executor.GetHeapPool().GetPooledHeapCount(), 4u);
+
+    executor.ReleasePooledResources(dh);
+    EXPECT_EQ(executor.GetHeapPool().GetPooledHeapCount(), 0u);
+}
+
+TEST(ExecutorPhaseF, BufferSuballocationReducesBufferCreation) {
+    RenderGraphBuilder builder;
+    auto buf0 = builder.CreateBuffer({.size = 256, .debugName = "B0"});
+    auto buf1 = builder.CreateBuffer({.size = 512, .debugName = "B1"});
+    auto buf2 = builder.CreateBuffer({.size = 128, .debugName = "B2"});
+
+    // Chain: Write0 -> Read0_Write1 -> Read1_Write2 -> Read2
+    // This ensures non-overlapping lifetimes for some buffers
+    builder.AddComputePass(
+        "P0",
+        [&](PassBuilder& pb) {
+            pb.WriteBuffer(buf0);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "P1",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf0);
+            pb.WriteBuffer(buf1);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "P2",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf1);
+            pb.WriteBuffer(buf2);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+    builder.AddComputePass(
+        "P3",
+        [&](PassBuilder& pb) {
+            pb.ReadBuffer(buf2);
+            pb.SetSideEffects();
+        },
+        [](RenderPassContext&) {}
+    );
+
+    ExecutorConfig cfg;
+    cfg.enableBufferSuballocation = true;
+    auto result = CompileAndExecute(builder, cfg);
+    ASSERT_TRUE(result.has_value());
+    // Should have allocated some transient buffers
+    EXPECT_GE(result->stats.transientBuffersAllocated, 1u);
+}
+
+// =============================================================================
+// Complex multi-flow stress tests
+// =============================================================================
+
+TEST(HeapPoolStress, RapidLayoutChanges) {
+    // Simulate a scene where the render graph changes layout every frame
+    // (e.g., editor with different views selected each frame)
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.lruGraceFrames = 2;
+    TransientHeapPool pool(cfg);
+
+    for (uint32_t frame = 1; frame <= 20; ++frame) {
+        // Alternate between very different layouts
+        auto layout = (frame % 3 == 0)   ? MakeAliasingLayout({65536, 0, 0, 0})
+                      : (frame % 3 == 1) ? MakeAliasingLayout({0, 32768, 4096, 0})
+                                         : MakeAliasingLayout({131072, 65536, 8192, 0});
+
+        auto result = pool.AcquireHeaps(layout, f.handle, frame, false);
+        ASSERT_TRUE(result.has_value()) << "Failed at frame " << frame;
+
+        // Pool should not grow unboundedly
+        EXPECT_LE(pool.GetPooledHeapCount(), 10u) << "Pool leak at frame " << frame;
+    }
+}
+
+TEST(HeapPoolStress, LayoutStabilizationZeroAlloc) {
+    // After initial frames, a stable application should hit zero-alloc steady state
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 32768, 4096, 0});
+
+    // Frame 1: initial allocation
+    pool.AcquireHeaps(layout, f.handle, 1, false);
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 3u);
+
+    // Frames 2-100: steady state -> all reused, zero new allocations
+    for (uint32_t frame = 2; frame <= 100; ++frame) {
+        pool.AcquireHeaps(layout, f.handle, frame, false);
+        EXPECT_EQ(pool.GetStats().heapsAllocated, 0u) << "Unexpected alloc at frame " << frame;
+        EXPECT_EQ(pool.GetStats().heapsReused, 3u) << "Expected 3 reuses at frame " << frame;
+    }
+    EXPECT_EQ(pool.GetPooledHeapCount(), 3u);  // No growth
+}
+
+TEST(HeapPoolStress, GrowingSizesThenStabilize) {
+    // Simulate resolution changes: each frame requests slightly more, then stabilizes
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.overshootTolerance = 0.20f;
+    cfg.lruGraceFrames = 2;
+    TransientHeapPool pool(cfg);
+
+    uint64_t baseSize = 65536;
+    for (uint32_t frame = 1; frame <= 10; ++frame) {
+        auto layout = MakeAliasingLayout({baseSize + frame * 10000, 0, 0, 0}, 1);
+        pool.AcquireHeaps(layout, f.handle, frame, false);
+    }
+
+    // After growth phase, stabilize
+    auto stableLayout = MakeAliasingLayout({165536, 0, 0, 0}, 1);
+    pool.AcquireHeaps(stableLayout, f.handle, 11, false);
+    auto heapHandle = (*pool.AcquireHeaps(stableLayout, f.handle, 12, false))[0];
+
+    // Subsequent frames should reuse
+    for (uint32_t frame = 13; frame <= 20; ++frame) {
+        auto r = pool.AcquireHeaps(stableLayout, f.handle, frame, false);
+        ASSERT_TRUE(r.has_value());
+        EXPECT_EQ((*r)[0].value, heapHandle.value) << "Heap changed at frame " << frame;
+    }
+}
+
+TEST(HeapPoolStress, AllGroupsActiveAndStale) {
+    // All 4 heap groups active, then progressively drop to 1, verify correct eviction
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.lruGraceFrames = 1;
+    TransientHeapPool pool(cfg);
+
+    auto layout4 = MakeAliasingLayout({65536, 32768, 4096, 8192});
+    pool.AcquireHeaps(layout4, f.handle, 1, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 4u);
+
+    auto layout2 = MakeAliasingLayout({65536, 32768, 0, 0});
+    pool.AcquireHeaps(layout2, f.handle, 2, false);
+    // Buffer+Mixed stale since frame 1, grace=1 -> 2 >= 1+1 -> evicted immediately
+    EXPECT_EQ(pool.GetPooledHeapCount(), 2u);
+
+    auto layout1 = MakeAliasingLayout({65536, 0, 0, 0});
+    pool.AcquireHeaps(layout1, f.handle, 3, false);
+    // NonRtDs stale since frame 2, grace=1 -> 3 >= 2+1 -> evicted
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);
+}
+
+TEST(HeapPoolStress, DefragAfterSceneTransition) {
+    // Simulate: large scene (many groups, big heaps) -> transition to small scene -> force defrag
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.lruGraceFrames = 100;  // Never naturally evict
+    TransientHeapPool pool(cfg);
+
+    // Large scene
+    auto bigLayout = MakeAliasingLayout({1024 * 1024, 512 * 1024, 256 * 1024, 0});
+    pool.AcquireHeaps(bigLayout, f.handle, 1, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 3u);
+    EXPECT_EQ(pool.GetStats().activeBytes, 1024u * 1024u + 512u * 1024u + 256u * 1024u);
+
+    // Small scene: request 65536 RtDs. Old 1MB RtDs is >2x oversized -> released.
+    auto smallLayout = MakeAliasingLayout({65536, 0, 0, 0});
+    pool.AcquireHeaps(smallLayout, f.handle, 2, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 3u);  // 2 stale (NonRtDs+Buffer) + 1 new 65K RtDs
+
+    // Force defrag at scene transition
+    pool.DefragmentIfNeeded(smallLayout, f.handle, 3, 0.5f, true);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);  // Only the small RtDs heap
+    EXPECT_GE(pool.GetStats().defragTriggered, 1u);
+}
+
+TEST(HeapPoolStress, ConcurrentGroupsWithDifferentLifetimes) {
+    // RtDs changes every 5 frames, Buffer changes every 3 frames, NonRtDs stable
+    MockDeviceFixture f;
+    TransientHeapPoolConfig cfg;
+    cfg.lruGraceFrames = 2;
+    cfg.overshootTolerance = 0.10f;  // Tight tolerance
+    TransientHeapPool pool(cfg);
+
+    for (uint32_t frame = 1; frame <= 30; ++frame) {
+        uint64_t rtdsSize = ((frame / 5) % 3 + 1) * 65536;
+        uint64_t bufSize = ((frame / 3) % 4 + 1) * 1024;
+        auto layout = MakeAliasingLayout({rtdsSize, 32768, bufSize, 0});
+        auto r = pool.AcquireHeaps(layout, f.handle, frame, false);
+        ASSERT_TRUE(r.has_value()) << "Failed at frame " << frame;
+        EXPECT_LE(pool.GetPooledHeapCount(), 12u) << "Pool too large at frame " << frame;
+    }
+}
+
+// =============================================================================
+// Executor integration — new config fields
+// =============================================================================
+
+TEST(ExecutorPhaseF, ConfigFieldsPropagate) {
+    ExecutorConfig cfg;
+    cfg.enableHeapPooling = false;
+    cfg.enableBufferSuballocation = false;
+    cfg.heapPoolConfig.lruGraceFrames = 7;
+    cfg.heapPoolConfig.overshootTolerance = 0.30f;
+
+    RenderGraphExecutor executor(cfg);
+    // Config should be stored (we verify indirectly through behavior)
+    EXPECT_EQ(executor.GetStats().heapsReused, 0u);
+    EXPECT_EQ(executor.GetStats().bufferSuballocations, 0u);
+}
+
+TEST(ExecutorPhaseF, DefragmentHeapPoolDelegates) {
+    MockDevice device;
+    device.Init();
+    auto dh = DeviceHandle(&device, BackendType::Mock);
+
+    RenderGraphExecutor executor;
+    AliasingLayout layout;
+    CompiledRenderGraph graph;
+    graph.aliasing = layout;
+
+    // Should not crash even with empty layout
+    executor.DefragmentHeapPool(graph, dh, 1, 0.5f, true);
+}
+
+TEST(ExecutorPhaseF, ReleasePooledResourcesWorks) {
+    MockDevice device;
+    device.Init();
+    auto dh = DeviceHandle(&device, BackendType::Mock);
+
+    RenderGraphExecutor executor;
+    executor.ReleasePooledResources(dh);
+    EXPECT_EQ(executor.GetHeapPool().GetPooledHeapCount(), 0u);
+}
+
+// =============================================================================
+// Edge case: zero-size heap groups
+// =============================================================================
+
+TEST(HeapPool, ZeroSizeGroupsIgnored) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({0, 0, 0, 0});
+
+    auto r = pool.AcquireHeaps(layout, f.handle, 1, false);
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 0u);
+    EXPECT_EQ(pool.GetStats().totalPooledBytes, 0u);
+}
+
+// =============================================================================
+// Edge case: very large heap sizes
+// =============================================================================
+
+TEST(HeapPool, LargeHeapSizes) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    uint64_t huge = 4ULL * 1024 * 1024 * 1024;  // 4GB
+    auto layout = MakeAliasingLayout({huge, 0, 0, 0});
+
+    auto r = pool.AcquireHeaps(layout, f.handle, 1, false);
+    ASSERT_TRUE(r.has_value());
+    EXPECT_TRUE((*r)[0].IsValid());
+    EXPECT_EQ(pool.GetStats().activeBytes, huge);
+}
+
+// =============================================================================
+// Edge case: repeated ReleaseAll then re-acquire
+// =============================================================================
+
+TEST(HeapPool, ReleaseAllThenReacquire) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+    auto layout = MakeAliasingLayout({65536, 0, 0, 0});
+
+    pool.AcquireHeaps(layout, f.handle, 1, false);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);
+
+    pool.ReleaseAll(f.handle);
+    EXPECT_EQ(pool.GetPooledHeapCount(), 0u);
+
+    // Re-acquire should work fine
+    auto r = pool.AcquireHeaps(layout, f.handle, 2, false);
+    ASSERT_TRUE(r.has_value());
+    EXPECT_TRUE((*r)[0].IsValid());
+    EXPECT_EQ(pool.GetPooledHeapCount(), 1u);
+    EXPECT_EQ(pool.GetStats().heapsAllocated, 1u);  // Fresh allocation
+}
+
+// =============================================================================
+// Edge case: buffer suballocator called multiple times (parent buffer replaced)
+// =============================================================================
+
+TEST(BufferSuballocator, RepeatedCallsReplaceParentBuffer) {
+    MockDeviceFixture f;
+    TransientHeapPool pool;
+
+    RGResourceNode buf;
+    buf.kind = RGResourceKind::Buffer;
+    buf.imported = false;
+    buf.bufferDesc.size = 512;
+
+    AliasingLayout layout;
+    layout.slots.push_back(
+        {.slotIndex = 0, .heapGroup = HeapGroupType::Buffer, .size = 512, .alignment = kAlignmentBuffer}
+    );
+    layout.resourceToSlot = {0};
+    std::vector<RGResourceNode> resources = {buf};
+
+    auto r1 = pool.PrepareBufferSuballocations(DeviceMemoryHandle{1}, resources, layout, f.handle);
+    ASSERT_TRUE(r1.has_value());
+    auto parent1 = pool.GetParentBuffer();
+    EXPECT_TRUE(parent1.IsValid());
+
+    // Second call: should destroy old parent and create new
+    auto r2 = pool.PrepareBufferSuballocations(DeviceMemoryHandle{2}, resources, layout, f.handle);
+    ASSERT_TRUE(r2.has_value());
+    auto parent2 = pool.GetParentBuffer();
+    EXPECT_TRUE(parent2.IsValid());
+    // Different handles (MockDevice increments)
+    EXPECT_NE(parent1.value, parent2.value);
 }

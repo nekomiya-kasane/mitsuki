@@ -155,6 +155,14 @@ namespace miki::rhi {
         bool hasSparseBinding = false;
         bool hasHardwareDecompression = false;  ///< GDeflate HW decode (VK_NV_memory_decompression / DirectStorage)
         bool hasMemoryBudgetQuery = false;
+
+        /// @brief D3D12 ResourceHeapTier (§5.6.2). Tier2 = split heaps (all modern GPUs).
+        /// Vulkan/GL/WebGPU always act as Tier2 (split by memoryType). Mock defaults to Tier2.
+        enum class ResourceHeapTier : uint8_t {
+            Tier1 = 1,
+            Tier2 = 2
+        };
+        ResourceHeapTier resourceHeapTier = ResourceHeapTier::Tier2;
         bool hasWorkGraphs = false;         ///< D3D12 SM 6.8 DispatchGraph
         bool hasCooperativeMatrix = false;  ///< VK_KHR_cooperative_matrix / SM 6.9 wave matrix
 

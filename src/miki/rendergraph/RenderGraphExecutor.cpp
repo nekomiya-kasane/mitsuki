@@ -190,7 +190,7 @@ namespace miki::rg {
     // =========================================================================
 
     RenderGraphExecutor::RenderGraphExecutor(const ExecutorConfig& config)
-        : config_(config), frameAllocator_(config.frameAllocatorCapacity) {}
+        : config_(config), frameAllocator_(config.frameAllocatorCapacity), heapPool_(config.heapPoolConfig) {}
 
     RenderGraphExecutor::~RenderGraphExecutor() = default;
 
@@ -209,12 +209,20 @@ namespace miki::rg {
         stats_ = {};
         frameAllocator_.Reset();
         batchRecordings_.clear();
+        ++frameNumber_;
 
-        // Phase 1: Allocate transient resources
+        // Phase 1: Allocate transient resources (with heap pooling + buffer suballocation)
         auto allocResult = AllocateTransients(graph, builder, device);
         if (!allocResult) {
             return allocResult;
         }
+
+        // Propagate heap pool stats to executor stats
+        auto& poolStats = heapPool_.GetStats();
+        stats_.heapsReused = poolStats.heapsReused;
+        stats_.heapsEvicted = poolStats.heapsEvicted;
+        stats_.bufferSuballocations = poolStats.bufferSuballocations;
+        stats_.bufferSuballocBytes = poolStats.bufferSuballocBytes;
 
         // Phase 2: Record command buffers (choose single-threaded or parallel path)
         auto recordResult = (config_.enableParallelRecording && config_.maxRecordingThreads > 1)
@@ -297,42 +305,100 @@ namespace miki::rg {
         physicalBuffers_.assign(resourceCount, {});
         physicalTextureViews_.assign(resourceCount, {});
 
-        // Clean up previous frame's transient resources
+        // Clean up previous frame's transient resources (textures/views/buffers)
+        // Heaps are NOT destroyed here — they persist in the pool for cross-frame reuse.
         DestroyTransients(device);
 
-        // --- Step 1: Create memory heaps for aliased transient resources ---
         auto& aliasing = graph.aliasing;
         heapAllocations_.clear();
+        bufferSuballocs_.clear();
 
-        for (uint32_t g = 0; g < kHeapGroupCount; ++g) {
-            uint64_t heapSize = aliasing.heapGroupSizes[g];
-            if (heapSize == 0) {
-                continue;
-            }
-
-            auto heapResult = device.Dispatch([&](auto& dev) {
-                return dev.CreateMemoryHeap(
-                    rhi::MemoryHeapDesc{
-                        .size = heapSize,
-                        .memory = rhi::MemoryLocation::GpuOnly,
-                        .debugName = "RG Transient Heap",
-                    }
-                );
+        // --- Step 1: Acquire heaps from pool (§5.6.5 cross-frame reuse) ---
+        if (config_.enableHeapPooling) {
+            // Query backend capabilities for D3D12 Tier1 mixed-heap fallback
+            bool useMixed = device.Dispatch([](auto& dev) {
+                using RT = decltype(dev.GetCapabilities().resourceHeapTier);
+                return dev.GetCapabilities().resourceHeapTier == RT::Tier1;
             });
-            if (!heapResult) {
+
+            auto heapsResult = heapPool_.AcquireHeaps(aliasing, device, frameNumber_, useMixed);
+            if (!heapsResult) {
                 return std::unexpected(core::ErrorCode::OutOfMemory);
             }
+            activeHeaps_ = *heapsResult;
 
-            heapAllocations_.push_back({
-                .group = static_cast<HeapGroupType>(g),
-                .heap = *heapResult,
-                .size = heapSize,
-            });
-            stats_.heapsCreated++;
-            stats_.transientMemoryBytes += heapSize;
+            // Build heapAllocations_ from activeHeaps_ for backward compatibility
+            for (uint32_t g = 0; g < kHeapGroupCount; ++g) {
+                if (activeHeaps_[g].IsValid()) {
+                    uint64_t heapSize = aliasing.heapGroupSizes[g];
+                    heapAllocations_.push_back({
+                        .group = static_cast<HeapGroupType>(g),
+                        .heap = activeHeaps_[g],
+                        .size = heapSize,
+                    });
+                    stats_.heapsCreated += (heapPool_.GetStats().heapsAllocated > 0) ? 1 : 0;
+                    stats_.transientMemoryBytes += heapSize;
+                }
+            }
+        } else {
+            // Fallback: per-frame heap allocation (no pooling)
+            for (uint32_t g = 0; g < kHeapGroupCount; ++g) {
+                uint64_t heapSize = aliasing.heapGroupSizes[g];
+                if (heapSize == 0) {
+                    continue;
+                }
+
+                auto groupType = static_cast<HeapGroupType>(g);
+                auto heapResult = device.Dispatch([&](auto& dev) {
+                    return dev.CreateMemoryHeap(
+                        rhi::MemoryHeapDesc{
+                            .size = heapSize,
+                            .memory = rhi::MemoryLocation::GpuOnly,
+                            .groupHint = TransientHeapPool::ToGroupHint(groupType),
+                            .debugName = "RG Transient Heap",
+                        }
+                    );
+                });
+                if (!heapResult) {
+                    return std::unexpected(core::ErrorCode::OutOfMemory);
+                }
+
+                heapAllocations_.push_back({
+                    .group = groupType,
+                    .heap = *heapResult,
+                    .size = heapSize,
+                });
+                activeHeaps_[g] = *heapResult;
+                stats_.heapsCreated++;
+                stats_.transientMemoryBytes += heapSize;
+            }
         }
 
-        // --- Step 2: Create physical resources ---
+        // --- Step 2: Buffer suballocation (§5.6.7) ---
+        // If enabled, transient buffers share a single parent buffer instead of individual placed resources
+        bool useSuballoc
+            = config_.enableBufferSuballocation && activeHeaps_[static_cast<uint32_t>(HeapGroupType::Buffer)].IsValid();
+        if (useSuballoc) {
+            auto subResult = heapPool_.PrepareBufferSuballocations(
+                activeHeaps_[static_cast<uint32_t>(HeapGroupType::Buffer)], resources, aliasing, device
+            );
+            if (subResult) {
+                bufferSuballocs_ = std::move(*subResult);
+            }
+            // Failure is non-fatal: fall back to individual buffer creation below
+        }
+
+        // --- Step 3: Create physical resources ---
+        // Build a set of suballocated buffer indices for O(1) lookup
+        std::vector<bool> isSuballocated(resourceCount, false);
+        for (auto& sub : bufferSuballocs_) {
+            if (sub.resourceIndex < resourceCount) {
+                isSuballocated[sub.resourceIndex] = true;
+                // Suballocated buffers share the parent buffer handle
+                physicalBuffers_[sub.resourceIndex] = heapPool_.GetParentBuffer();
+            }
+        }
+
         for (uint16_t ri = 0; ri < resourceCount; ++ri) {
             auto& resNode = resources[ri];
 
@@ -357,6 +423,12 @@ namespace miki::rg {
                 } else {
                     physicalBuffers_[ri] = resNode.importedBuffer;
                 }
+                continue;
+            }
+
+            // Skip suballocated buffers — already handled above
+            if (isSuballocated[ri]) {
+                stats_.transientBuffersAllocated++;
                 continue;
             }
 
@@ -408,7 +480,7 @@ namespace miki::rg {
                 });
 
             } else {
-                // Buffer
+                // Buffer (non-suballocated path)
                 auto inferredUsage = InferBufferUsage(combinedAccess);
                 auto rhiDesc = resNode.bufferDesc.ToRhiDesc(inferredUsage);
 
