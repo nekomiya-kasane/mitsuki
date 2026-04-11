@@ -1341,6 +1341,7 @@ namespace miki::rhi {
         vkWaitSemaphores(device_, &waitInfo, timeout);
     }
 
+    // TODO (Nekomiya) maybe we should return RhiResult to flag invalid semaphore
     auto VulkanDevice::GetSemaphoreValueImpl(SemaphoreHandle h) -> uint64_t {
         auto* data = semaphores_.Lookup(h);
         if (!data) {

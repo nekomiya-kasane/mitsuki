@@ -229,9 +229,6 @@ namespace miki::rhi {
             -> RhiResult<CommandListAcquisition> {
             return Self().AllocateFromPoolImpl(pool, secondary);
         }
-        void FreeFromPool(CommandPoolHandle pool, const CommandListAcquisition& acq) {
-            Self().FreeFromPoolImpl(pool, acq);
-        }
 
         // --- Synchronization ---
         [[nodiscard]] auto CreateFence(bool signaled = false) -> RhiResult<FenceHandle> {

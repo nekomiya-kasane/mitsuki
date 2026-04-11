@@ -153,7 +153,6 @@ namespace miki::rhi {
                 .listHandle = CommandListHandle(&buf, BackendType::Mock),
             };
         }
-        void FreeFromPoolImpl(CommandPoolHandle, const CommandListAcquisition&) {}
 
         // --- Query ---
         auto CreateQueryPoolImpl(const QueryPoolDesc&) -> RhiResult<QueryPoolHandle> {

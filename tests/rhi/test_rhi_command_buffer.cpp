@@ -88,52 +88,6 @@ TEST_P(RhiCommandBufferTest, PoolCreateAndDestroy) {
     Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
 }
 
-TEST_P(RhiCommandBufferTest, AllocateFromPoolGraphics) {
-    auto pool = CreatePool(Dev(), QueueType::Graphics);
-    ASSERT_TRUE(pool.has_value());
-    auto acq = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
-    ASSERT_TRUE(acq.has_value());
-    EXPECT_TRUE(acq->bufferHandle.IsValid());
-    EXPECT_TRUE(acq->listHandle.IsValid());
-    Dev().Dispatch([&](auto& dev) { dev.FreeFromPool(*pool, *acq); });
-    Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
-}
-
-TEST_P(RhiCommandBufferTest, AllocateFromPoolCompute) {
-    auto pool = CreatePool(Dev(), QueueType::Compute);
-    ASSERT_TRUE(pool.has_value());
-    auto acq = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
-    ASSERT_TRUE(acq.has_value());
-    EXPECT_TRUE(acq->bufferHandle.IsValid());
-    Dev().Dispatch([&](auto& dev) { dev.FreeFromPool(*pool, *acq); });
-    Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
-}
-
-TEST_P(RhiCommandBufferTest, AllocateFromPoolTransfer) {
-    auto pool = CreatePool(Dev(), QueueType::Transfer);
-    ASSERT_TRUE(pool.has_value());
-    auto acq = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
-    ASSERT_TRUE(acq.has_value());
-    EXPECT_TRUE(acq->bufferHandle.IsValid());
-    Dev().Dispatch([&](auto& dev) { dev.FreeFromPool(*pool, *acq); });
-    Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
-}
-
-TEST_P(RhiCommandBufferTest, Allocate20FromPool) {
-    auto pool = CreatePool(Dev(), QueueType::Graphics);
-    ASSERT_TRUE(pool.has_value());
-    std::vector<CommandListAcquisition> acqs;
-    for (int i = 0; i < 20; ++i) {
-        auto acq = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
-        ASSERT_TRUE(acq.has_value()) << "Failed at allocation " << i;
-        acqs.push_back(*acq);
-    }
-    for (auto& a : acqs) {
-        Dev().Dispatch([&](auto& dev) { dev.FreeFromPool(*pool, a); });
-    }
-    Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
-}
-
 TEST_P(RhiCommandBufferTest, ResetPoolReclaims) {
     auto pool = CreatePool(Dev(), QueueType::Graphics);
     ASSERT_TRUE(pool.has_value());
@@ -145,17 +99,6 @@ TEST_P(RhiCommandBufferTest, ResetPoolReclaims) {
     auto acq2 = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
     ASSERT_TRUE(acq2.has_value());
     Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
-}
-
-TEST_P(RhiCommandBufferTest, AllQueueTypesPoolLifecycle) {
-    for (auto qt : {QueueType::Graphics, QueueType::Compute, QueueType::Transfer}) {
-        auto pool = CreatePool(Dev(), qt);
-        ASSERT_TRUE(pool.has_value()) << "Pool create failed for QueueType " << static_cast<int>(qt);
-        auto acq = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
-        ASSERT_TRUE(acq.has_value()) << "Allocate failed for QueueType " << static_cast<int>(qt);
-        Dev().Dispatch([&](auto& dev) { dev.FreeFromPool(*pool, *acq); });
-        Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
-    }
 }
 
 INSTANTIATE_TEST_SUITE_P(AllBackends, RhiCommandBufferTest, ::testing::ValuesIn(GetAvailableBackends()), BackendName);

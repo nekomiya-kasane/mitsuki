@@ -219,9 +219,4 @@ namespace miki::rhi {
         return acq;
     }
 
-    void VulkanDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& /*acq*/) {
-        // No-op: pool-reset model (spec §19) reclaims all buffers via ResetCommandPool.
-        // Individual free is unnecessary — cached entries persist until pool destruction.
-    }
-
 }  // namespace miki::rhi

@@ -626,7 +626,6 @@ namespace miki::rhi {
         void DestroyCommandPoolImpl(CommandPoolHandle h);
         void ResetCommandPoolImpl(CommandPoolHandle h, CommandPoolResetFlags flags);
         auto AllocateFromPoolImpl(CommandPoolHandle pool, bool secondary) -> RhiResult<CommandListAcquisition>;
-        void FreeFromPoolImpl(CommandPoolHandle pool, const CommandListAcquisition& acq);
 
         // -- Query (OpenGLQuery.cpp) --
         auto CreateQueryPoolImpl(const QueryPoolDesc& desc) -> RhiResult<QueryPoolHandle>;

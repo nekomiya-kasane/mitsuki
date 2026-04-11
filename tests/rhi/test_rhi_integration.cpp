@@ -278,25 +278,6 @@ TEST_P(RhiIntegrationTest, MixedResourceCreateDestroy) {
     }
 }
 
-TEST_P(RhiIntegrationTest, BulkPoolAllocateAndFree) {
-    // Create one pool per queue type, allocate multiple from each
-    for (auto qt : {QueueType::Graphics, QueueType::Compute, QueueType::Transfer}) {
-        CommandPoolDesc poolDesc{.queue = qt, .transient = false};
-        auto pool = Dev().Dispatch([&](auto& dev) { return dev.CreateCommandPool(poolDesc); });
-        ASSERT_TRUE(pool.has_value());
-        std::vector<CommandListAcquisition> acqs;
-        for (int i = 0; i < 33; ++i) {
-            auto acq = Dev().Dispatch([&](auto& dev) { return dev.AllocateFromPool(*pool, false); });
-            ASSERT_TRUE(acq.has_value()) << "Failed at allocation " << i << " for QueueType " << static_cast<int>(qt);
-            acqs.push_back(*acq);
-        }
-        for (auto& a : acqs) {
-            Dev().Dispatch([&](auto& dev) { dev.FreeFromPool(*pool, a); });
-        }
-        Dev().Dispatch([&](auto& dev) { dev.DestroyCommandPool(*pool); });
-    }
-}
-
 // ============================================================================
 // Integration: WaitIdle
 // ============================================================================

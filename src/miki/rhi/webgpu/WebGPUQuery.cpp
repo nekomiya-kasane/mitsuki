@@ -253,9 +253,4 @@ namespace miki::rhi {
         return acq;
     }
 
-    void WebGPUDevice::FreeFromPoolImpl(CommandPoolHandle /*pool*/, const CommandListAcquisition& /*acq*/) {
-        // No-op: pool-reset model (spec §19) reclaims all buffers via ResetCommandPool.
-        // Encoder release is handled by ResetCommandPool. Cached entries persist until pool destruction.
-    }
-
 }  // namespace miki::rhi
