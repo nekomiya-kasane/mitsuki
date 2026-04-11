@@ -1,0 +1,353 @@
+{
+  "version": "0.2.1",
+  "configurations": [
+    // ============================================================
+    // Platform Tests
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_window_manager.exe",
+      "name": "[Full] test_window_manager"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_window_manager_glfw.exe",
+      "name": "[Full] test_window_manager_glfw"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_window_manager_spec.exe",
+      "name": "[Full] test_window_manager_spec"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_event_simulator.exe",
+      "name": "[Full] test_event_simulator"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_structured_logger.exe",
+      "name": "[Full] test_structured_logger"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_surface_integration.exe",
+      "name": "[Full] test_surface_integration"
+    },
+    // ============================================================
+    // Frame Tests
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_async_task_manager.exe",
+      "name": "[Full] test_async_task_manager"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_command_pool_allocator.exe",
+      "name": "[Full] test_command_pool_allocator"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_deferred_destructor.exe",
+      "name": "[Full] test_deferred_destructor"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_frame_manager.exe",
+      "name": "[Full] test_frame_manager"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_frame_orchestrator.exe",
+      "name": "[Full] test_frame_orchestrator"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_sync_scheduler.exe",
+      "name": "[Full] test_sync_scheduler"
+    },
+    // ============================================================
+    // Resource Tests
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_staging_ring.exe",
+      "name": "[Full] test_staging_ring"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_readback_ring.exe",
+      "name": "[Full] test_readback_ring"
+    },
+    // ============================================================
+    // RHI Tests
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_handle.exe",
+      "name": "[Full] test_rhi_handle"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_device.exe",
+      "name": "[Full] test_rhi_device"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_resource.exe",
+      "name": "[Full] test_rhi_resource"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_descriptor.exe",
+      "name": "[Full] test_rhi_descriptor"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_command_buffer.exe",
+      "name": "[Full] test_rhi_command_buffer"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_pipeline.exe",
+      "name": "[Full] test_rhi_pipeline"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_sync.exe",
+      "name": "[Full] test_rhi_sync"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_accel_struct.exe",
+      "name": "[Full] test_rhi_accel_struct"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_swapchain.exe",
+      "name": "[Full] test_rhi_swapchain"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_query.exe",
+      "name": "[Full] test_rhi_query"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_rhi_integration.exe",
+      "name": "[Full] test_rhi_integration"
+    },
+    // ============================================================
+    // RenderGraph Tests
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "test_render_graph.exe",
+      "name": "[Full] test_render_graph"
+    },
+    // ============================================================
+    // Platform Demos
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "window_manager_demo.exe",
+      "name": "[Full] window_manager_demo"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "logger_demo.exe",
+      "name": "[Full] logger_demo"
+    },
+    // ============================================================
+    // rhi_triangle_demo
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_triangle_demo.exe",
+      "name": "[Full] rhi_triangle_demo"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_triangle_demo.exe",
+      "name": "[Full] rhi_triangle_demo --backend vulkan",
+      "args": [ "--backend", "vulkan" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_triangle_demo.exe",
+      "name": "[Full] rhi_triangle_demo --backend vulkan11",
+      "args": [ "--backend", "vulkan11" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_triangle_demo.exe",
+      "name": "[Full] rhi_triangle_demo --backend d3d12",
+      "args": [ "--backend", "d3d12" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_triangle_demo.exe",
+      "name": "[Full] rhi_triangle_demo --backend opengl",
+      "args": [ "--backend", "opengl" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_triangle_demo.exe",
+      "name": "[Full] rhi_triangle_demo --backend webgpu",
+      "args": [ "--backend", "webgpu" ]
+    },
+    // ============================================================
+    // rhi_torus_demo
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_torus_demo.exe",
+      "name": "[Full] rhi_torus_demo"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_torus_demo.exe",
+      "name": "[Full] rhi_torus_demo --backend vulkan",
+      "args": [ "--backend", "vulkan" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_torus_demo.exe",
+      "name": "[Full] rhi_torus_demo --backend vulkan11",
+      "args": [ "--backend", "vulkan11" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_torus_demo.exe",
+      "name": "[Full] rhi_torus_demo --backend d3d12",
+      "args": [ "--backend", "d3d12" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_torus_demo.exe",
+      "name": "[Full] rhi_torus_demo --backend opengl",
+      "args": [ "--backend", "opengl" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rhi_torus_demo.exe",
+      "name": "[Full] rhi_torus_demo --backend webgpu",
+      "args": [ "--backend", "webgpu" ]
+    },
+    // ============================================================
+    // rg_torus_cube_demo
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_torus_cube_demo.exe",
+      "name": "[Full] rg_torus_cube_demo"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_torus_cube_demo.exe",
+      "name": "[Full] rg_torus_cube_demo --backend vulkan",
+      "args": [ "--backend", "vulkan" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_torus_cube_demo.exe",
+      "name": "[Full] rg_torus_cube_demo --backend vulkan11",
+      "args": [ "--backend", "vulkan11" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_torus_cube_demo.exe",
+      "name": "[Full] rg_torus_cube_demo --backend d3d12",
+      "args": [ "--backend", "d3d12" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_torus_cube_demo.exe",
+      "name": "[Full] rg_torus_cube_demo --backend opengl",
+      "args": [ "--backend", "opengl" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_torus_cube_demo.exe",
+      "name": "[Full] rg_torus_cube_demo --backend webgpu",
+      "args": [ "--backend", "webgpu" ]
+    },
+    // ============================================================
+    // rg_mesh_torus_cube_demo (Task + Mesh Shader)
+    // ============================================================
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_mesh_torus_cube_demo.exe",
+      "name": "[Full] rg_mesh_torus_cube_demo"
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_mesh_torus_cube_demo.exe",
+      "name": "[Full] rg_mesh_torus_cube_demo --backend vulkan",
+      "args": [ "--backend", "vulkan" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_mesh_torus_cube_demo.exe",
+      "name": "[Full] rg_mesh_torus_cube_demo --backend vulkan11",
+      "args": [ "--backend", "vulkan11" ]
+    },
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "rg_mesh_torus_cube_demo.exe",
+      "name": "[Full] rg_mesh_torus_cube_demo --backend d3d12",
+      "args": [ "--backend", "d3d12" ]
+    }
+  ]
+}
