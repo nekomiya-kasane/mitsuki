@@ -250,6 +250,7 @@ namespace miki::rg {
         pass.name = name;
         pass.flags = flags;
         pass.queue = queue;
+        pass.hasSideEffects = (flags & RGPassFlags::SideEffects) != RGPassFlags::None;
         pass.executeFn = std::move(execute);
 
         // Run setup lambda — accesses go into staging buffers

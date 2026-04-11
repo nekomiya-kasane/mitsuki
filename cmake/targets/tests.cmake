@@ -178,3 +178,13 @@ miki_add_test(test_phase_k_extension tests/rendergraph/test_phase_k_extension.cp
 if(TARGET test_phase_k_extension)
     set_tests_properties(test_phase_k_extension PROPERTIES TIMEOUT 60)
 endif()
+
+miki_add_test(test_phase_l_advanced tests/rendergraph/test_phase_l_advanced.cpp)
+if(TARGET test_phase_l_advanced)
+    set_tests_properties(test_phase_l_advanced PROPERTIES TIMEOUT 120)
+endif()
+
+miki_add_test(test_integration_multiflow tests/rendergraph/test_integration_multiflow.cpp)
+if(TARGET test_integration_multiflow)
+    set_tests_properties(test_integration_multiflow PROPERTIES TIMEOUT 180)
+endif()
