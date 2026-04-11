@@ -10,7 +10,13 @@ add_library(miki_debug OBJECT
     src/miki/debug/StructuredLogger.cpp
     src/miki/debug/CrashHandler.cpp
     src/miki/debug/CpuProfiler.cpp
+    src/miki/debug/StackTrace.cpp
 )
 
 miki_setup_library(miki_debug)
 target_link_libraries(miki_debug PUBLIC miki::third_party::tapioca)
+
+# DbgHelp for stack trace symbol resolution (Windows)
+if(WIN32)
+    target_link_libraries(miki_debug PRIVATE dbghelp)
+endif()

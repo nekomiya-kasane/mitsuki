@@ -23,6 +23,7 @@
 #    pragma warning(pop)
 #endif
 
+#include "miki/debug/StackTrace.h"
 #include "miki/debug/StructuredLogger.h"
 
 #include <algorithm>
@@ -148,14 +149,19 @@ namespace miki::rhi {
             using enum ::miki::debug::LogCategory;
             if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
                 MIKI_LOG_ERROR(Rhi, "[Vulkan] {}", callbackData->pMessage);
+                MIKI_LOG_FLUSH();
+                auto trace = ::miki::debug::StackTrace::Capture(1);
+                trace.PrintColored("Vulkan Validation Error");
             } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
                 MIKI_LOG_WARN(Rhi, "[Vulkan] {}", callbackData->pMessage);
+                MIKI_LOG_FLUSH();
+                auto trace = ::miki::debug::StackTrace::Capture(1);
+                trace.PrintColored("Vulkan Validation Warning");
             } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
                 MIKI_LOG_INFO(Rhi, "[Vulkan] {}", callbackData->pMessage);
             } else {
                 MIKI_LOG_TRACE(Rhi, "[Vulkan] {}", callbackData->pMessage);
             }
-            MIKI_LOG_FLUSH();
 
             return VK_FALSE;
         }

@@ -82,7 +82,7 @@ static constexpr uint32_t kMaxMeshletTriangles = 124;
 
 struct MeshletBuildResult {
     std::vector<GpuVertex> vertices;
-    std::vector<uint32_t> indexBuffer;   // packed: [uniqueVertexIndices...][triangleLocalIndices...]
+    std::vector<uint32_t> indexBuffer;  // packed: [uniqueVertexIndices...][triangleLocalIndices...]
     std::vector<GpuMeshlet> meshlets;
 };
 
@@ -113,9 +113,13 @@ static auto BuildMeshlets(const DemoMeshData& mesh) -> MeshletBuildResult {
 
         auto findOrAddVertex = [&](uint32_t globalIdx) -> uint32_t {
             for (uint32_t i = 0; i < static_cast<uint32_t>(uniqueVerts.size()); ++i) {
-                if (uniqueVerts[i] == globalIdx) return i;
+                if (uniqueVerts[i] == globalIdx) {
+                    return i;
+                }
             }
-            if (uniqueVerts.size() >= kMaxMeshletVertices) return UINT32_MAX;
+            if (uniqueVerts.size() >= kMaxMeshletVertices) {
+                return UINT32_MAX;
+            }
             uint32_t local = static_cast<uint32_t>(uniqueVerts.size());
             uniqueVerts.push_back(globalIdx);
             return local;
@@ -151,8 +155,12 @@ static auto BuildMeshlets(const DemoMeshData& mesh) -> MeshletBuildResult {
         m.triangleCount = static_cast<uint32_t>(localTriIndices.size()) / 3;
 
         // Pack: unique vertex indices first, then local triangle indices
-        for (auto idx : uniqueVerts) result.indexBuffer.push_back(idx);
-        for (auto idx : localTriIndices) result.indexBuffer.push_back(idx);
+        for (auto idx : uniqueVerts) {
+            result.indexBuffer.push_back(idx);
+        }
+        for (auto idx : localTriIndices) {
+            result.indexBuffer.push_back(idx);
+        }
 
         result.meshlets.push_back(m);
     }
@@ -198,12 +206,19 @@ struct SceneResources {
                 {.size = size, .usage = BufferUsage::Storage, .memory = MemoryLocation::CpuToGpu, .debugName = label}
             );
         });
-        if (!buf) return std::nullopt;
+        if (!buf) {
+            return std::nullopt;
+        }
 
         auto ptr = device.Dispatch([&](auto& d) -> RhiResult<void*> { return d.MapBuffer(*buf); });
-        if (!ptr) return std::nullopt;
+        if (!ptr) {
+            return std::nullopt;
+        }
         std::memcpy(*ptr, data, size);
-        (void)device.Dispatch([&](auto& d) { d.UnmapBuffer(*buf); return 0; });
+        (void)device.Dispatch([&](auto& d) {
+            d.UnmapBuffer(*buf);
+            return 0;
+        });
         return *buf;
     }
 
@@ -212,22 +227,22 @@ struct SceneResources {
         MeshGpuData gpu;
         gpu.meshletCount = static_cast<uint32_t>(built.meshlets.size());
 
-        auto vb = UploadStorageBuffer(
-            built.vertices.data(), built.vertices.size() * sizeof(GpuVertex), label
-        );
-        if (!vb) return std::nullopt;
+        auto vb = UploadStorageBuffer(built.vertices.data(), built.vertices.size() * sizeof(GpuVertex), label);
+        if (!vb) {
+            return std::nullopt;
+        }
         gpu.vertexBuffer = *vb;
 
-        auto ib = UploadStorageBuffer(
-            built.indexBuffer.data(), built.indexBuffer.size() * sizeof(uint32_t), label
-        );
-        if (!ib) return std::nullopt;
+        auto ib = UploadStorageBuffer(built.indexBuffer.data(), built.indexBuffer.size() * sizeof(uint32_t), label);
+        if (!ib) {
+            return std::nullopt;
+        }
         gpu.indexBuffer = *ib;
 
-        auto mb = UploadStorageBuffer(
-            built.meshlets.data(), built.meshlets.size() * sizeof(GpuMeshlet), label
-        );
-        if (!mb) return std::nullopt;
+        auto mb = UploadStorageBuffer(built.meshlets.data(), built.meshlets.size() * sizeof(GpuMeshlet), label);
+        if (!mb) {
+            return std::nullopt;
+        }
         gpu.meshletBuffer = *mb;
 
         return gpu;
@@ -240,10 +255,11 @@ struct SceneResources {
             {.binding = 2, .resource = BufferBinding{.buffer = mesh.meshletBuffer}},
         }};
         DescriptorSetDesc dsDesc{.layout = descLayout, .writes = writes};
-        auto ds = device.Dispatch([&](auto& d) -> RhiResult<DescriptorSetHandle> {
-            return d.CreateDescriptorSet(dsDesc);
-        });
-        if (!ds) return std::nullopt;
+        auto ds
+            = device.Dispatch([&](auto& d) -> RhiResult<DescriptorSetHandle> { return d.CreateDescriptorSet(dsDesc); });
+        if (!ds) {
+            return std::nullopt;
+        }
         return *ds;
     }
 
@@ -268,7 +284,10 @@ struct SceneResources {
                 .stage = ShaderStage::Task, .code = shaders.task.data, .entryPoint = shaders.task.entryPoint.c_str()
             };
             auto ts = createShader(td);
-            if (!ts) { std::println("[mesh_demo] Task shader create failed"); return false; }
+            if (!ts) {
+                std::println("[mesh_demo] Task shader create failed");
+                return false;
+            }
             taskModule = *ts;
         }
 
@@ -278,7 +297,10 @@ struct SceneResources {
                 .stage = ShaderStage::Mesh, .code = shaders.mesh.data, .entryPoint = shaders.mesh.entryPoint.c_str()
             };
             auto ms = createShader(md);
-            if (!ms) { std::println("[mesh_demo] Mesh shader create failed"); return false; }
+            if (!ms) {
+                std::println("[mesh_demo] Mesh shader create failed");
+                return false;
+            }
             meshModule = *ms;
         }
 
@@ -288,7 +310,10 @@ struct SceneResources {
                 .stage = ShaderStage::Fragment, .code = shaders.frag.data, .entryPoint = shaders.frag.entryPoint.c_str()
             };
             auto fs = createShader(fd);
-            if (!fs) { std::println("[mesh_demo] Fragment shader create failed"); return false; }
+            if (!fs) {
+                std::println("[mesh_demo] Fragment shader create failed");
+                return false;
+            }
             fragModule = *fs;
         }
 
@@ -302,7 +327,10 @@ struct SceneResources {
         auto dl = device.Dispatch([&](auto& d) -> RhiResult<DescriptorLayoutHandle> {
             return d.CreateDescriptorLayout(dld);
         });
-        if (!dl) { std::println("[mesh_demo] DescriptorLayout failed"); return false; }
+        if (!dl) {
+            std::println("[mesh_demo] DescriptorLayout failed");
+            return false;
+        }
         descLayout = *dl;
 
         // Pipeline layout: 1 descriptor set + push constants
@@ -311,14 +339,13 @@ struct SceneResources {
             .offset = 0,
             .size = sizeof(MeshPushConst)
         };
-        PipelineLayoutDesc pld{
-            .setLayouts = std::span{&descLayout, 1},
-            .pushConstants = {&pcRange, 1}
-        };
-        auto pl = device.Dispatch([&](auto& d) -> RhiResult<PipelineLayoutHandle> {
-            return d.CreatePipelineLayout(pld);
-        });
-        if (!pl) { std::println("[mesh_demo] PipelineLayout failed"); return false; }
+        PipelineLayoutDesc pld{.setLayouts = std::span{&descLayout, 1}, .pushConstants = {&pcRange, 1}};
+        auto pl
+            = device.Dispatch([&](auto& d) -> RhiResult<PipelineLayoutHandle> { return d.CreatePipelineLayout(pld); });
+        if (!pl) {
+            std::println("[mesh_demo] PipelineLayout failed");
+            return false;
+        }
         pipelineLayout = *pl;
 
         // Graphics pipeline (mesh shader path)
@@ -337,30 +364,43 @@ struct SceneResources {
         gpd.colorBlends = {&blend, 1};
         gpd.colorFormats = {&colorFmt, 1};
         gpd.pipelineLayout = pipelineLayout;
-        auto pso = device.Dispatch([&](auto& d) -> RhiResult<PipelineHandle> {
-            return d.CreateGraphicsPipeline(gpd);
-        });
-        if (!pso) { std::println("[mesh_demo] PSO failed"); return false; }
+        auto pso = device.Dispatch([&](auto& d) -> RhiResult<PipelineHandle> { return d.CreateGraphicsPipeline(gpd); });
+        if (!pso) {
+            std::println("[mesh_demo] PSO failed");
+            return false;
+        }
         pipeline = *pso;
 
         // Upload meshes
         auto torusMesh = GenerateTorus(0.7f, 0.3f, 48, 32);
         auto torusGpu = UploadMesh(torusMesh, "TorusMeshlet");
-        if (!torusGpu) { std::println("[mesh_demo] Torus upload failed"); return false; }
+        if (!torusGpu) {
+            std::println("[mesh_demo] Torus upload failed");
+            return false;
+        }
         torus = *torusGpu;
 
         auto cubeMesh = GenerateCube(0.5f);
         auto cubeGpu = UploadMesh(cubeMesh, "CubeMeshlet");
-        if (!cubeGpu) { std::println("[mesh_demo] Cube upload failed"); return false; }
+        if (!cubeGpu) {
+            std::println("[mesh_demo] Cube upload failed");
+            return false;
+        }
         cube = *cubeGpu;
 
         // Create descriptor sets
         auto torusDS = CreateMeshDescriptorSet(torus);
-        if (!torusDS) { std::println("[mesh_demo] Torus descriptor set failed"); return false; }
+        if (!torusDS) {
+            std::println("[mesh_demo] Torus descriptor set failed");
+            return false;
+        }
         torusDescSet = *torusDS;
 
         auto cubeDS = CreateMeshDescriptorSet(cube);
-        if (!cubeDS) { std::println("[mesh_demo] Cube descriptor set failed"); return false; }
+        if (!cubeDS) {
+            std::println("[mesh_demo] Cube descriptor set failed");
+            return false;
+        }
         cubeDescSet = *cubeDS;
 
         std::println("[mesh_demo] Torus: {} meshlets, Cube: {} meshlets", torus.meshletCount, cube.meshletCount);
@@ -370,15 +410,35 @@ struct SceneResources {
     void Cleanup() {
         (void)device.Dispatch([&](auto& d) {
             d.WaitIdle();
-            auto destroy = [&](auto h) { if (h.IsValid()) d.DestroyBuffer(h); };
-            if (pipeline.IsValid()) d.DestroyPipeline(pipeline);
-            if (pipelineLayout.IsValid()) d.DestroyPipelineLayout(pipelineLayout);
-            if (descLayout.IsValid()) d.DestroyDescriptorLayout(descLayout);
-            if (torusDescSet.IsValid()) d.DestroyDescriptorSet(torusDescSet);
-            if (cubeDescSet.IsValid()) d.DestroyDescriptorSet(cubeDescSet);
-            if (fragModule.IsValid()) d.DestroyShaderModule(fragModule);
-            if (meshModule.IsValid()) d.DestroyShaderModule(meshModule);
-            if (taskModule.IsValid()) d.DestroyShaderModule(taskModule);
+            auto destroy = [&](auto h) {
+                if (h.IsValid()) {
+                    d.DestroyBuffer(h);
+                }
+            };
+            if (pipeline.IsValid()) {
+                d.DestroyPipeline(pipeline);
+            }
+            if (pipelineLayout.IsValid()) {
+                d.DestroyPipelineLayout(pipelineLayout);
+            }
+            if (descLayout.IsValid()) {
+                d.DestroyDescriptorLayout(descLayout);
+            }
+            if (torusDescSet.IsValid()) {
+                d.DestroyDescriptorSet(torusDescSet);
+            }
+            if (cubeDescSet.IsValid()) {
+                d.DestroyDescriptorSet(cubeDescSet);
+            }
+            if (fragModule.IsValid()) {
+                d.DestroyShaderModule(fragModule);
+            }
+            if (meshModule.IsValid()) {
+                d.DestroyShaderModule(meshModule);
+            }
+            if (taskModule.IsValid()) {
+                d.DestroyShaderModule(taskModule);
+            }
             destroy(torus.vertexBuffer);
             destroy(torus.indexBuffer);
             destroy(torus.meshletBuffer);
@@ -395,8 +455,8 @@ struct SceneResources {
 // ============================================================================
 
 static auto BuildMeshPushConst(
-    float rotX, float rotY, float dist, float aspect, float4x4 localTransform,
-    float r, float g, float b, uint32_t meshletCount
+    float rotX, float rotY, float dist, float aspect, float4x4 localTransform, float r, float g, float b,
+    uint32_t meshletCount
 ) -> MeshPushConst {
     auto view = MakeLookAt({.x = 0, .y = 0, .z = dist}, {.x = 0, .y = 0, .z = 0}, {.x = 0, .y = 1, .z = 0});
     auto proj = MakePerspective(std::numbers::pi_v<float> / 4.0f, aspect, 0.1f, 100.0f);
@@ -424,16 +484,18 @@ static auto BuildAndExecuteRenderGraph(
     uint32_t h = frameCtx.height;
     float aspect = (h > 0) ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
 
-    struct FrameDims { uint32_t w, h; };
+    struct FrameDims {
+        uint32_t w, h;
+    };
     FrameDims dims{w, h};
 
     auto torusPC = BuildMeshPushConst(
-        scene.rotX, scene.rotY, scene.distance, aspect,
-        MakeTranslation(-1.0f, 0.0f, 0.0f), 0.85f, 0.55f, 0.20f, scene.torus.meshletCount
+        scene.rotX, scene.rotY, scene.distance, aspect, MakeTranslation(-1.0f, 0.0f, 0.0f), 0.85f, 0.55f, 0.20f,
+        scene.torus.meshletCount
     );
     auto cubePC = BuildMeshPushConst(
-        scene.rotX, scene.rotY, scene.distance, aspect,
-        MakeTranslation(1.0f, 0.0f, 0.0f), 0.25f, 0.60f, 0.85f, scene.cube.meshletCount
+        scene.rotX, scene.rotY, scene.distance, aspect, MakeTranslation(1.0f, 0.0f, 0.0f), 0.25f, 0.60f, 0.85f,
+        scene.cube.meshletCount
     );
 
     // Task shader workgroup count: ceil(meshletCount / 32)
@@ -447,13 +509,14 @@ static auto BuildAndExecuteRenderGraph(
     // Torus pass (mesh shader)
     MeshShaderPassConfig torusMeshCfg{
         .taskGroupCountX = torusTaskGroups,
-        .amplificationRate = static_cast<float>(scene.torus.meshletCount) / static_cast<float>(std::max(torusTaskGroups, 1u)),
+        .amplificationRate
+        = static_cast<float>(scene.torus.meshletCount) / static_cast<float>(std::max(torusTaskGroups, 1u)),
         .verticesPerMeshlet = kMaxMeshletVertices,
         .trianglesPerMeshlet = kMaxMeshletTriangles,
     };
     backbuffer = [&] {
         auto bb = backbuffer;
-        builder.AddMeshShaderPass(
+        (void)builder.AddMeshShaderPass(
             "DrawTorus", torusMeshCfg,
             [&, bb](PassBuilder& pb) mutable {
                 bb = pb.WriteColorAttachment(bb);
@@ -463,16 +526,18 @@ static auto BuildAndExecuteRenderGraph(
                 ctx.DispatchCommands([&](auto& cmd) {
                     cmd.CmdBindPipeline(scene.pipeline);
                     cmd.CmdBindDescriptorSet(0, scene.torusDescSet);
-                    cmd.CmdSetViewport({
-                        .x = 0, .y = 0,
-                        .width = static_cast<float>(dims.w),
-                        .height = static_cast<float>(dims.h),
-                        .minDepth = 0, .maxDepth = 1
-                    });
+                    cmd.CmdSetViewport(
+                        {.x = 0,
+                         .y = 0,
+                         .width = static_cast<float>(dims.w),
+                         .height = static_cast<float>(dims.h),
+                         .minDepth = 0,
+                         .maxDepth = 1}
+                    );
                     cmd.CmdSetScissor({.offset = {0, 0}, .extent = {dims.w, dims.h}});
                     cmd.CmdPushConstants(
-                        ShaderStage::Task | ShaderStage::Mesh | ShaderStage::Fragment,
-                        0, sizeof(MeshPushConst), &torusPC
+                        ShaderStage::Task | ShaderStage::Mesh | ShaderStage::Fragment, 0, sizeof(MeshPushConst),
+                        &torusPC
                     );
                     uint32_t taskGroups = (torusPC.meshletCount + 31) / 32;
                     cmd.CmdDrawMeshTasks(taskGroups, 1, 1);
@@ -485,13 +550,14 @@ static auto BuildAndExecuteRenderGraph(
     // Cube pass (mesh shader)
     MeshShaderPassConfig cubeMeshCfg{
         .taskGroupCountX = cubeTaskGroups,
-        .amplificationRate = static_cast<float>(scene.cube.meshletCount) / static_cast<float>(std::max(cubeTaskGroups, 1u)),
+        .amplificationRate
+        = static_cast<float>(scene.cube.meshletCount) / static_cast<float>(std::max(cubeTaskGroups, 1u)),
         .verticesPerMeshlet = kMaxMeshletVertices,
         .trianglesPerMeshlet = kMaxMeshletTriangles,
     };
     backbuffer = [&] {
         auto bb = backbuffer;
-        builder.AddMeshShaderPass(
+        (void)builder.AddMeshShaderPass(
             "DrawCube", cubeMeshCfg,
             [&, bb](PassBuilder& pb) mutable {
                 pb.ReadTexture(bb);
@@ -502,16 +568,17 @@ static auto BuildAndExecuteRenderGraph(
                 ctx.DispatchCommands([&](auto& cmd) {
                     cmd.CmdBindPipeline(scene.pipeline);
                     cmd.CmdBindDescriptorSet(0, scene.cubeDescSet);
-                    cmd.CmdSetViewport({
-                        .x = 0, .y = 0,
-                        .width = static_cast<float>(dims.w),
-                        .height = static_cast<float>(dims.h),
-                        .minDepth = 0, .maxDepth = 1
-                    });
+                    cmd.CmdSetViewport(
+                        {.x = 0,
+                         .y = 0,
+                         .width = static_cast<float>(dims.w),
+                         .height = static_cast<float>(dims.h),
+                         .minDepth = 0,
+                         .maxDepth = 1}
+                    );
                     cmd.CmdSetScissor({.offset = {0, 0}, .extent = {dims.w, dims.h}});
                     cmd.CmdPushConstants(
-                        ShaderStage::Task | ShaderStage::Mesh | ShaderStage::Fragment,
-                        0, sizeof(MeshPushConst), &cubePC
+                        ShaderStage::Task | ShaderStage::Mesh | ShaderStage::Fragment, 0, sizeof(MeshPushConst), &cubePC
                     );
                     uint32_t taskGroups = (cubePC.meshletCount + 31) / 32;
                     cmd.CmdDrawMeshTasks(taskGroups, 1, 1);
@@ -558,12 +625,18 @@ static miki::frame::CommandPoolAllocator* g_poolAllocator = nullptr;
 
 static void RenderOneFrame(WindowHandle win) {
     auto* fm = g_sm->GetFrameManager(win);
-    if (!fm) return;
+    if (!fm) {
+        return;
+    }
     auto frameResult = fm->BeginFrame();
-    if (!frameResult) return;
+    if (!frameResult) {
+        return;
+    }
     auto& frameCtx = *frameResult;
 
-    if (!BuildAndExecuteRenderGraph(*g_scene, frameCtx, *g_scheduler, *g_poolAllocator)) return;
+    if (!BuildAndExecuteRenderGraph(*g_scene, frameCtx, *g_scheduler, *g_poolAllocator)) {
+        return;
+    }
 
     (void)fm->EndFrame(std::span<const miki::frame::FrameManager::SubmitBatch>{});
 }
@@ -575,10 +648,13 @@ static void MainLoopIteration() {
             [&](auto& e) {
                 using T = std::decay_t<decltype(e)>;
                 if constexpr (std::is_same_v<T, neko::platform::KeyDown>) {
-                    if (e.key == neko::platform::Key::Escape) g_shouldQuit = true;
+                    if (e.key == neko::platform::Key::Escape) {
+                        g_shouldQuit = true;
+                    }
                 } else if constexpr (std::is_same_v<T, neko::platform::MouseButton>) {
-                    if (e.button == neko::platform::MouseBtn::Left)
+                    if (e.button == neko::platform::MouseBtn::Left) {
                         g_scene->dragging = (e.action == neko::platform::Action::Press);
+                    }
                 } else if constexpr (std::is_same_v<T, neko::platform::MouseMove>) {
                     if (g_scene->dragging) {
                         g_scene->rotY += static_cast<float>(e.dx) * 0.01f;
@@ -623,15 +699,20 @@ int main(int argc, char** argv) {
     auto glfwBackend = std::make_unique<GlfwWindowBackend>(backend, true);
     auto* backendPtr = glfwBackend.get();
     auto wmResult = WindowManager::Create(std::move(glfwBackend));
-    if (!wmResult) { std::println("[mesh_demo] WindowManager failed"); return 1; }
+    if (!wmResult) {
+        std::println("[mesh_demo] WindowManager failed");
+        return 1;
+    }
     auto wm = std::move(*wmResult);
     g_wm = &wm;
 
     // 2. Window
-    auto winResult = wm.CreateWindow(
-        {.title = "miki RenderGraph — Mesh Shader Torus + Cube", .width = 1280, .height = 720}
-    );
-    if (!winResult) { std::println("[mesh_demo] CreateWindow failed"); return 1; }
+    auto winResult
+        = wm.CreateWindow({.title = "miki RenderGraph — Mesh Shader Torus + Cube", .width = 1280, .height = 720});
+    if (!winResult) {
+        std::println("[mesh_demo] CreateWindow failed");
+        return 1;
+    }
     g_mainWindow = *winResult;
 
     // 3. Device
@@ -642,7 +723,10 @@ int main(int argc, char** argv) {
         .nativeToken = wm.GetNativeToken(g_mainWindow)
     };
     auto deviceResult = CreateDevice(desc);
-    if (!deviceResult) { std::println("[mesh_demo] Device creation failed"); return 1; }
+    if (!deviceResult) {
+        std::println("[mesh_demo] Device creation failed");
+        return 1;
+    }
     auto device = std::move(*deviceResult);
 
     // 4. Check mesh shader support
@@ -655,34 +739,54 @@ int main(int argc, char** argv) {
 
     // 5. Surface manager
     auto smResult = SurfaceManager::Create(device.GetHandle(), wm);
-    if (!smResult) { std::println("[mesh_demo] SurfaceManager failed"); return 1; }
+    if (!smResult) {
+        std::println("[mesh_demo] SurfaceManager failed");
+        return 1;
+    }
     auto surfMgr = std::move(*smResult);
     g_sm = &surfMgr;
 
     auto attachResult = surfMgr.AttachSurface(g_mainWindow, {.presentMode = PresentMode::Fifo});
-    if (!attachResult) { std::println("[mesh_demo] AttachSurface failed"); return 1; }
+    if (!attachResult) {
+        std::println("[mesh_demo] AttachSurface failed");
+        return 1;
+    }
 
     // 6. Shader compilation (task + mesh + fragment)
-    auto shaderTarget = device.GetHandle().Dispatch([](auto& d) {
-        return miki::shader::PreferredShaderTarget(d.GetCapabilities());
-    });
+    auto shaderTarget
+        = device.GetHandle().Dispatch([](auto& d) { return miki::shader::PreferredShaderTarget(d.GetCapabilities()); });
 
     auto compilerResult = shader::SlangCompiler::Create();
-    if (!compilerResult) { std::println("[mesh_demo] SlangCompiler::Create failed"); return 1; }
+    if (!compilerResult) {
+        std::println("[mesh_demo] SlangCompiler::Create failed");
+        return 1;
+    }
     auto compiler = std::move(*compilerResult);
     std::string shaderSrc(kMeshShaderSlangSource);
 
     auto tsBlob = CompileStage(compiler, shaderSrc, "ts_main", shader::ShaderStage::Task, shaderTarget, "TaskShader");
-    if (!tsBlob) { std::println("[mesh_demo] Task shader compilation failed"); return 1; }
+    if (!tsBlob) {
+        std::println("[mesh_demo] Task shader compilation failed");
+        return 1;
+    }
 
     auto msBlob = CompileStage(compiler, shaderSrc, "ms_main", shader::ShaderStage::Mesh, shaderTarget, "MeshShader");
-    if (!msBlob) { std::println("[mesh_demo] Mesh shader compilation failed"); return 1; }
+    if (!msBlob) {
+        std::println("[mesh_demo] Mesh shader compilation failed");
+        return 1;
+    }
 
-    auto fsBlob = CompileStage(compiler, shaderSrc, "fs_main", shader::ShaderStage::Fragment, shaderTarget, "FragShader");
-    if (!fsBlob) { std::println("[mesh_demo] Fragment shader compilation failed"); return 1; }
+    auto fsBlob
+        = CompileStage(compiler, shaderSrc, "fs_main", shader::ShaderStage::Fragment, shaderTarget, "FragShader");
+    if (!fsBlob) {
+        std::println("[mesh_demo] Fragment shader compilation failed");
+        return 1;
+    }
 
-    std::println("[mesh_demo] Shaders compiled: TS={} B, MS={} B, FS={} B",
-        tsBlob->data.size(), msBlob->data.size(), fsBlob->data.size());
+    std::println(
+        "[mesh_demo] Shaders compiled: TS={} B, MS={} B, FS={} B", tsBlob->data.size(), msBlob->data.size(),
+        fsBlob->data.size()
+    );
 
     SceneResources::CompiledMeshShaders shaders{
         .task = std::move(*tsBlob), .mesh = std::move(*msBlob), .frag = std::move(*fsBlob)
@@ -698,7 +802,10 @@ int main(int argc, char** argv) {
 
     // 8. Frame infrastructure
     auto* fm = surfMgr.GetFrameManager(g_mainWindow);
-    if (!fm) { std::println("[mesh_demo] No FrameManager"); return 1; }
+    if (!fm) {
+        std::println("[mesh_demo] No FrameManager");
+        return 1;
+    }
 
     miki::frame::SyncScheduler syncSched;
     auto timelines = device.GetHandle().Dispatch([](auto& d) { return d.GetQueueTimelines(); });
@@ -710,7 +817,10 @@ int main(int argc, char** argv) {
         .framesInFlight = fm->FramesInFlight(),
     };
     auto poolResult = miki::frame::CommandPoolAllocator::Create(poolDesc);
-    if (!poolResult) { std::println("[mesh_demo] CommandPoolAllocator failed"); return 1; }
+    if (!poolResult) {
+        std::println("[mesh_demo] CommandPoolAllocator failed");
+        return 1;
+    }
     auto cmdPoolAlloc = std::move(*poolResult);
     g_poolAllocator = &cmdPoolAlloc;
 

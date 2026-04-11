@@ -15,6 +15,7 @@
 
 #include <D3D12MemAlloc.h>
 
+#include "miki/debug/StackTrace.h"
 #include "miki/debug/StructuredLogger.h"
 
 #include <algorithm>
@@ -75,6 +76,14 @@ namespace miki::rhi {
                 default: MIKI_LOG_TRACE(Rhi, "{}", msg); break;
             }
             MIKI_LOG_FLUSH();
+
+            if (severity == D3D12_MESSAGE_SEVERITY_CORRUPTION || severity == D3D12_MESSAGE_SEVERITY_ERROR) {
+                auto trace = ::miki::debug::StackTrace::Capture(1);
+                trace.PrintColored("D3D12 Validation Error");
+            } else if (severity == D3D12_MESSAGE_SEVERITY_WARNING) {
+                auto trace = ::miki::debug::StackTrace::Capture(1);
+                trace.PrintColored("D3D12 Validation Warning");
+            }
         }
 
         void CALLBACK D3D12DebugMessageCallback(

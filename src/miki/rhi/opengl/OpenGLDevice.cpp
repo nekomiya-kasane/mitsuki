@@ -6,6 +6,7 @@
 #include "miki/rhi/backend/OpenGLDevice.h"
 #include "miki/rhi/backend/OpenGLCommandBuffer.h"
 
+#include "miki/debug/StackTrace.h"
 #include "miki/debug/StructuredLogger.h"
 #include "miki/platform/WindowManager.h"
 
@@ -63,6 +64,14 @@ namespace miki::rhi {
                 default: MIKI_LOG_TRACE(Rhi, "{}", msg); break;
             }
             MIKI_LOG_FLUSH();
+
+            if (severity == GL_DEBUG_SEVERITY_HIGH) {
+                auto trace = ::miki::debug::StackTrace::Capture(1);
+                trace.PrintColored("OpenGL Error");
+            } else if (severity == GL_DEBUG_SEVERITY_MEDIUM) {
+                auto trace = ::miki::debug::StackTrace::Capture(1);
+                trace.PrintColored("OpenGL Warning");
+            }
         }
     }  // namespace
 

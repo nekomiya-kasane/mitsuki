@@ -4,10 +4,12 @@
 
 #include "miki/rhi/backend/WebGPUDevice.h"
 #include "miki/rhi/backend/WebGPUCommandBuffer.h"
+#include "miki/debug/StackTrace.h"
 #include "miki/debug/StructuredLogger.h"
 
 #include <dawn/webgpu.h>
 #include <cstring>
+#include <format>
 
 #ifndef EMSCRIPTEN
 #    include <GLFW/glfw3.h>
@@ -160,6 +162,9 @@ namespace miki::rhi {
                           ::miki::debug::LogCategory::Rhi, "WebGPU {}: {}", typeStr,
                           std::string_view(message.data, message.length)
                       );
+                      MIKI_LOG_FLUSH();
+                      auto trace = ::miki::debug::StackTrace::Capture(1);
+                      trace.PrintColored(std::format("WebGPU {} Error", typeStr));
                   };
 
             struct DeviceCallbackData {
