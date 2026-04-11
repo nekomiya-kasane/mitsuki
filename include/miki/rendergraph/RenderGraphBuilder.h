@@ -18,6 +18,11 @@
 namespace miki::rg {
 
     class RenderGraphCompiler;
+    class ComputeSubgraphBuilder;
+    struct RGAccelStructDesc;
+    struct RGSparseTextureDesc;
+    struct RGSparseBufferDesc;
+    struct MeshShaderPassConfig;
 
     /// @brief Declarative render graph builder.
     /// All graph construction happens through this class. After declaring
@@ -55,6 +60,17 @@ namespace miki::rg {
         /// @brief Add a present pass (final swapchain output).
         void AddPresentPass(const char* name, RGResourceHandle backbuffer);
 
+        /// @brief Add a mesh/task shader graphics pass (L-7, §16.3).
+        /// The compiler uses amplification rate from config to estimate GPU workload.
+        [[nodiscard]] auto AddMeshShaderPass(
+            const char* name, const MeshShaderPassConfig& config, PassSetupFn setup, PassExecuteFn execute
+        ) -> RGPassHandle;
+
+        /// @brief Add a sparse bind pass (L-11, §16.7).
+        /// Sparse bind operations (commit/decommit) run on the sparse binding queue.
+        [[nodiscard]] auto AddSparseBindPass(const char* name, PassSetupFn setup, PassExecuteFn execute)
+            -> RGPassHandle;
+
         // =====================================================================
         // Resource declaration
         // =====================================================================
@@ -75,6 +91,15 @@ namespace miki::rg {
         [[nodiscard]] auto ImportBackbuffer(rhi::TextureHandle backbuffer, const char* name = "Backbuffer")
             -> RGResourceHandle;
 
+        /// @brief Create a graph-managed acceleration structure (L-8, §16.4).
+        [[nodiscard]] auto CreateAccelStruct(const RGAccelStructDesc& desc) -> RGResourceHandle;
+
+        /// @brief Declare a sparse texture (L-11, §16.7). Virtual size, physical pages bound dynamically.
+        [[nodiscard]] auto DeclareSparseTexture(const RGSparseTextureDesc& desc) -> RGResourceHandle;
+
+        /// @brief Declare a sparse buffer (L-11, §16.7).
+        [[nodiscard]] auto DeclareSparseBuffer(const RGSparseBufferDesc& desc) -> RGResourceHandle;
+
         // =====================================================================
         // Conditional execution
         // =====================================================================
@@ -88,6 +113,10 @@ namespace miki::rg {
 
         /// @brief Insert a subgraph builder's passes and resources into this graph.
         void InsertSubgraph(RenderGraphBuilder&& subgraph);
+
+        /// @brief Insert a compute-only subgraph (L-1, §8.1).
+        /// The subgraph's passes are merged into this graph with their queue/affinity hints.
+        void InsertComputeSubgraph(ComputeSubgraphBuilder&& subgraph);
 
         // =====================================================================
         // Build finalization

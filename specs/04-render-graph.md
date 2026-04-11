@@ -2340,32 +2340,78 @@ The `GraphDiffReport` is emitted once per recompilation event (not per frame). E
 ### 13.1 IRenderGraphExtension
 
 ```cpp
+/// Build context provided to extensions during pass injection.
+struct ExtensionBuildContext {
+    const frame::FrameContext* frameContext = nullptr;
+    ExtensionCapability availableCapabilities = ExtensionCapability::None;
+    uint32_t activeExtensionCount = 0;
+    uint64_t frameNumber = 0;
+    float deltaTimeSeconds = 0.0f;
+};
+
 class IRenderGraphExtension {
 public:
     virtual ~IRenderGraphExtension() = default;
 
-    /// Called during graph building. Add custom passes here.
-    virtual auto BuildPasses(RenderGraphBuilder& builder, const FrameData& frame) -> void = 0;
+    /// Called during graph building. Add custom passes via the builder.
+    virtual void BuildPasses(RenderGraphBuilder& builder, const ExtensionBuildContext& ctx) = 0;
 
-    /// Called when graph is destroyed. Clean up persistent resources.
-    virtual auto Shutdown() -> void {}
+    /// Lifecycle: called when registered / unregistered.
+    virtual void OnRegistered() {}
+    virtual void OnUnregistered() {}
 
-    /// Unique name for this extension (debug/ordering).
+    /// Called at engine shutdown. Clean up persistent resources.
+    virtual void Shutdown() {}
+
+    /// Unique name for this extension (debug/ordering/lookup).
     [[nodiscard]] virtual auto GetName() const noexcept -> const char* = 0;
 
-    /// Execution priority (lower = earlier in graph). Default = 1000.
+    /// Execution priority (lower = earlier). Recommended ranges:
+    ///   [0, 500)    Pre-scene    [500, 1000) Scene
+    ///   [1000, 1500) Post-scene  [1500, 2000) Overlay
     [[nodiscard]] virtual auto GetPriority() const noexcept -> int32_t { return 1000; }
+
+    /// GPU capabilities required. Auto-disabled if device lacks them.
+    [[nodiscard]] virtual auto GetRequiredCapabilities() const noexcept -> ExtensionCapability {
+        return ExtensionCapability::None;
+    }
+
+    /// Dependencies on other extensions (names). Registry enforces ordering.
+    [[nodiscard]] virtual auto GetDependencies() const noexcept -> std::span<const std::string_view> { return {}; }
+
+    /// Per-frame conditional activation. Default: always active.
+    [[nodiscard]] virtual auto IsActiveThisFrame(const ExtensionBuildContext&) const -> bool { return true; }
 };
 ```
 
 ### 13.2 Extension Registration
 
 ```cpp
-class RenderGraph {
+class ExtensionRegistry {
 public:
-    auto RegisterExtension(std::unique_ptr<IRenderGraphExtension> ext) -> void;
-    auto UnregisterExtension(const char* name) -> void;
-    // Extensions called in priority order during Build()
+    /// Register (takes ownership). Replaces if same name exists. Calls OnRegistered().
+    auto RegisterExtension(std::unique_ptr<IRenderGraphExtension> ext) -> bool;
+
+    /// Unregister by name. Calls OnUnregistered().
+    auto UnregisterExtension(std::string_view name) -> bool;
+
+    /// Runtime enable/disable toggle (persists across frames).
+    auto SetEnabled(std::string_view name, bool enabled) -> bool;
+
+    /// Set available GPU capabilities (from device caps at init).
+    void SetAvailableCapabilities(ExtensionCapability caps) noexcept;
+
+    /// Invoke BuildPasses() on all active, capable extensions in priority order.
+    auto InvokeExtensions(RenderGraphBuilder& builder, const ExtensionBuildContext& ctx) -> uint32_t;
+
+    /// Shutdown all extensions (engine teardown).
+    void ShutdownAll();
+
+    /// Per-frame invocation statistics.
+    struct InvocationStats {
+        uint32_t totalRegistered, totalEnabled, totalCapable, totalActive, totalInvoked, passesInjected;
+    };
+    [[nodiscard]] auto GetLastInvocationStats() const noexcept -> const InvocationStats&;
 };
 ```
 
@@ -2852,30 +2898,30 @@ Implementation follows a strict bottom-up dependency order. Each item is atomic 
 | J-5 | Graph diff report (`GraphDiffReport`) on structural hash change                           | §12.5        | **DONE** | Generate from old/new builder, ToJson, Summary; pass + resource diffs with reasons                  |
 | J-6 | `RenderGraphValidator` — post-pass state validation, aliasing correctness, timeline audit | §11.2        | **DONE** | UninitializedRead, AliasingOverlap, MissingBarrier, CrossQueueRace checks; combined ValidateAll     |
 
-#### Phase K: Plugin Extension System — TODO
+#### Phase K: Plugin Extension System — DONE
 
-| #   | Item                                                                                    | Spec Section | Status   | Notes                              |
-| --- | --------------------------------------------------------------------------------------- | ------------ | -------- | ---------------------------------- |
-| K-1 | `IRenderGraphExtension` interface (`BuildPasses`, `Shutdown`, `GetName`, `GetPriority`) | §13.1        | **TODO** |                                    |
-| K-2 | Extension registration + priority-ordered invocation during `Build()`                   | §13.2        | **TODO** |                                    |
-| K-3 | PSO miss handling: Tier A async compile + Tier B fallback PSO                           | §13.4        | **TODO** | Requires PipelineCache integration |
+| #   | Item                                                                                    | Spec Section | Status   | Notes                                                                                                                                           |
+| --- | --------------------------------------------------------------------------------------- | ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| K-1 | `IRenderGraphExtension` interface (`BuildPasses`, `Shutdown`, `GetName`, `GetPriority`) | §13.1        | **DONE** | + `OnRegistered/OnUnregistered` lifecycle, `GetRequiredCapabilities`, `GetDependencies`, `IsActiveThisFrame`; `ExtensionBuildContext` with caps |
+| K-2 | Extension registration + priority-ordered invocation during `Build()`                   | §13.2        | **DONE** | `ExtensionRegistry` with stable-sort by priority, capability filtering, enable/disable toggle, `InvocationStats`                                |
+| K-3 | PSO miss handling: Tier A async compile + Tier B fallback PSO                           | §13.4        | **DONE** | `PsoMissHandler` with `ResolveAll`, transitive DCE propagation, `FormatStatus` debug overlay; `PassPsoConfig` per-pass config                   |
 
-#### Phase L: GPGPU & Future — TODO
+#### Phase L: GPGPU & Future — DONE
 
-| #    | Item                                                            | Spec Section | Status   | Notes                                                      |
-| ---- | --------------------------------------------------------------- | ------------ | -------- | ---------------------------------------------------------- |
-| L-1  | Compute-only subgraphs (ML inference, physics, mesh processing) | §8.1         | **TODO** | No graphics context, async compute scheduling              |
-| L-2  | Multi-frame compute tasks (`AsyncTaskManager` integration)      | §8.2         | **TODO** | `WaitForAsyncTask` → timeline semaphore wait at submission |
-| L-3  | Work graph integration (`DispatchGraph` shim)                   | §8.3         | **TODO** | Future: D3D12 SM 6.8+                                      |
-| L-4  | Cooperative matrix / tensor core pass support                   | §8.4         | **TODO** | No special RG handling needed                              |
-| L-5  | Heterogeneous device support (`RGDeviceAffinity`)               | §8.5         | **TODO** | Future: multi-GPU, iGPU+dGPU                               |
-| L-6  | Automatic async compute discovery (critical path analysis)      | §16.1        | **TODO** | Phase 7+                                                   |
-| L-7  | Mesh/task shader graph nodes (`AddMeshShaderPass`)              | §16.3        | **TODO** | Phase 6a                                                   |
-| L-8  | Ray tracing pass integration (BLAS/TLAS as graph resources)     | §16.4        | **TODO** | Phase 7+                                                   |
-| L-9  | VRS image as graph resource                                     | §16.5        | **TODO** |                                                            |
-| L-10 | GPU breadcrumbs for crash diagnosis                             | §16.6        | **TODO** | `VK_AMD_buffer_marker` / DRED                              |
-| L-11 | Sparse resource graph nodes (VSM page commit/decommit)          | §16.7        | **TODO** | Phase 10+                                                  |
-| L-12 | D3D12 Fence Barriers Tier-2 integration                         | §16.8        | **TODO** | Phase 5+                                                   |
+| #    | Item                                                            | Spec Section | Status   | Notes                                                                                                                                                                                      |
+| ---- | --------------------------------------------------------------- | ------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| L-1  | Compute-only subgraphs (ML inference, physics, mesh processing) | §8.1         | **DONE** | `ComputeSubgraphBuilder` — type-safe compute/transfer-only builder, 6 subgraph types (ML/Physics/Mesh/Science/Image/Generic), `InsertComputeSubgraph()` on `RenderGraphBuilder`            |
+| L-2  | Multi-frame compute tasks (`AsyncTaskManager` integration)      | §8.2         | **DONE** | `MultiFrameTaskResolver` — resolves `AsyncTaskDependency` into timeline waits; Ready-elide/Pending-inject/Failed-degrade; `FormatStatus()` debug overlay                                   |
+| L-3  | Work graph integration (`DispatchGraph` shim)                   | §8.3         | **DONE** | `WorkGraphPassDesc` + `WorkGraphLaunchMode` (CPU/GPU input, multi-node); `WorkGraphFallbackFn` for non-D3D12 backends; aligns with D3D12 Work Graphs 1.0 API                               |
+| L-4  | Cooperative matrix / tensor core pass support                   | §8.4         | **DONE** | `CooperativeMatrixConfig` per-pass hint; `EstimateCoopMatrixFlops()`; `SetCooperativeMatrixHint()` on `PassBuilder` → workgroup count estimation for async scheduler                       |
+| L-5  | Heterogeneous device support (`RGDeviceAffinity`)               | §8.5         | **DONE** | `DeviceAffinityResolver` — multi-device assignment with cross-device PCIe transfer detection; `RGDeviceAffinity` enum (Any/Discrete/Integrated/CopyEngine); single-GPU mode transparent    |
+| L-6  | Automatic async compute discovery (critical path analysis)      | §16.1        | **DONE** | `AsyncComputeDiscovery` — ASAP/ALAP critical path analysis on DAG; auto-promotes off-critical-path compute passes; overlap benefit vs sync cost; configurable thresholds                   |
+| L-7  | Mesh/task shader graph nodes (`AddMeshShaderPass`)              | §16.3        | **DONE** | `AddMeshShaderPass()` on builder; `MeshShaderPassConfig` with amplification rate, indirect dispatch, per-meshlet estimates; `RGPassFlags::MeshShader`                                      |
+| L-8  | Ray tracing pass integration (BLAS/TLAS as graph resources)     | §16.4        | **DONE** | `RGResourceKind::AccelerationStructure`; `RGAccelStructDesc`; `CreateAccelStruct()` on builder; `ReadAccelStruct()`/`WriteAccelStruct()` on PassBuilder; SSA versioning for AS             |
+| L-9  | VRS image as graph resource                                     | §16.5        | **DONE** | `ReadVrsImage()` on PassBuilder; `VrsImageConfig` for tile size/scale/combiner; automatic `ShadingRate` layout transition via existing `ResourceAccess::ShadingRateRead`                   |
+| L-10 | GPU breadcrumbs for crash diagnosis                             | §16.6        | **DONE** | `GpuBreadcrumbTracker` — persistent-mapped readback ring buffer; per-pass/per-draw markers; crash report generation; `VK_AMD_buffer_marker` / DRED / UAV write backend paths               |
+| L-11 | Sparse resource graph nodes (VSM page commit/decommit)          | §16.7        | **DONE** | `RGResourceKind::SparseTexture`/`SparseBuffer`; `DeclareSparseTexture()`/`DeclareSparseBuffer()` on builder; `SparseCommit()`/`SparseDecommit()` on PassBuilder; `RGPassFlags::SparseBind` |
+| L-12 | D3D12 Fence Barriers Tier-2 integration                         | §16.8        | **DONE** | `FenceBarrierResolver` — converts cross-queue sync points to command-buffer-level signal/wait when Tier-2 available; sub-batch sync for reduced command list splits; transparent fallback  |
 
 ### 18.2 Progress Summary
 
@@ -2891,11 +2937,11 @@ Implementation follows a strict bottom-up dependency order. Each item is atomic 
 | H     | Conditional execution & history       | 5       | 5      | 0       | 0      |
 | I     | Graph caching & incremental recompile | 6       | 2      | 0       | 4      |
 | J     | Debugging & profiling                 | 6       | 6      | 0       | 0      |
-| K     | Plugin extension system               | 3       | 0      | 0       | 3      |
-| L     | GPGPU & future                        | 12      | 0      | 0       | 12     |
-| **Σ** |                                       | **108** | **53** | **1**   | **54** |
+| K     | Plugin extension system               | 3       | 3      | 0       | 0      |
+| L     | GPGPU & future                        | 12      | 12     | 0       | 0      |
+| **Σ** |                                       | **108** | **68** | **1**   | **39** |
 
-**Overall: 49% complete** (core builder + compiler stages 1-6 + conditional/history + debugging/profiling done; executor, advanced compiler stages, and runtime subsystems remain).
+**Overall: 63% complete** (core builder + compiler stages 1-6 + conditional/history + debugging/profiling + plugin extension + GPGPU L-1..L-12 all done; executor, advanced compiler stages, and runtime subsystems remain).
 
 ### 18.3 Recommended Next Steps
 

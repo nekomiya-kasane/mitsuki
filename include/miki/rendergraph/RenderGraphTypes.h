@@ -100,7 +100,7 @@ namespace miki::rg {
     // Pass flags (bitmask)
     // =========================================================================
 
-    enum class RGPassFlags : uint8_t {
+    enum class RGPassFlags : uint16_t {
         None = 0,
         Graphics = 1 << 0,      ///< Uses rasterization pipeline
         Compute = 1 << 1,       ///< Uses compute pipeline
@@ -109,6 +109,8 @@ namespace miki::rg {
         Present = 1 << 4,       ///< Present pass (swapchain output)
         SideEffects = 1 << 5,   ///< Never cull (readback, present, etc.)
         NeverCull = 1 << 6,     ///< User-forced non-cullable
+        MeshShader = 1 << 7,    ///< Mesh/task shader graphics pass (L-7, §16.3)
+        SparseBind = 1 << 8,    ///< Sparse bind operation (L-11, §16.7)
     };
 
     MIKI_BITMASK_OPS(RGPassFlags)
@@ -179,22 +181,25 @@ namespace miki::rg {
             return true;
         }
 
+        using U = std::underlying_type_t<RGPassFlags>;
+        auto pf = static_cast<U>(passFlags);
+
         // Present passes: only PresentSrc allowed
-        if ((static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Present)) != 0) {
+        if ((pf & static_cast<U>(RGPassFlags::Present)) != 0) {
             return (bits & ~static_cast<uint32_t>(kPresentPassAccessMask)) == 0;
         }
 
         // Transfer-only passes: only TransferSrc/TransferDst allowed
-        bool isTransferOnly = (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Transfer)) != 0
-                              && (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Graphics)) == 0
-                              && (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Compute)) == 0;
+        bool isTransferOnly = (pf & static_cast<U>(RGPassFlags::Transfer)) != 0
+                              && (pf & static_cast<U>(RGPassFlags::Graphics)) == 0
+                              && (pf & static_cast<U>(RGPassFlags::Compute)) == 0;
         if (isTransferOnly) {
             return (bits & ~static_cast<uint32_t>(kTransferPassAccessMask)) == 0;
         }
 
         // Compute-only passes (including async): no graphics-only accesses
-        bool isComputeOnly = (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Compute)) != 0
-                             && (static_cast<uint8_t>(passFlags) & static_cast<uint8_t>(RGPassFlags::Graphics)) == 0;
+        bool isComputeOnly
+            = (pf & static_cast<U>(RGPassFlags::Compute)) != 0 && (pf & static_cast<U>(RGPassFlags::Graphics)) == 0;
         if (isComputeOnly) {
             return (bits & static_cast<uint32_t>(kGraphicsOnlyAccessMask)) == 0;
         }
@@ -468,6 +473,9 @@ namespace miki::rg {
     enum class RGResourceKind : uint8_t {
         Texture,
         Buffer,
+        AccelerationStructure,  ///< BLAS or TLAS (L-8, §16.4)
+        SparseTexture,          ///< Sparse/tiled texture (L-11, §16.7)
+        SparseBuffer,           ///< Sparse buffer (L-11, §16.7)
     };
 
     // =========================================================================

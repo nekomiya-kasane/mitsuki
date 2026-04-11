@@ -324,6 +324,9 @@ namespace miki::rg {
         switch (v) {
             case RGResourceKind::Texture: return "Texture";
             case RGResourceKind::Buffer: return "Buffer";
+            case RGResourceKind::AccelerationStructure: return "AccelerationStructure";
+            case RGResourceKind::SparseTexture: return "SparseTexture";
+            case RGResourceKind::SparseBuffer: return "SparseBuffer";
         }
         return "Unknown";
     }

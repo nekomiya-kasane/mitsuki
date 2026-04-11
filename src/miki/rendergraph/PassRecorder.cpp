@@ -324,7 +324,7 @@ namespace miki::rg {
         std::vector<rhi::RenderingAttachment> colorAttachments;
         rhi::RenderingAttachment depthAttachment{};
         bool hasDepth = false;
-        bool isGraphicsPass = (static_cast<uint8_t>(passNode.flags) & static_cast<uint8_t>(RGPassFlags::Graphics)) != 0;
+        bool isGraphicsPass = (passNode.flags & RGPassFlags::Graphics) != RGPassFlags::None;
         bool didBeginRendering = false;
 
         if (isGraphicsPass) {

@@ -108,12 +108,12 @@ namespace miki::rg {
             return false;
         }
 
-        bool hasAsyncFlag = (static_cast<uint8_t>(flags) & static_cast<uint8_t>(RGPassFlags::AsyncCompute)) != 0;
+        bool hasAsyncFlag = (flags & RGPassFlags::AsyncCompute) != RGPassFlags::None;
         if (!hasAsyncFlag) {
             return false;
         }
 
-        bool isCompute = (static_cast<uint8_t>(flags) & static_cast<uint8_t>(RGPassFlags::Compute)) != 0;
+        bool isCompute = (flags & RGPassFlags::Compute) != RGPassFlags::None;
         if (!isCompute) {
             return false;
         }

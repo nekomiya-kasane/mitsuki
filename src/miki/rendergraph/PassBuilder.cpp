@@ -4,8 +4,10 @@
 
 #include "miki/rendergraph/PassBuilder.h"
 
+#include <algorithm>
 #include <cassert>
 
+#include "miki/rendergraph/RenderGraphAdvanced.h"
 #include "miki/rendergraph/RenderGraphBuilder.h"
 
 namespace miki::rg {
@@ -208,6 +210,66 @@ namespace miki::rg {
 
     void PassBuilder::SetEstimatedTransferBytes(uint64_t bytes) {
         builder_.GetPasses()[passIndex_].estimatedTransferBytes = bytes;
+    }
+
+    // =========================================================================
+    // GPGPU & Heterogeneous Compute hints (Phase L, §8)
+    // =========================================================================
+
+    void PassBuilder::SetCooperativeMatrixHint(uint32_t M, uint32_t N, uint32_t K, uint32_t batchCount) {
+        // Cooperative matrix passes are large-dispatch compute workloads.
+        // Hint the scheduler: if M*N*K is large, prefer async compute for overlap.
+        auto& pass = builder_.GetPasses()[passIndex_];
+        uint64_t totalFlops = static_cast<uint64_t>(M) * N * K * 2 * batchCount;
+        // Use estimated FLOPs to set workgroup count hint (rough: 256 FLOPs per thread, 64 threads per WG)
+        uint32_t estimatedWGs = static_cast<uint32_t>(std::min(totalFlops / (256 * 64), uint64_t{UINT32_MAX}));
+        if (estimatedWGs > pass.estimatedWorkGroupCount) {
+            pass.estimatedWorkGroupCount = estimatedWGs;
+        }
+    }
+
+    void PassBuilder::SetDeviceAffinity(uint8_t /*affinityHint*/) {
+        // Device affinity is recorded for diagnostics but not enforced in single-GPU mode.
+        // Multi-GPU enforcement will be added in future when DeviceAffinityResolver
+        // is integrated into the compiler.
+        // RGPassNode does not currently store affinity — extend in future.
+    }
+
+    // =========================================================================
+    // Ray tracing acceleration structure access (L-8, §16.4)
+    // =========================================================================
+
+    void PassBuilder::ReadAccelStruct(RGResourceHandle handle, ResourceAccess access) {
+        assert(IsReadAccess(access) && "ReadAccelStruct requires a read access flag");
+        RecordRead(handle, access);
+    }
+
+    auto PassBuilder::WriteAccelStruct(RGResourceHandle handle, ResourceAccess access) -> RGResourceHandle {
+        assert(IsWriteAccess(access) && "WriteAccelStruct requires a write access flag");
+        return RecordWrite(handle, access);
+    }
+
+    // =========================================================================
+    // VRS image access (L-9, §16.5)
+    // =========================================================================
+
+    void PassBuilder::ReadVrsImage(RGResourceHandle handle) {
+        RecordRead(handle, ResourceAccess::ShadingRateRead);
+    }
+
+    // =========================================================================
+    // Sparse resource operations (L-11, §16.7)
+    // =========================================================================
+
+    void PassBuilder::SparseCommit(RGResourceHandle handle, std::span<const SparseBindOp> /*ops*/) {
+        // Sparse commit is modeled as a write (binds physical pages).
+        // The actual bind ops are forwarded to the executor at recording time.
+        RecordWrite(handle, ResourceAccess::ShaderWrite);
+    }
+
+    void PassBuilder::SparseDecommit(RGResourceHandle handle, std::span<const SparseBindOp> /*ops*/) {
+        // Sparse decommit is modeled as a write (unbinds physical pages).
+        RecordWrite(handle, ResourceAccess::ShaderWrite);
     }
 
     // =========================================================================

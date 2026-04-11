@@ -173,3 +173,8 @@ miki_add_test(test_phase_j_debug tests/rendergraph/test_phase_j_debug.cpp)
 if(TARGET test_phase_j_debug)
     set_tests_properties(test_phase_j_debug PROPERTIES TIMEOUT 120)
 endif()
+
+miki_add_test(test_phase_k_extension tests/rendergraph/test_phase_k_extension.cpp)
+if(TARGET test_phase_k_extension)
+    set_tests_properties(test_phase_k_extension PROPERTIES TIMEOUT 60)
+endif()

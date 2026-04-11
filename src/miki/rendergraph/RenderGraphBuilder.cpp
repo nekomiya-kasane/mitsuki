@@ -7,6 +7,9 @@
 #include <cassert>
 #include <utility>
 
+#include "miki/rendergraph/RenderGraphAdvanced.h"
+#include "miki/rendergraph/RenderGraphCompute.h"
+
 namespace miki::rg {
 
     // =========================================================================
@@ -54,6 +57,31 @@ namespace miki::rg {
         (void)handle;
     }
 
+    auto RenderGraphBuilder::AddMeshShaderPass(
+        const char* name, const MeshShaderPassConfig& config, PassSetupFn setup, PassExecuteFn execute
+    ) -> RGPassHandle {
+        auto handle = AddPass(
+            name, RGPassFlags::Graphics | RGPassFlags::MeshShader, RGQueueType::Graphics, std::move(setup),
+            std::move(execute)
+        );
+        // Store amplification rate as estimated workgroup count for the scheduler
+        auto& pass = passes_[handle.index];
+        uint32_t taskGroups = config.taskGroupCountX * config.taskGroupCountY * config.taskGroupCountZ;
+        uint32_t estimatedMeshlets = static_cast<uint32_t>(static_cast<float>(taskGroups) * config.amplificationRate);
+        pass.estimatedWorkGroupCount = estimatedMeshlets;
+        return handle;
+    }
+
+    auto RenderGraphBuilder::AddSparseBindPass(const char* name, PassSetupFn setup, PassExecuteFn execute)
+        -> RGPassHandle {
+        // Sparse bind passes run on the graphics queue (sparse binding is a queue operation)
+        // They have side effects (memory commitment changes are externally visible).
+        return AddPass(
+            name, RGPassFlags::SparseBind | RGPassFlags::SideEffects, RGQueueType::Graphics, std::move(setup),
+            std::move(execute)
+        );
+    }
+
     // =========================================================================
     // Resource declaration
     // =========================================================================
@@ -94,6 +122,41 @@ namespace miki::rg {
 
     auto RenderGraphBuilder::ImportBackbuffer(rhi::TextureHandle backbuffer, const char* name) -> RGResourceHandle {
         return ImportTexture(backbuffer, name);
+    }
+
+    auto RenderGraphBuilder::CreateAccelStruct(const RGAccelStructDesc& desc) -> RGResourceHandle {
+        assert(!built_ && "Cannot modify graph after Build()");
+        auto idx = AllocateResource(RGResourceKind::AccelerationStructure, desc.debugName);
+        // AccelerationStructure resources use bufferDesc.size to store estimated size
+        auto& node = resources_[idx];
+        node.bufferDesc.size = desc.estimatedSize;
+        node.bufferDesc.debugName = desc.debugName;
+        return RGResourceHandle::Create(idx, 0);
+    }
+
+    auto RenderGraphBuilder::DeclareSparseTexture(const RGSparseTextureDesc& desc) -> RGResourceHandle {
+        assert(!built_ && "Cannot modify graph after Build()");
+        auto idx = AllocateResource(RGResourceKind::SparseTexture, desc.debugName);
+        auto& node = resources_[idx];
+        // Store in textureDesc for dimension/format information
+        node.textureDesc.width = desc.width;
+        node.textureDesc.height = desc.height;
+        node.textureDesc.depth = desc.depth;
+        node.textureDesc.format = desc.format;
+        node.textureDesc.mipLevels = desc.mipLevels;
+        node.textureDesc.arrayLayers = desc.arrayLayers;
+        node.textureDesc.dimension = desc.dimension;
+        node.textureDesc.debugName = desc.debugName;
+        return RGResourceHandle::Create(idx, 0);
+    }
+
+    auto RenderGraphBuilder::DeclareSparseBuffer(const RGSparseBufferDesc& desc) -> RGResourceHandle {
+        assert(!built_ && "Cannot modify graph after Build()");
+        auto idx = AllocateResource(RGResourceKind::SparseBuffer, desc.debugName);
+        auto& node = resources_[idx];
+        node.bufferDesc.size = desc.size;
+        node.bufferDesc.debugName = desc.debugName;
+        return RGResourceHandle::Create(idx, 0);
     }
 
     // =========================================================================
@@ -147,6 +210,14 @@ namespace miki::rg {
         }
 
         (void)passOffset;  // passOffset available for future edge remapping
+    }
+
+    void RenderGraphBuilder::InsertComputeSubgraph(ComputeSubgraphBuilder&& subgraph) {
+        assert(!built_ && "Cannot modify graph after Build()");
+        // Build the compute subgraph's internal builder, then insert as a regular subgraph.
+        auto& inner = subgraph.TakeBuilder();
+        inner.Build();
+        InsertSubgraph(std::move(inner));
     }
 
     // =========================================================================

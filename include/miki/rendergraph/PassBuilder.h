@@ -9,11 +9,14 @@
  */
 #pragma once
 
+#include <span>
+
 #include "miki/rendergraph/RenderGraphTypes.h"
 
 namespace miki::rg {
 
     class RenderGraphBuilder;
+    struct SparseBindOp;
 
     /// @brief Per-pass resource binding interface.
     /// Constructed by RenderGraphBuilder for each AddPass call.
@@ -128,6 +131,41 @@ namespace miki::rg {
 
         /// @brief Set estimated transfer payload size for DMA queue threshold (§7.6).
         void SetEstimatedTransferBytes(uint64_t bytes);
+
+        // -- GPGPU & Heterogeneous Compute hints (Phase L, §8) --
+
+        /// @brief Hint that this pass uses cooperative matrix intrinsics (L-4, §8.4).
+        /// Influences scheduler to prefer async compute queue for large matrix workloads.
+        void SetCooperativeMatrixHint(uint32_t M, uint32_t N, uint32_t K, uint32_t batchCount = 1);
+
+        /// @brief Set device affinity hint for multi-GPU systems (L-5, §8.5).
+        /// Current implementation: recorded for diagnostics, not enforced (single-GPU).
+        void SetDeviceAffinity(uint8_t affinityHint);
+
+        // -- Ray tracing acceleration structure access (L-8, §16.4) --
+
+        /// @brief Read an acceleration structure (BLAS or TLAS) in a ray tracing or compute pass.
+        void ReadAccelStruct(RGResourceHandle handle, ResourceAccess access = ResourceAccess::AccelStructRead);
+
+        /// @brief Write an acceleration structure (build or refit). Returns new version.
+        [[nodiscard]] auto WriteAccelStruct(
+            RGResourceHandle handle, ResourceAccess access = ResourceAccess::AccelStructWrite
+        ) -> RGResourceHandle;
+
+        // -- VRS image access (L-9, §16.5) --
+
+        /// @brief Read a VRS shading rate image. Automatic layout transition to ShadingRate.
+        void ReadVrsImage(RGResourceHandle handle);
+
+        // -- Sparse resource operations (L-11, §16.7) --
+
+        /// @brief Declare a sparse commit operation (bind physical pages).
+        /// Only valid in SparseBind passes.
+        void SparseCommit(RGResourceHandle handle, std::span<const struct SparseBindOp> ops);
+
+        /// @brief Declare a sparse decommit operation (unbind physical pages).
+        /// Only valid in SparseBind passes.
+        void SparseDecommit(RGResourceHandle handle, std::span<const struct SparseBindOp> ops);
 
         // -- Subresource-level access --
 
