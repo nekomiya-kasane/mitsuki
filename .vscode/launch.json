@@ -599,6 +599,72 @@
                 "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
             ]
         },
+        // -- rg_mesh_torus_cube_demo (Task + Mesh Shader) --
+        {
+            "name": "[Full] rg_mesh_torus_cube_demo",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rg_mesh_torus_cube_demo.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
+        },
+        {
+            "name": "[Full] rg_mesh_torus_cube_demo --backend vulkan",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rg_mesh_torus_cube_demo.exe",
+            "args": [
+                "--backend",
+                "vulkan"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
+        },
+        {
+            "name": "[Full] rg_mesh_torus_cube_demo --backend vulkan11",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rg_mesh_torus_cube_demo.exe",
+            "args": [
+                "--backend",
+                "vulkan11"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
+        },
+        {
+            "name": "[Full] rg_mesh_torus_cube_demo --backend d3d12",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug-full/rg_mesh_torus_cube_demo.exe",
+            "args": [
+                "--backend",
+                "d3d12"
+            ],
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}": "${workspaceFolder}"
+            },
+            "initCommands": [
+                "command script import \"${workspaceFolder}/tools/debugvis/miki_lldb_formatters.py\""
+            ]
+        },
         // ============================================================
         // WASM (Emscripten + WebGPU) - Browser debugging
         // ============================================================
@@ -677,7 +743,8 @@
                 "logger_demo.exe",
                 "rhi_triangle_demo.exe",
                 "rhi_torus_demo.exe",
-                "rg_torus_cube_demo.exe"
+                "rg_torus_cube_demo.exe",
+                "rg_mesh_torus_cube_demo.exe"
             ],
             "default": "rhi_triangle_demo.exe"
         }
