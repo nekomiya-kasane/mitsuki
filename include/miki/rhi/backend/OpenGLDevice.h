@@ -620,6 +620,7 @@ namespace miki::rhi {
 
         auto CreatePipelineLibraryPartImpl(const PipelineLibraryPartDesc& desc) -> RhiResult<PipelineLibraryPartHandle>;
         auto LinkGraphicsPipelineImpl(const LinkedPipelineDesc& desc) -> RhiResult<PipelineHandle>;
+        void DestroyPipelineLibraryPartImpl(PipelineLibraryPartHandle h);
 
         // -- Command pools §19 (OpenGLQuery.cpp) --
         auto CreateCommandPoolImpl(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle>;

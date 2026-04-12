@@ -724,6 +724,17 @@ namespace miki::rhi {
         return handle;
     }
 
+    void VulkanDevice::DestroyPipelineLibraryPartImpl(PipelineLibraryPartHandle h) {
+        auto* data = pipelineLibraryParts_.Lookup(h);
+        if (!data) {
+            return;
+        }
+        if (data->pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device_, data->pipeline, nullptr);
+        }
+        pipelineLibraryParts_.Free(h);
+    }
+
     auto VulkanDevice::LinkGraphicsPipelineImpl(const LinkedPipelineDesc& desc) -> RhiResult<PipelineHandle> {
         // Collect the 4 library parts
         VkPipeline libraries[4]{};

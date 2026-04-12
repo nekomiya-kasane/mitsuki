@@ -216,6 +216,7 @@ namespace miki::rhi {
         [[nodiscard]] auto LinkGraphicsPipeline(const LinkedPipelineDesc& desc) -> RhiResult<PipelineHandle> {
             return Self().LinkGraphicsPipelineImpl(desc);
         }
+        void DestroyPipelineLibraryPart(PipelineLibraryPartHandle h) { Self().DestroyPipelineLibraryPartImpl(h); }
 
         // --- Command pool management (§19 — pool-level API for CommandPoolAllocator) ---
         [[nodiscard]] auto CreateCommandPool(const CommandPoolDesc& desc) -> RhiResult<CommandPoolHandle> {

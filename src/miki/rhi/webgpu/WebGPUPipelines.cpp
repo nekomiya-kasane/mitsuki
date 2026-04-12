@@ -444,4 +444,6 @@ namespace miki::rhi {
         return std::unexpected(RhiError::FeatureNotSupported);
     }
 
+    void WebGPUDevice::DestroyPipelineLibraryPartImpl(PipelineLibraryPartHandle) {}
+
 }  // namespace miki::rhi

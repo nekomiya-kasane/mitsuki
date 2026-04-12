@@ -463,4 +463,6 @@ namespace miki::rhi {
         return std::unexpected(RhiError::FeatureNotSupported);
     }
 
+    void OpenGLDevice::DestroyPipelineLibraryPartImpl(PipelineLibraryPartHandle) {}
+
 }  // namespace miki::rhi

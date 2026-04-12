@@ -1019,6 +1019,12 @@ namespace miki::rhi {
             capabilities_.enabledFeatures.Add(DeviceFeature::VariableRateShading);
         }
 
+        // Graphics pipeline library (split compilation)
+        if (hasExt(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME)) {
+            capabilities_.hasGraphicsPipelineLibrary = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::GraphicsPipelineLibrary);
+        }
+
         // DeviceFeatureSet — always-on for Tier1
         capabilities_.enabledFeatures.Add(DeviceFeature::TimelineSemaphore);
         capabilities_.enabledFeatures.Add(DeviceFeature::DynamicRendering);

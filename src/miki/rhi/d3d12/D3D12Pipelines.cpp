@@ -625,6 +625,10 @@ namespace miki::rhi {
         return std::unexpected(RhiError::FeatureNotSupported);
     }
 
+    void D3D12Device::DestroyPipelineLibraryPartImpl(PipelineLibraryPartHandle h) {
+        pipelineLibraryParts_.Free(h);
+    }
+
 }  // namespace miki::rhi
 
 #if defined(__clang__)

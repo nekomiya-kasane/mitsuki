@@ -253,6 +253,11 @@ namespace miki::rhi {
          *  GL: N/A | WebGPU: N/A */
         BufferMarker,
 
+        /** @brief Graphics pipeline library (split compilation).
+         *  Vk: VK_EXT_graphics_pipeline_library | D3D12: ID3D12PipelineLibrary (future) |
+         *  GL: N/A | WebGPU: N/A */
+        GraphicsPipelineLibrary,
+
         Count_,  ///< Sentinel — not a feature
     };
 

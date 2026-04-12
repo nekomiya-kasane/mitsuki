@@ -183,6 +183,7 @@ namespace miki::rhi {
             Tier2 = 2
         };
         ResourceHeapTier resourceHeapTier = ResourceHeapTier::Tier2;
+        bool hasGraphicsPipelineLibrary = false;  ///< VK_EXT_graphics_pipeline_library / D3D12 ID3D12PipelineLibrary
         bool hasWorkGraphs = false;         ///< D3D12 SM 6.8 DispatchGraph
         bool hasCooperativeMatrix = false;  ///< VK_KHR_cooperative_matrix / SM 6.9 wave matrix
 
@@ -261,6 +262,9 @@ namespace miki::rhi {
         }
         [[nodiscard]] bool HasAsyncCompute() const noexcept { return enabledFeatures.Has(DeviceFeature::AsyncCompute); }
         [[nodiscard]] bool HasWorkGraphs() const noexcept { return enabledFeatures.Has(DeviceFeature::WorkGraphs); }
+        [[nodiscard]] bool HasGraphicsPipelineLibrary() const noexcept {
+            return enabledFeatures.Has(DeviceFeature::GraphicsPipelineLibrary);
+        }
 
         // =====================================================================
         // Format Support Table

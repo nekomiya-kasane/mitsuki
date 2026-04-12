@@ -139,6 +139,7 @@ namespace miki::rhi {
         auto LinkGraphicsPipelineImpl(const LinkedPipelineDesc&) -> RhiResult<PipelineHandle> {
             return std::unexpected(RhiError::NotImplemented);
         }
+        void DestroyPipelineLibraryPartImpl(PipelineLibraryPartHandle) {}
 
         // --- Command pools (return synthetic pools + MockCommandBuffer) ---
         auto CreateCommandPoolImpl(const CommandPoolDesc&) -> RhiResult<CommandPoolHandle> {
