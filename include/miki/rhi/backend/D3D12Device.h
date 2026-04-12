@@ -23,6 +23,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -35,6 +36,8 @@ namespace D3D12MA {
 }  // namespace D3D12MA
 
 namespace miki::rhi {
+
+    struct D3D12BlitPipeline;  // Defined in D3D12BlitPipeline.h (src/)
 
     // =========================================================================
     // Queue families
@@ -106,10 +109,16 @@ namespace miki::rhi {
 
     struct D3D12PipelineData {
         ComPtr<ID3D12PipelineState> pso;
+        ComPtr<ID3D12StateObject> stateObject;  // DXR ray tracing pipeline (null for raster/compute)
         ComPtr<ID3D12RootSignature> rootSignature;
         PrimitiveTopology topology = PrimitiveTopology::TriangleList;
         bool isCompute = false;
         bool isMeshShader = false;
+        bool isRayTracing = false;
+        // Per-binding vertex strides (set at pipeline creation, consumed by CmdBindVertexBuffer).
+        // D3D12 IASetVertexBuffers needs stride per-slot; Vulkan gets it from pipeline or dynamic state.
+        static constexpr uint32_t kMaxVertexBindings = 16;  // D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT
+        std::array<uint32_t, kMaxVertexBindings> vertexStrides{};
     };
 
     struct D3D12PipelineLayoutData {
@@ -407,6 +416,25 @@ namespace miki::rhi {
         auto GetShaderVisibleHeap() -> D3D12DescriptorHeapAllocator& { return shaderVisibleCbvSrvUav_; }
         auto GetShaderVisibleSamplerHeap() -> D3D12DescriptorHeapAllocator& { return shaderVisibleSampler_; }
 
+        // Blit pipeline accessor (for CmdBlitTexture emulation)
+        auto GetBlitPipeline() -> D3D12BlitPipeline& { return *blitPipeline_; }
+
+        // Descriptor heap accessors (for standalone clear operations)
+        auto GetRtvHeap() -> D3D12DescriptorHeapAllocator& { return rtvHeap_; }
+        auto GetDsvHeap() -> D3D12DescriptorHeapAllocator& { return dsvHeap_; }
+
+        // Command signature accessors (for indirect draw/dispatch)
+        [[nodiscard]] auto GetCmdSigDraw() const noexcept -> ID3D12CommandSignature* { return cmdSigDraw_.Get(); }
+        [[nodiscard]] auto GetCmdSigDrawIndexed() const noexcept -> ID3D12CommandSignature* {
+            return cmdSigDrawIndexed_.Get();
+        }
+        [[nodiscard]] auto GetCmdSigDispatch() const noexcept -> ID3D12CommandSignature* {
+            return cmdSigDispatch_.Get();
+        }
+        [[nodiscard]] auto GetCmdSigDispatchMesh() const noexcept -> ID3D12CommandSignature* {
+            return cmdSigDispatchMesh_.Get();
+        }
+
        private:
         // -- DXGI / D3D12 core objects --
         ComPtr<IDXGIFactory6> factory_;
@@ -432,6 +460,15 @@ namespace miki::rhi {
         GpuCapabilityProfile capabilities_;
         bool hasEnhancedBarriers_ = false;
         D3D_FEATURE_LEVEL featureLevel_ = D3D_FEATURE_LEVEL_12_0;
+
+        // -- Internal blit pipeline for CmdBlitTexture emulation --
+        std::unique_ptr<D3D12BlitPipeline> blitPipeline_;
+
+        // -- Pre-created command signatures for indirect draw/dispatch --
+        ComPtr<ID3D12CommandSignature> cmdSigDraw_;          // D3D12_INDIRECT_ARGUMENT_TYPE_DRAW
+        ComPtr<ID3D12CommandSignature> cmdSigDrawIndexed_;   // D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED
+        ComPtr<ID3D12CommandSignature> cmdSigDispatch_;      // D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH
+        ComPtr<ID3D12CommandSignature> cmdSigDispatchMesh_;  // D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH
 
         // -- Descriptor heaps --
         D3D12DescriptorHeapAllocator rtvHeap_;                 // Render target views (CPU-only)
@@ -471,6 +508,7 @@ namespace miki::rhi {
         auto CreateQueues() -> RhiResult<void>;
         auto CreateQueueTimelines() -> RhiResult<void>;
         auto CreateDescriptorHeaps() -> RhiResult<void>;
+        auto CreateCommandSignatures() -> RhiResult<void>;
         void PopulateCapabilities();
         void PopulateFormatSupport();
         void SetupInfoQueue();

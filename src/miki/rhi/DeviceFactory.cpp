@@ -151,4 +151,12 @@ namespace miki::rhi {
         return OwnedDevice(std::move(impl));
     }
 
+    // =========================================================================
+    // DeviceHandle::GetDeviceName — defined here because all backend types are complete
+    // =========================================================================
+
+    auto DeviceHandle::GetDeviceName() const noexcept -> std::string_view {
+        return Dispatch([](auto& dev) -> std::string_view { return dev.GetCapabilities().deviceName; });
+    }
+
 }  // namespace miki::rhi

@@ -47,7 +47,7 @@ namespace {
         for (uint32_t i = 0; i < count; ++i) {
             passes[i].name = "P";
             passes[i].flags = flags;
-            passes[i].queue = queue;
+            passes[i].queueHint = queue;
             passes[i].estimatedGpuTimeUs = gpuTime;
         }
         return passes;
@@ -194,7 +194,7 @@ TEST(AsyncComputeDiscovery, GraphicsPassesNeverCandidates) {
 
 TEST(AsyncComputeDiscovery, RespectsUserAsyncHints) {
     auto passes = MakePasses(2, RGPassFlags::Compute, RGQueueType::Graphics, 200.0f);
-    passes[1].queue = RGQueueType::AsyncCompute;  // User marked as async
+    passes[1].queueHint = RGQueueType::AsyncCompute;  // User marked as async
     // No edges: both independent
 
     AsyncDiscoveryConfig cfg;
@@ -233,19 +233,19 @@ TEST(AsyncComputeDiscovery, ApplyPromotionsModifiesQueueAndFlags) {
     // Critical path: A->C->D = 700us. B starts at 0, ends at 100, latest start = 600 -> slack = 600.
     std::vector<RGPassNode> passes(4);
     passes[0].flags = RGPassFlags::Graphics;
-    passes[0].queue = RGQueueType::Graphics;
+    passes[0].queueHint = RGQueueType::Graphics;
     passes[0].estimatedGpuTimeUs = 500.0f;
 
     passes[1].flags = RGPassFlags::Compute;
-    passes[1].queue = RGQueueType::Graphics;
+    passes[1].queueHint = RGQueueType::Graphics;
     passes[1].estimatedGpuTimeUs = 100.0f;
 
     passes[2].flags = RGPassFlags::Compute;
-    passes[2].queue = RGQueueType::Graphics;
+    passes[2].queueHint = RGQueueType::Graphics;
     passes[2].estimatedGpuTimeUs = 100.0f;
 
     passes[3].flags = RGPassFlags::Graphics;
-    passes[3].queue = RGQueueType::Graphics;
+    passes[3].queueHint = RGQueueType::Graphics;
     passes[3].estimatedGpuTimeUs = 100.0f;
 
     std::vector<DependencyEdge> edges = {
@@ -266,8 +266,8 @@ TEST(AsyncComputeDiscovery, ApplyPromotionsModifiesQueueAndFlags) {
     EXPECT_GT(promoted, 0u);
 
     // Pass 1 (B) should now be on AsyncCompute queue
-    EXPECT_EQ(passes[1].queue, RGQueueType::AsyncCompute);
-    EXPECT_NE(passes[1].flags & RGPassFlags::AsyncCompute, RGPassFlags::None);
+    EXPECT_EQ(passes[1].queueHint, RGQueueType::AsyncCompute);
+    EXPECT_NE(passes[1].flags & RGPassFlags::AsyncEligible, RGPassFlags::None);
 }
 
 // -- Too-short passes are not candidates -------------------------------------
@@ -360,7 +360,7 @@ TEST(MeshShaderPass, AddMeshShaderPassCreatesValidPass) {
 
     auto& pass = builder.GetPasses()[0];
     EXPECT_STREQ(pass.name, "MeshletCull");
-    EXPECT_EQ(pass.queue, RGQueueType::Graphics);
+    EXPECT_EQ(pass.queueHint, RGQueueType::Graphics);
     EXPECT_NE(pass.flags & RGPassFlags::Graphics, RGPassFlags::None);
     EXPECT_NE(pass.flags & RGPassFlags::MeshShader, RGPassFlags::None);
 
@@ -1088,9 +1088,9 @@ TEST(RGPassFlags, SparseBindFlagDistinct) {
 
 TEST(RGPassFlags, NewFlagsDoNotOverlapExisting) {
     std::array allFlags = {
-        RGPassFlags::Graphics,  RGPassFlags::Compute,    RGPassFlags::AsyncCompute,
-        RGPassFlags::Transfer,  RGPassFlags::Present,    RGPassFlags::SideEffects,
-        RGPassFlags::NeverCull, RGPassFlags::MeshShader, RGPassFlags::SparseBind,
+        RGPassFlags::Graphics,     RGPassFlags::Compute,    RGPassFlags::AsyncEligible,
+        RGPassFlags::TransferOnly, RGPassFlags::Present,    RGPassFlags::SideEffects,
+        RGPassFlags::NeverCull,    RGPassFlags::MeshShader, RGPassFlags::SparseBind,
     };
     for (size_t i = 0; i < allFlags.size(); ++i) {
         for (size_t j = i + 1; j < allFlags.size(); ++j) {
@@ -1301,12 +1301,12 @@ TEST(Stress, LargeGraphAsyncDiscovery) {
     std::vector<RGPassNode> passes(TOTAL);
     for (uint32_t i = 0; i < N_GFX; ++i) {
         passes[i].flags = RGPassFlags::Graphics;
-        passes[i].queue = RGQueueType::Graphics;
+        passes[i].queueHint = RGQueueType::Graphics;
         passes[i].estimatedGpuTimeUs = 100.0f;
     }
     for (uint32_t i = N_GFX; i < TOTAL; ++i) {
         passes[i].flags = RGPassFlags::Compute;
-        passes[i].queue = RGQueueType::Graphics;
+        passes[i].queueHint = RGQueueType::Graphics;
         passes[i].estimatedGpuTimeUs = 200.0f;
     }
 

@@ -369,16 +369,18 @@ namespace miki::rg {
     /// @brief Decompose RGPassFlags bitmask into flag name strings.
     constexpr auto PassFlagsToStrings(RGPassFlags flags, const char** out, size_t capacity) -> size_t {
         struct Entry {
-            uint8_t bit;
+            uint16_t bit;
             const char* name;
         };
         constexpr std::array kEntries = {
-            Entry{1 << 0, "Graphics"},  Entry{1 << 1, "Compute"}, Entry{1 << 2, "AsyncCompute"},
-            Entry{1 << 3, "Transfer"},  Entry{1 << 4, "Present"}, Entry{1 << 5, "SideEffects"},
-            Entry{1 << 6, "NeverCull"},
+            Entry{.bit = 1 << 0, .name = "Graphics"},      Entry{.bit = 1 << 1, .name = "Compute"},
+            Entry{.bit = 1 << 2, .name = "AsyncEligible"}, Entry{.bit = 1 << 3, .name = "TransferOnly"},
+            Entry{.bit = 1 << 4, .name = "Present"},       Entry{.bit = 1 << 5, .name = "SideEffects"},
+            Entry{.bit = 1 << 6, .name = "NeverCull"},     Entry{.bit = 1 << 7, .name = "MeshShader"},
+            Entry{.bit = 1 << 8, .name = "SparseBind"},
         };
         size_t count = 0;
-        auto bits = static_cast<uint8_t>(flags);
+        auto bits = static_cast<uint16_t>(flags);
         for (auto& [bit, name] : kEntries) {
             if ((bits & bit) && count < capacity) {
                 out[count++] = name;

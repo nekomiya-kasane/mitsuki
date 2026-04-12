@@ -12,6 +12,7 @@
 #include <cassert>
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -402,6 +403,20 @@ namespace miki::rhi {
                 default: break;
             }
             std::unreachable();
+        }
+
+        [[nodiscard]] auto GetDeviceName() const noexcept -> std::string_view;
+
+        [[nodiscard]] constexpr auto GetBackendName() const noexcept -> const char* {
+            switch (tag_) {
+                case BackendType::Vulkan14: return "Vulkan14";
+                case BackendType::VulkanCompat: return "VulkanCompat";
+                case BackendType::D3D12: return "D3D12";
+                case BackendType::WebGPU: return "WebGPU";
+                case BackendType::OpenGL43: return "OpenGL43";
+                case BackendType::Mock: return "Mock";
+            }
+            return "Unknown";
         }
 
         void Destroy() {

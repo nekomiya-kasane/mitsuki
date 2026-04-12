@@ -283,14 +283,14 @@ namespace miki::rg {
             if (!options_.enableAsyncCompute) {
                 // Demote async compute to graphics queue; transfer passes still use transfer if available
                 queueAssignments[passIdx]
-                    = (pass.queue == RGQueueType::Transfer) ? RGQueueType::Transfer : RGQueueType::Graphics;
-            } else if (pass.queue == RGQueueType::AsyncCompute && options_.asyncScheduler != nullptr) {
+                    = (pass.queueHint == RGQueueType::Transfer) ? RGQueueType::Transfer : RGQueueType::Graphics;
+            } else if (pass.queueHint == RGQueueType::AsyncCompute && options_.asyncScheduler != nullptr) {
                 // Adaptive scheduling: consult EMA-based scheduler with GPU time + workgroup hints (§7.2.1)
                 bool shouldAsync = options_.asyncScheduler->ShouldRunAsync(
                     passIdx, pass.flags, pass.estimatedGpuTimeUs, pass.estimatedWorkGroupCount
                 );
                 queueAssignments[passIdx] = shouldAsync ? RGQueueType::AsyncCompute : RGQueueType::Graphics;
-            } else if (pass.queue == RGQueueType::Transfer && options_.asyncScheduler != nullptr) {
+            } else if (pass.queueHint == RGQueueType::Transfer && options_.asyncScheduler != nullptr) {
                 // Transfer queue scheduling (§7.6): demote small transfers to graphics queue.
                 // Cross-queue sync overhead exceeds DMA benefit for tiny payloads.
                 auto& cfg = options_.asyncScheduler->GetConfig();
@@ -302,7 +302,7 @@ namespace miki::rg {
                     queueAssignments[passIdx] = RGQueueType::Transfer;
                 }
             } else {
-                queueAssignments[passIdx] = pass.queue;
+                queueAssignments[passIdx] = pass.queueHint;
             }
         }
     }
@@ -885,7 +885,7 @@ namespace miki::rg {
                 topoSeed = core::HashCombine(topoSeed, core::Fnv1a64(pass.name));
             }
             topoSeed = core::HashCombine(topoSeed, static_cast<uint64_t>(pass.flags));
-            topoSeed = core::HashCombine(topoSeed, static_cast<uint64_t>(pass.queue));
+            topoSeed = core::HashCombine(topoSeed, static_cast<uint64_t>(pass.queueHint));
 
             // Hash edge structure (resource accesses define DAG topology)
             for (auto& r : pass.reads) {

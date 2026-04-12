@@ -40,7 +40,7 @@ namespace miki::rg {
         for (uint32_t i = 0; i < passCount; ++i) {
             result.passInfo[i].passIndex = i;
             result.passInfo[i].flags = passes[i].flags;
-            result.passInfo[i].currentQueue = passes[i].queue;
+            result.passInfo[i].currentQueue = passes[i].queueHint;
             result.passInfo[i].estimatedGpuTimeUs = passes[i].estimatedGpuTimeUs;
         }
 
@@ -120,7 +120,7 @@ namespace miki::rg {
             if (!isCompute) {
                 continue;
             }
-            if (pass.queue == RGQueueType::AsyncCompute && config_.respectUserQueueHints) {
+            if (pass.queueHint == RGQueueType::AsyncCompute && config_.respectUserQueueHints) {
                 continue;
             }
             if (pi.onCriticalPath) {
@@ -133,12 +133,12 @@ namespace miki::rg {
             // Count cross-queue sync cost
             uint32_t newSyncEdges = 0;
             for (uint32_t pred : predecessors[i]) {
-                if (passes[pred].queue == RGQueueType::Graphics) {
+                if (passes[pred].queueHint == RGQueueType::Graphics) {
                     newSyncEdges++;
                 }
             }
             for (uint32_t succ : successors[i]) {
-                if (passes[succ].queue == RGQueueType::Graphics) {
+                if (passes[succ].queueHint == RGQueueType::Graphics) {
                     newSyncEdges++;
                 }
             }
@@ -198,8 +198,8 @@ namespace miki::rg {
             }
             if (candidate.passIndex < passes.size()) {
                 auto& pass = passes[candidate.passIndex];
-                pass.queue = RGQueueType::AsyncCompute;
-                pass.flags = pass.flags | RGPassFlags::AsyncCompute;
+                pass.queueHint = RGQueueType::AsyncCompute;
+                pass.flags = pass.flags | RGPassFlags::AsyncEligible;
                 applied++;
             }
         }

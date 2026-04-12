@@ -6,6 +6,7 @@
 
 #include "miki/rhi/backend/D3D12Device.h"
 #include "miki/rhi/backend/D3D12CommandBuffer.h"
+#include "D3D12BlitPipeline.h"
 
 #if defined(__clang__)
 #    pragma clang diagnostic push
@@ -362,6 +363,49 @@ namespace miki::rhi {
     }
 
     // =========================================================================
+    // Command signatures for indirect draw/dispatch
+    // =========================================================================
+
+    auto D3D12Device::CreateCommandSignatures() -> RhiResult<void> {
+        auto createSig
+            = [&](D3D12_INDIRECT_ARGUMENT_TYPE type, UINT byteStride, ComPtr<ID3D12CommandSignature>& out) -> HRESULT {
+            D3D12_INDIRECT_ARGUMENT_DESC arg{};
+            arg.Type = type;
+            D3D12_COMMAND_SIGNATURE_DESC desc{};
+            desc.ByteStride = byteStride;
+            desc.NumArgumentDescs = 1;
+            desc.pArgumentDescs = &arg;
+            desc.NodeMask = 0;
+            // nullptr root signature: these signatures contain no root-parameter-changing arguments
+            return device_->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(&out));
+        };
+
+        if (FAILED(createSig(D3D12_INDIRECT_ARGUMENT_TYPE_DRAW, sizeof(D3D12_DRAW_ARGUMENTS), cmdSigDraw_))) {
+            return std::unexpected(RhiError::PipelineCreationFailed);
+        }
+        if (FAILED(createSig(
+                D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), cmdSigDrawIndexed_
+            ))) {
+            return std::unexpected(RhiError::PipelineCreationFailed);
+        }
+        if (FAILED(
+                createSig(D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH, sizeof(D3D12_DISPATCH_ARGUMENTS), cmdSigDispatch_)
+            )) {
+            return std::unexpected(RhiError::PipelineCreationFailed);
+        }
+        // DispatchMesh requires SM 6.5+ / mesh shader support; create only if available
+        if (capabilities_.hasMeshShader) {
+            if (FAILED(createSig(
+                    D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH, sizeof(D3D12_DISPATCH_MESH_ARGUMENTS),
+                    cmdSigDispatchMesh_
+                ))) {
+                return std::unexpected(RhiError::PipelineCreationFailed);
+            }
+        }
+        return {};
+    }
+
+    // =========================================================================
     // Capability population
     // =========================================================================
 
@@ -649,6 +693,13 @@ namespace miki::rhi {
         }
 
         PopulateCapabilities();
+
+        auto r7 = CreateCommandSignatures();
+        if (!r7) {
+            return r7;
+        }
+
+        blitPipeline_ = std::make_unique<D3D12BlitPipeline>();
 
         MIKI_LOG_INFO(
             ::miki::debug::LogCategory::Rhi, "[D3D12] Device initialized: {} (FL {})", capabilities_.deviceName,

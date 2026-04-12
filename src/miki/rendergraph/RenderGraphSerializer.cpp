@@ -97,7 +97,7 @@ namespace miki::rg {
                 {"index", index},
                 {"name", pass.name ? pass.name : ""},
                 {"flags", PassFlagsToJson(pass.flags)},
-                {"queue", ToString(pass.queue)},
+                {"queueHint", ToString(pass.queueHint)},
                 {"orderHint", pass.orderHint},
                 {"hasSideEffects", pass.hasSideEffects},
                 {"enabled", pass.enabled},

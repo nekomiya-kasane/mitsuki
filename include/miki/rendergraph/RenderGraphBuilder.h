@@ -148,8 +148,7 @@ namespace miki::rg {
         [[nodiscard]] auto GetStagingWrites() noexcept -> std::vector<RGResourceAccess>& { return stagingWrites_; }
 
        private:
-        auto AddPass(const char* name, RGPassFlags flags, RGQueueType queue, PassSetupFn setup, PassExecuteFn execute)
-            -> RGPassHandle;
+        auto AddPass(const char* name, RGPassFlags flags, PassSetupFn setup, PassExecuteFn execute) -> RGPassHandle;
         auto AllocateResource(RGResourceKind kind, const char* name) -> uint16_t;
         void CommitStagedAccesses(RGPassNode& pass);
 

@@ -130,6 +130,7 @@ namespace miki::rhi {
         ID3D12CommandAllocator* allocator_ = nullptr;
         QueueType queueType_ = QueueType::Graphics;
         ID3D12RootSignature* currentRootSignature_ = nullptr;
+        const D3D12PipelineData* currentPipeline_ = nullptr;  // For vertex stride lookup
         bool currentIsCompute_ = false;
         uint32_t currentPushConstantRootIndex_ = UINT32_MAX;
     };

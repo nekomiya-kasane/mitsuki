@@ -108,7 +108,7 @@ namespace miki::rg {
             return false;
         }
 
-        bool hasAsyncFlag = (flags & RGPassFlags::AsyncCompute) != RGPassFlags::None;
+        bool hasAsyncFlag = (flags & RGPassFlags::AsyncEligible) != RGPassFlags::None;
         if (!hasAsyncFlag) {
             return false;
         }

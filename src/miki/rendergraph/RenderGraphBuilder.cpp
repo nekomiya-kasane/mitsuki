@@ -24,30 +24,27 @@ namespace miki::rg {
 
     auto RenderGraphBuilder::AddGraphicsPass(const char* name, PassSetupFn setup, PassExecuteFn execute)
         -> RGPassHandle {
-        return AddPass(name, RGPassFlags::Graphics, RGQueueType::Graphics, std::move(setup), std::move(execute));
+        return AddPass(name, RGPassFlags::Graphics, std::move(setup), std::move(execute));
     }
 
     auto RenderGraphBuilder::AddComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute)
         -> RGPassHandle {
-        return AddPass(name, RGPassFlags::Compute, RGQueueType::Graphics, std::move(setup), std::move(execute));
+        return AddPass(name, RGPassFlags::Compute, std::move(setup), std::move(execute));
     }
 
     auto RenderGraphBuilder::AddAsyncComputePass(const char* name, PassSetupFn setup, PassExecuteFn execute)
         -> RGPassHandle {
-        return AddPass(
-            name, RGPassFlags::Compute | RGPassFlags::AsyncCompute, RGQueueType::AsyncCompute, std::move(setup),
-            std::move(execute)
-        );
+        return AddPass(name, RGPassFlags::Compute | RGPassFlags::AsyncEligible, std::move(setup), std::move(execute));
     }
 
     auto RenderGraphBuilder::AddTransferPass(const char* name, PassSetupFn setup, PassExecuteFn execute)
         -> RGPassHandle {
-        return AddPass(name, RGPassFlags::Transfer, RGQueueType::Transfer, std::move(setup), std::move(execute));
+        return AddPass(name, RGPassFlags::TransferOnly, std::move(setup), std::move(execute));
     }
 
     void RenderGraphBuilder::AddPresentPass(const char* name, RGResourceHandle backbuffer) {
         auto handle = AddPass(
-            name, RGPassFlags::Present | RGPassFlags::SideEffects | RGPassFlags::NeverCull, RGQueueType::Graphics,
+            name, RGPassFlags::Present | RGPassFlags::SideEffects | RGPassFlags::NeverCull,
             [backbuffer](PassBuilder& pb) {
                 pb.ReadTexture(backbuffer, ResourceAccess::PresentSrc);
                 pb.SetSideEffects();
@@ -60,10 +57,8 @@ namespace miki::rg {
     auto RenderGraphBuilder::AddMeshShaderPass(
         const char* name, const MeshShaderPassConfig& config, PassSetupFn setup, PassExecuteFn execute
     ) -> RGPassHandle {
-        auto handle = AddPass(
-            name, RGPassFlags::Graphics | RGPassFlags::MeshShader, RGQueueType::Graphics, std::move(setup),
-            std::move(execute)
-        );
+        auto handle
+            = AddPass(name, RGPassFlags::Graphics | RGPassFlags::MeshShader, std::move(setup), std::move(execute));
         // Store amplification rate as estimated workgroup count for the scheduler
         auto& pass = passes_[handle.index];
         uint32_t taskGroups = config.taskGroupCountX * config.taskGroupCountY * config.taskGroupCountZ;
@@ -76,10 +71,7 @@ namespace miki::rg {
         -> RGPassHandle {
         // Sparse bind passes run on the graphics queue (sparse binding is a queue operation)
         // They have side effects (memory commitment changes are externally visible).
-        return AddPass(
-            name, RGPassFlags::SparseBind | RGPassFlags::SideEffects, RGQueueType::Graphics, std::move(setup),
-            std::move(execute)
-        );
+        return AddPass(name, RGPassFlags::SparseBind | RGPassFlags::SideEffects, std::move(setup), std::move(execute));
     }
 
     // =========================================================================
@@ -240,16 +232,15 @@ namespace miki::rg {
         return RGResourceHandle::Create(resourceIndex, node.currentVersion);
     }
 
-    auto RenderGraphBuilder::AddPass(
-        const char* name, RGPassFlags flags, RGQueueType queue, PassSetupFn setup, PassExecuteFn execute
-    ) -> RGPassHandle {
+    auto RenderGraphBuilder::AddPass(const char* name, RGPassFlags flags, PassSetupFn setup, PassExecuteFn execute)
+        -> RGPassHandle {
         assert(!built_ && "Cannot modify graph after Build()");
 
         uint32_t passIndex = static_cast<uint32_t>(passes_.size());
         auto& pass = passes_.emplace_back();
         pass.name = name;
         pass.flags = flags;
-        pass.queue = queue;
+        pass.queueHint = DefaultQueueHint(flags);
         pass.hasSideEffects = (flags & RGPassFlags::SideEffects) != RGPassFlags::None;
         pass.executeFn = std::move(execute);
 

@@ -408,6 +408,12 @@ namespace miki::rhi {
         data->topology = desc.topology;
         data->isCompute = false;
         data->isMeshShader = false;
+        // Cache per-binding vertex strides for CmdBindVertexBuffer
+        for (auto& bind : desc.vertexInput.bindings) {
+            if (bind.binding < D3D12PipelineData::kMaxVertexBindings) {
+                data->vertexStrides[bind.binding] = bind.stride;
+            }
+        }
         return handle;
     }
 
@@ -539,9 +545,11 @@ namespace miki::rhi {
         if (!data) {
             return std::unexpected(RhiError::TooManyObjects);
         }
-        data->pso = nullptr;  // RT pipelines use state object, stored separately if needed
+        data->pso = nullptr;
+        data->stateObject = std::move(stateObject);
         data->rootSignature = layoutData->rootSignature;
         data->isCompute = false;
+        data->isRayTracing = true;
         return handle;
     }
 

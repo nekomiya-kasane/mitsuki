@@ -102,18 +102,29 @@ namespace miki::rg {
 
     enum class RGPassFlags : uint16_t {
         None = 0,
-        Graphics = 1 << 0,      ///< Uses rasterization pipeline
-        Compute = 1 << 1,       ///< Uses compute pipeline
-        AsyncCompute = 1 << 2,  ///< Eligible for async compute queue
-        Transfer = 1 << 3,      ///< Transfer-only pass
-        Present = 1 << 4,       ///< Present pass (swapchain output)
-        SideEffects = 1 << 5,   ///< Never cull (readback, present, etc.)
-        NeverCull = 1 << 6,     ///< User-forced non-cullable
-        MeshShader = 1 << 7,    ///< Mesh/task shader graphics pass (L-7, §16.3)
-        SparseBind = 1 << 8,    ///< Sparse bind operation (L-11, §16.7)
+        Graphics = 1 << 0,       ///< Uses rasterization pipeline
+        Compute = 1 << 1,        ///< Uses compute pipeline
+        AsyncEligible = 1 << 2,  ///< Eligible for async compute queue
+        TransferOnly = 1 << 3,   ///< Transfer-only pass (DMA)
+        Present = 1 << 4,        ///< Present pass (swapchain output)
+        SideEffects = 1 << 5,    ///< Never cull (readback, present, etc.)
+        NeverCull = 1 << 6,      ///< User-forced non-cullable
+        MeshShader = 1 << 7,     ///< Mesh/task shader graphics pass (L-7, §16.3)
+        SparseBind = 1 << 8,     ///< Sparse bind operation (L-11, §16.7)
     };
 
     MIKI_BITMASK_OPS(RGPassFlags)
+
+    /// @brief Derive the default queue hint from pass flags (single source of truth).
+    [[nodiscard]] constexpr auto DefaultQueueHint(RGPassFlags flags) noexcept -> RGQueueType {
+        if ((flags & RGPassFlags::AsyncEligible) != RGPassFlags::None) {
+            return RGQueueType::AsyncCompute;
+        }
+        if ((flags & RGPassFlags::TransferOnly) != RGPassFlags::None) {
+            return RGQueueType::Transfer;
+        }
+        return RGQueueType::Graphics;
+    }
 
     // =========================================================================
     // Resource access — declarative usage flags for pass resource bindings
@@ -190,7 +201,7 @@ namespace miki::rg {
         }
 
         // Transfer-only passes: only TransferSrc/TransferDst allowed
-        bool isTransferOnly = (pf & static_cast<U>(RGPassFlags::Transfer)) != 0
+        bool isTransferOnly = (pf & static_cast<U>(RGPassFlags::TransferOnly)) != 0
                               && (pf & static_cast<U>(RGPassFlags::Graphics)) == 0
                               && (pf & static_cast<U>(RGPassFlags::Compute)) == 0;
         if (isTransferOnly) {
@@ -564,7 +575,8 @@ namespace miki::rg {
     struct RGPassNode {
         const char* name = nullptr;
         RGPassFlags flags = RGPassFlags::None;
-        RGQueueType queue = RGQueueType::Graphics;
+        RGQueueType queueHint
+            = RGQueueType::Graphics;  ///< Derived from flags via DefaultQueueHint(); compiler may override
         int32_t orderHint = 0;        ///< User-specified ordering hint
         bool hasSideEffects = false;  ///< If true, never cull
         bool enabled = true;          ///< Result of condition evaluation

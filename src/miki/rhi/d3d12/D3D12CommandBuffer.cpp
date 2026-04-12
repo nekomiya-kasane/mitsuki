@@ -8,6 +8,7 @@
  */
 
 #include "miki/rhi/backend/D3D12CommandBuffer.h"
+#include "D3D12BlitPipeline.h"
 
 #include <array>
 #include <cassert>
@@ -222,18 +223,22 @@ namespace miki::rhi {
             return;
         }
 
-        cmd_->SetPipelineState(data->pso.Get());
+        currentPipeline_ = data;
         currentIsCompute_ = data->isCompute;
         currentRootSignature_ = data->rootSignature.Get();
+
+        if (data->isRayTracing) {
+            // DXR uses state object, not PSO
+            cmd_->SetPipelineState1(data->stateObject.Get());
+        } else {
+            cmd_->SetPipelineState(data->pso.Get());
+        }
 
         if (data->isCompute) {
             cmd_->SetComputeRootSignature(data->rootSignature.Get());
         } else {
             cmd_->SetGraphicsRootSignature(data->rootSignature.Get());
         }
-
-        // Look up push constant root index from pipeline layout
-        // This info is cached in the pipeline data via root signature
     }
 
     void D3D12CommandBuffer::CmdBindDescriptorSetImpl(
@@ -277,7 +282,9 @@ namespace miki::rhi {
         D3D12_VERTEX_BUFFER_VIEW view{};
         view.BufferLocation = data->gpuAddress + offset;
         view.SizeInBytes = static_cast<UINT>(data->size - offset);
-        view.StrideInBytes = 0;  // Set by pipeline vertex input state
+        view.StrideInBytes = (currentPipeline_ && binding < D3D12PipelineData::kMaxVertexBindings)
+                                 ? currentPipeline_->vertexStrides[binding]
+                                 : 0;
         cmd_->IASetVertexBuffers(binding, 1, &view);
     }
 
@@ -317,13 +324,17 @@ namespace miki::rhi {
         if (!data) {
             return;
         }
-        // D3D12 ExecuteIndirect requires a command signature — simplified single-draw path
-        for (uint32_t i = 0; i < drawCount; ++i) {
-            // In production, use ID3D12CommandSignature for batched indirect draws
-            (void)stride;
+        auto* cmdSig = device_->GetCmdSigDraw();
+        // stride == sizeof(D3D12_DRAW_ARGUMENTS) for tightly packed; otherwise issue per-draw calls
+        if (stride == sizeof(D3D12_DRAW_ARGUMENTS)) {
+            cmd_->ExecuteIndirect(cmdSig, drawCount, data->resource.Get(), offset, nullptr, 0);
+        } else {
+            for (uint32_t i = 0; i < drawCount; ++i) {
+                cmd_->ExecuteIndirect(
+                    cmdSig, 1, data->resource.Get(), offset + static_cast<uint64_t>(i) * stride, nullptr, 0
+                );
+            }
         }
-        // Placeholder: full implementation requires pre-created ID3D12CommandSignature
-        (void)offset;
     }
 
     void D3D12CommandBuffer::CmdDrawIndexedIndirectImpl(
@@ -333,10 +344,16 @@ namespace miki::rhi {
         if (!data) {
             return;
         }
-        (void)offset;
-        (void)drawCount;
-        (void)stride;
-        // Requires ID3D12CommandSignature — deferred to full ExecuteIndirect integration
+        auto* cmdSig = device_->GetCmdSigDrawIndexed();
+        if (stride == sizeof(D3D12_DRAW_INDEXED_ARGUMENTS)) {
+            cmd_->ExecuteIndirect(cmdSig, drawCount, data->resource.Get(), offset, nullptr, 0);
+        } else {
+            for (uint32_t i = 0; i < drawCount; ++i) {
+                cmd_->ExecuteIndirect(
+                    cmdSig, 1, data->resource.Get(), offset + static_cast<uint64_t>(i) * stride, nullptr, 0
+                );
+            }
+        }
     }
 
     void D3D12CommandBuffer::CmdDrawIndexedIndirectCountImpl(
@@ -348,11 +365,11 @@ namespace miki::rhi {
         if (!argsData || !countData) {
             return;
         }
-        (void)argsOffset;
-        (void)countOffset;
-        (void)maxDrawCount;
-        (void)stride;
-        // Requires ID3D12CommandSignature with indirect count
+        (void)stride;  // D3D12 ExecuteIndirect uses the command signature's ByteStride
+        cmd_->ExecuteIndirect(
+            device_->GetCmdSigDrawIndexed(), maxDrawCount, argsData->resource.Get(), argsOffset,
+            countData->resource.Get(), countOffset
+        );
     }
 
     void D3D12CommandBuffer::CmdDrawMeshTasksImpl(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) {
@@ -360,16 +377,44 @@ namespace miki::rhi {
     }
 
     void D3D12CommandBuffer::CmdDrawMeshTasksIndirectImpl(
-        BufferHandle /*buffer*/, uint64_t /*offset*/, uint32_t /*drawCount*/, uint32_t /*stride*/
+        BufferHandle buffer, uint64_t offset, uint32_t drawCount, uint32_t stride
     ) {
-        // Requires ID3D12CommandSignature for mesh shader indirect
+        auto* cmdSig = device_->GetCmdSigDispatchMesh();
+        if (!cmdSig) {
+            return;  // Mesh shaders not supported on this device
+        }
+        auto* data = device_->GetBufferPool().Lookup(buffer);
+        if (!data) {
+            return;
+        }
+        if (stride == sizeof(D3D12_DISPATCH_MESH_ARGUMENTS)) {
+            cmd_->ExecuteIndirect(cmdSig, drawCount, data->resource.Get(), offset, nullptr, 0);
+        } else {
+            for (uint32_t i = 0; i < drawCount; ++i) {
+                cmd_->ExecuteIndirect(
+                    cmdSig, 1, data->resource.Get(), offset + static_cast<uint64_t>(i) * stride, nullptr, 0
+                );
+            }
+        }
     }
 
     void D3D12CommandBuffer::CmdDrawMeshTasksIndirectCountImpl(
-        BufferHandle /*argsBuffer*/, uint64_t /*argsOffset*/, BufferHandle /*countBuffer*/, uint64_t /*countOffset*/,
-        uint32_t /*maxDrawCount*/, uint32_t /*stride*/
+        BufferHandle argsBuffer, uint64_t argsOffset, BufferHandle countBuffer, uint64_t countOffset,
+        uint32_t maxDrawCount, uint32_t stride
     ) {
-        // Requires ID3D12CommandSignature for mesh shader indirect count
+        auto* cmdSig = device_->GetCmdSigDispatchMesh();
+        if (!cmdSig) {
+            return;  // Mesh shaders not supported on this device
+        }
+        auto* argsData = device_->GetBufferPool().Lookup(argsBuffer);
+        auto* countData = device_->GetBufferPool().Lookup(countBuffer);
+        if (!argsData || !countData) {
+            return;
+        }
+        (void)stride;
+        cmd_->ExecuteIndirect(
+            cmdSig, maxDrawCount, argsData->resource.Get(), argsOffset, countData->resource.Get(), countOffset
+        );
     }
 
     // =========================================================================
@@ -385,8 +430,7 @@ namespace miki::rhi {
         if (!data) {
             return;
         }
-        // Requires ID3D12CommandSignature for compute indirect dispatch
-        (void)offset;
+        cmd_->ExecuteIndirect(device_->GetCmdSigDispatch(), 1, data->resource.Get(), offset, nullptr, 0);
     }
 
     // =========================================================================
@@ -506,41 +550,176 @@ namespace miki::rhi {
     }
 
     void D3D12CommandBuffer::CmdBlitTextureImpl(
-        TextureHandle /*src*/, TextureHandle /*dst*/, const TextureBlitRegion& /*region*/, Filter /*filter*/
+        TextureHandle src, TextureHandle dst, const TextureBlitRegion& region, Filter filter
     ) {
-        // Adaptation: §20b Feature::CmdBlitTexture → Strategy::ShaderEmulation
-        // D3D12 has no native blit — requires a fullscreen quad + shader or compute pass.
-        // TODO: Deferred: production code uses a pre-built blit pipeline.
+        auto* srcData = device_->GetTexturePool().Lookup(src);
+        auto* dstData = device_->GetTexturePool().Lookup(dst);
+        if (!srcData || !dstData) {
+            return;
+        }
+
+        // Lazy-init the blit pipeline (compiles shaders + root sigs on first use)
+        auto& blit = device_->GetBlitPipeline();
+        if (!blit.Init(device_->GetD3D12Device())) {
+            return;
+        }
+
+        bool linear = (filter == Filter::Linear);
+        auto* pso = blit.GetPSO(device_->GetD3D12Device(), dstData->format, linear);
+        if (!pso) {
+            return;
+        }
+
+        // Allocate temp SRV for source texture (shader-visible heap)
+        auto& srvHeap = device_->GetShaderVisibleHeap();
+        uint32_t srvIdx = srvHeap.Allocate(1);
+        if (srvIdx == UINT32_MAX) {
+            return;
+        }
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = srcData->format;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+        srvDesc.Texture2D.MostDetailedMip = region.srcSubresource.baseMipLevel;
+        auto srvCpu = srvHeap.GetCpuHandle(srvIdx);
+        auto srvGpu = srvHeap.GetGpuHandle(srvIdx);
+        device_->GetD3D12Device()->CreateShaderResourceView(srcData->resource.Get(), &srvDesc, srvCpu);
+
+        // Allocate temp RTV for destination texture (CPU-only RTV heap)
+        auto& rtvHeap = device_->GetRtvHeap();
+        uint32_t rtvIdx = rtvHeap.Allocate(1);
+        if (rtvIdx == UINT32_MAX) {
+            return;
+        }
+
+        D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
+        rtvDesc.Format = dstData->format;
+        rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        rtvDesc.Texture2D.MipSlice = region.dstSubresource.baseMipLevel;
+        rtvDesc.Texture2D.PlaneSlice = 0;
+        auto rtvCpu = rtvHeap.GetCpuHandle(rtvIdx);
+        device_->GetD3D12Device()->CreateRenderTargetView(dstData->resource.Get(), &rtvDesc, rtvCpu);
+
+        // Compute source UV rect (normalized [0,1] based on src texture dimensions at the given mip)
+        uint32_t srcMipW = std::max(1u, srcData->width >> region.srcSubresource.baseMipLevel);
+        uint32_t srcMipH = std::max(1u, srcData->height >> region.srcSubresource.baseMipLevel);
+        D3D12BlitPipeline::BlitConstants constants{};
+        constants.srcMinU = static_cast<float>(region.srcOffsetMin.x) / static_cast<float>(srcMipW);
+        constants.srcMinV = static_cast<float>(region.srcOffsetMin.y) / static_cast<float>(srcMipH);
+        constants.srcMaxU = static_cast<float>(region.srcOffsetMax.x) / static_cast<float>(srcMipW);
+        constants.srcMaxV = static_cast<float>(region.srcOffsetMax.y) / static_cast<float>(srcMipH);
+
+        // Destination viewport = dst blit region
+        D3D12_VIEWPORT viewport{};
+        viewport.TopLeftX = static_cast<float>(region.dstOffsetMin.x);
+        viewport.TopLeftY = static_cast<float>(region.dstOffsetMin.y);
+        viewport.Width = static_cast<float>(region.dstOffsetMax.x - region.dstOffsetMin.x);
+        viewport.Height = static_cast<float>(region.dstOffsetMax.y - region.dstOffsetMin.y);
+        viewport.MinDepth = 0.0f;
+        viewport.MaxDepth = 1.0f;
+
+        D3D12_RECT scissor{};
+        scissor.left = static_cast<LONG>(region.dstOffsetMin.x);
+        scissor.top = static_cast<LONG>(region.dstOffsetMin.y);
+        scissor.right = static_cast<LONG>(region.dstOffsetMax.x);
+        scissor.bottom = static_cast<LONG>(region.dstOffsetMax.y);
+
+        // Set shader-visible descriptor heap (required for SRV table)
+        std::array<ID3D12DescriptorHeap*, 1> heaps = {srvHeap.heap.Get()};
+        cmd_->SetDescriptorHeaps(1, heaps.data());
+
+        // Bind blit pipeline
+        auto* rootSig = linear ? blit.GetRootSignatureLinear() : blit.GetRootSignature();
+        cmd_->SetGraphicsRootSignature(rootSig);
+        cmd_->SetPipelineState(pso);
+        cmd_->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
+        cmd_->SetGraphicsRootDescriptorTable(1, srvGpu);
+        cmd_->OMSetRenderTargets(1, &rtvCpu, FALSE, nullptr);
+        cmd_->RSSetViewports(1, &viewport);
+        cmd_->RSSetScissorRects(1, &scissor);
+        cmd_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        cmd_->DrawInstanced(3, 1, 0, 0);
     }
 
-    void D3D12CommandBuffer::
-        CmdFillBufferImpl(BufferHandle /*buffer*/, uint64_t /*offset*/, uint64_t /*size*/, uint32_t /*value*/) {
-        // Adaptation: §20b Feature::CmdFillBufferNonZero → Strategy::ShaderEmulation
-        // D3D12 has no CmdFillBuffer equivalent — requires compute shader or ClearUnorderedAccessViewUint.
-        // TODO: Deferred: production code uses UAV clear.
+    void D3D12CommandBuffer::CmdFillBufferImpl(BufferHandle buffer, uint64_t offset, uint64_t size, uint32_t value) {
+        auto* data = device_->GetBufferPool().Lookup(buffer);
+        if (!data) {
+            return;
+        }
+        // ClearUnorderedAccessViewUint needs both a shader-visible GPU handle and a CPU handle.
+        // We allocate from the shader-visible CBV/SRV/UAV heap (same handle serves both).
+        auto& cpuHeap = device_->GetShaderVisibleHeap();
+        uint32_t descIdx = cpuHeap.Allocate(1);
+        if (descIdx == UINT32_MAX) {
+            return;
+        }
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.FirstElement = offset / 4;
+        uavDesc.Buffer.NumElements = static_cast<UINT>((size == UINT64_MAX ? data->size - offset : size) / 4);
+        uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+
+        auto cpuHandle = cpuHeap.GetCpuHandle(descIdx);
+        auto gpuHandle = cpuHeap.GetGpuHandle(descIdx);
+        device_->GetD3D12Device()->CreateUnorderedAccessView(data->resource.Get(), nullptr, &uavDesc, cpuHandle);
+
+        UINT clearValues[4] = {value, value, value, value};
+        cmd_->ClearUnorderedAccessViewUint(gpuHandle, cpuHandle, data->resource.Get(), clearValues, 0, nullptr);
     }
 
-    void D3D12CommandBuffer::
-        CmdClearColorTextureImpl(TextureHandle tex, const ClearColor& color, const TextureSubresourceRange& /*range*/) {
+    void D3D12CommandBuffer::CmdClearColorTextureImpl(
+        TextureHandle tex, const ClearColor& color, const TextureSubresourceRange& range
+    ) {
         auto* data = device_->GetTexturePool().Lookup(tex);
         if (!data) {
             return;
         }
-        // Requires RTV descriptor — simplified placeholder
-        // Production code would look up or create an RTV for this texture
-        (void)color;
+        // Allocate a temporary RTV from the CPU-only RTV heap
+        auto& rtvHeap = device_->GetRtvHeap();
+        uint32_t rtvIdx = rtvHeap.Allocate(1);
+        if (rtvIdx == UINT32_MAX) {
+            return;
+        }
+        auto rtvHandle = rtvHeap.GetCpuHandle(rtvIdx);
+
+        D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
+        rtvDesc.Format = data->format;
+        rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        rtvDesc.Texture2D.MipSlice = range.baseMipLevel;
+        rtvDesc.Texture2D.PlaneSlice = 0;
+        device_->GetD3D12Device()->CreateRenderTargetView(data->resource.Get(), &rtvDesc, rtvHandle);
+
+        float clearColor[] = {color.r, color.g, color.b, color.a};
+        cmd_->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
     }
 
     void D3D12CommandBuffer::CmdClearDepthStencilImpl(
-        TextureHandle tex, float depth, uint8_t stencil, const TextureSubresourceRange& /*range*/
+        TextureHandle tex, float depth, uint8_t stencil, const TextureSubresourceRange& range
     ) {
         auto* data = device_->GetTexturePool().Lookup(tex);
         if (!data) {
             return;
         }
-        // Requires DSV descriptor — simplified placeholder
-        (void)depth;
-        (void)stencil;
+        // Allocate a temporary DSV from the CPU-only DSV heap
+        auto& dsvHeap = device_->GetDsvHeap();
+        uint32_t dsvIdx = dsvHeap.Allocate(1);
+        if (dsvIdx == UINT32_MAX) {
+            return;
+        }
+        auto dsvHandle = dsvHeap.GetCpuHandle(dsvIdx);
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format = data->format;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsvDesc.Texture2D.MipSlice = range.baseMipLevel;
+        device_->GetD3D12Device()->CreateDepthStencilView(data->resource.Get(), &dsvDesc, dsvHandle);
+
+        D3D12_CLEAR_FLAGS clearFlags = D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL;
+        cmd_->ClearDepthStencilView(dsvHandle, clearFlags, depth, stencil, 0, nullptr);
     }
 
     // =========================================================================
@@ -760,9 +939,20 @@ namespace miki::rhi {
         cmd_->RSSetShadingRate(rate, combiners);
     }
 
-    void D3D12CommandBuffer::CmdSetShadingRateImageImpl(TextureViewHandle /*rateImage*/) {
-        // cmd_->RSSetShadingRateImage requires ID3D12Resource*, not a view
-        // The SRI texture resource would be set via RSSetShadingRateImage
+    void D3D12CommandBuffer::CmdSetShadingRateImageImpl(TextureViewHandle rateImage) {
+        if (!rateImage.IsValid()) {
+            cmd_->RSSetShadingRateImage(nullptr);  // Disable SRI
+            return;
+        }
+        auto* viewData = device_->GetTextureViewPool().Lookup(rateImage);
+        if (!viewData) {
+            return;
+        }
+        auto* texData = device_->GetTexturePool().Lookup(viewData->parentTexture);
+        if (!texData) {
+            return;
+        }
+        cmd_->RSSetShadingRateImage(texData->resource.Get());
     }
 
     // =========================================================================

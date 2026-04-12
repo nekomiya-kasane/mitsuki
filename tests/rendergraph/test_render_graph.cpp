@@ -201,7 +201,7 @@ TEST(RenderGraphBuilder, AddGraphicsPass) {
 
     auto& p = builder.GetPasses()[0];
     EXPECT_STREQ(p.name, "GBufferFill");
-    EXPECT_EQ(p.queue, RGQueueType::Graphics);
+    EXPECT_EQ(p.queueHint, RGQueueType::Graphics);
     EXPECT_EQ(p.writes.size(), 1u);
 }
 
@@ -214,7 +214,7 @@ TEST(RenderGraphBuilder, AddComputePass) {
 
     EXPECT_TRUE(pass.IsValid());
     auto& p = builder.GetPasses()[0];
-    EXPECT_EQ(p.queue, RGQueueType::Graphics);  // compute on graphics queue
+    EXPECT_EQ(p.queueHint, RGQueueType::Graphics);  // compute on graphics queue
     EXPECT_EQ(p.reads.size(), 1u);
 }
 
@@ -223,7 +223,7 @@ TEST(RenderGraphBuilder, AddAsyncComputePass) {
     auto pass = builder.AddAsyncComputePass("AsyncCull", [](PassBuilder&) {}, [](RenderPassContext&) {});
 
     auto& p = builder.GetPasses()[0];
-    EXPECT_EQ(p.queue, RGQueueType::AsyncCompute);
+    EXPECT_EQ(p.queueHint, RGQueueType::AsyncCompute);
 }
 
 TEST(RenderGraphBuilder, AddTransferPass) {
@@ -231,7 +231,7 @@ TEST(RenderGraphBuilder, AddTransferPass) {
     auto pass = builder.AddTransferPass("Upload", [](PassBuilder&) {}, [](RenderPassContext&) {});
 
     auto& p = builder.GetPasses()[0];
-    EXPECT_EQ(p.queue, RGQueueType::Transfer);
+    EXPECT_EQ(p.queueHint, RGQueueType::Transfer);
 }
 
 // =============================================================================
@@ -996,7 +996,7 @@ TEST(AccessValidation, ComputePassRejectsGraphicsOnlyAccesses) {
 }
 
 TEST(AccessValidation, AsyncComputeRejectsGraphicsAccesses) {
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::ShaderReadOnly, flags));
     EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::ShaderWrite, flags));
     EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ColorAttachWrite, flags));
@@ -1004,12 +1004,12 @@ TEST(AccessValidation, AsyncComputeRejectsGraphicsAccesses) {
 }
 
 TEST(AccessValidation, TransferPassOnlyAllowsTransferAccesses) {
-    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::TransferSrc, RGPassFlags::Transfer));
-    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::TransferDst, RGPassFlags::Transfer));
-    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ShaderReadOnly, RGPassFlags::Transfer));
-    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ShaderWrite, RGPassFlags::Transfer));
-    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ColorAttachWrite, RGPassFlags::Transfer));
-    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::DepthStencilWrite, RGPassFlags::Transfer));
+    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::TransferSrc, RGPassFlags::TransferOnly));
+    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::TransferDst, RGPassFlags::TransferOnly));
+    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ShaderReadOnly, RGPassFlags::TransferOnly));
+    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ShaderWrite, RGPassFlags::TransferOnly));
+    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ColorAttachWrite, RGPassFlags::TransferOnly));
+    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::DepthStencilWrite, RGPassFlags::TransferOnly));
 }
 
 TEST(AccessValidation, PresentPassOnlyAllowsPresentSrc) {
@@ -1023,7 +1023,7 @@ TEST(AccessValidation, PresentPassOnlyAllowsPresentSrc) {
 TEST(AccessValidation, NoneAccessAlwaysValid) {
     EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::Graphics));
     EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::Compute));
-    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::Transfer));
+    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::TransferOnly));
     EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::Present));
 }
 
@@ -1031,8 +1031,8 @@ TEST(AccessValidation, ConstexprEvaluable) {
     // Verify the function is actually constexpr-evaluable
     static_assert(IsAccessValidForPassType(ResourceAccess::ShaderReadOnly, RGPassFlags::Graphics));
     static_assert(!IsAccessValidForPassType(ResourceAccess::ColorAttachWrite, RGPassFlags::Compute));
-    static_assert(!IsAccessValidForPassType(ResourceAccess::ShaderReadOnly, RGPassFlags::Transfer));
-    static_assert(IsAccessValidForPassType(ResourceAccess::TransferSrc, RGPassFlags::Transfer));
+    static_assert(!IsAccessValidForPassType(ResourceAccess::ShaderReadOnly, RGPassFlags::TransferOnly));
+    static_assert(IsAccessValidForPassType(ResourceAccess::TransferSrc, RGPassFlags::TransferOnly));
     static_assert(IsAccessValidForPassType(ResourceAccess::PresentSrc, RGPassFlags::Present));
     static_assert(!IsAccessValidForPassType(ResourceAccess::ShaderWrite, RGPassFlags::Present));
 }
@@ -4242,10 +4242,10 @@ TEST(AccessValidation, GraphicsPassAllowsEverything) {
 }
 
 TEST(AccessValidation, TransferPassAllowsOnlyTransfer) {
-    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::TransferSrc, RGPassFlags::Transfer));
-    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::TransferDst, RGPassFlags::Transfer));
-    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ShaderReadOnly, RGPassFlags::Transfer));
-    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ColorAttachWrite, RGPassFlags::Transfer));
+    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::TransferSrc, RGPassFlags::TransferOnly));
+    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::TransferDst, RGPassFlags::TransferOnly));
+    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ShaderReadOnly, RGPassFlags::TransferOnly));
+    EXPECT_FALSE(IsAccessValidForPassType(ResourceAccess::ColorAttachWrite, RGPassFlags::TransferOnly));
 }
 
 TEST(AccessValidation, PresentPassOnlyPresentSrc) {
@@ -4257,7 +4257,7 @@ TEST(AccessValidation, PresentPassOnlyPresentSrc) {
 TEST(AccessValidation, NoneAccessAlwaysValidAllTypes) {
     EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::Graphics));
     EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::Compute));
-    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::Transfer));
+    EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::TransferOnly));
     EXPECT_TRUE(IsAccessValidForPassType(ResourceAccess::None, RGPassFlags::Present));
 }
 
@@ -10179,7 +10179,7 @@ TEST(QfotStrategy, MockIsNone) {
 TEST(AsyncScheduler, LevelD_AlwaysReturnsFalse) {
     AsyncComputeScheduler sched;
     sched.SetComputeQueueLevel(ComputeQueueLevel::D_GraphicsOnly);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 999.0f));
 }
 
@@ -10201,7 +10201,7 @@ TEST(AsyncScheduler, ColdStartBelowThresholdReturnsFalse) {
     // Default: staticThreshold=200, syncCost=75, threshold=275
     AsyncComputeScheduler sched;
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // estimatedGpuTime=100 < 275 → false
     EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 100.0f));
 }
@@ -10209,7 +10209,7 @@ TEST(AsyncScheduler, ColdStartBelowThresholdReturnsFalse) {
 TEST(AsyncScheduler, ColdStartAboveThresholdReturnsTrue) {
     AsyncComputeScheduler sched;
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // estimatedGpuTime=300 >= 275 → true
     EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 300.0f));
 }
@@ -10218,7 +10218,7 @@ TEST(AsyncScheduler, ColdStartExactThresholdReturnsTrue) {
     // Default staticThreshold + crossQueueSyncCost = 200 + 75 = 275
     AsyncComputeScheduler sched;
     sched.SetComputeQueueLevel(ComputeQueueLevel::C_SingleQueueBatch);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 275.0f));
 }
 
@@ -10228,7 +10228,7 @@ TEST(AsyncScheduler, CustomConfigThresholds) {
     cfg.crossQueueSyncCostUs = 50.0f;  // threshold = 150
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 149.0f));
     EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 150.0f));
 }
@@ -10246,7 +10246,7 @@ TEST(AsyncScheduler, WarmUpTransitionAfterNFrames) {
     cfg.crossQueueSyncCostUs = 0.0f;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Create entry by calling ShouldRunAsync (creates cold-start entry)
     sched.ShouldRunAsync(0, flags, 300.0f);
@@ -10344,7 +10344,7 @@ TEST(AsyncScheduler, HysteresisKeepsAsyncAfterBenefitDrops) {
     cfg.crossQueueSyncCostUs = 0.0f;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Feed 3 frames of high benefit (warm-up + establish benefit)
     for (uint32_t i = 0; i < 3; ++i) {
@@ -10383,7 +10383,7 @@ TEST(AsyncScheduler, HysteresisWithinWindowKeepsAsync) {
     cfg.crossQueueSyncCostUs = 0.0f;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Feed 2 frames of high benefit → warm up done, EMA high
     for (uint32_t i = 0; i < 2; ++i) {
@@ -10419,7 +10419,7 @@ TEST(AsyncScheduler, AdaptivePhaseHighEmaReturnsTrue) {
     cfg.hysteresisFrames = 0;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::B_SingleQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Feed 1 frame to exit warm-up
     sched.BeginFrame();
@@ -10444,7 +10444,7 @@ TEST(AsyncScheduler, AdaptivePhaseLowEmaReturnsFalse) {
     cfg.hysteresisFrames = 0;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     sched.BeginFrame();
     PassTimingFeedback fb{.passIndex = 0, .overlappedGraphicsTimeUs = 10.0f};
@@ -11339,7 +11339,7 @@ TEST(PhaseG_Stress, ZeroOverlapNeverGoesAsync) {
     cfg.hysteresisFrames = 0;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     for (uint32_t i = 0; i < 10; ++i) {
         sched.BeginFrame();
@@ -11543,7 +11543,7 @@ TEST(PhaseG_Scheduler, GetEstimateAutoGrowsOnShouldRunAsync) {
     cfg.warmUpFrames = 0;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Access passIndex=100 without Reserve — should auto-grow
     sched.ShouldRunAsync(100, flags, 500.0f);
@@ -11572,7 +11572,7 @@ TEST(PhaseG_DispatchMode, NvidiaAlwaysAsync) {
     cfg.gpuVendor = GpuVendor::Nvidia;
     cfg.pipelinedMaxWorkGroups = 64;
     AsyncComputeScheduler sched(cfg);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // Even small dispatch = async on NVIDIA (hardware scheduler handles partitioning)
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 10.0f, 4), ComputeDispatchMode::Async);
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 1000.0f, 1024), ComputeDispatchMode::Async);
@@ -11584,7 +11584,7 @@ TEST(PhaseG_DispatchMode, AmdSmallDispatchPipelined) {
     cfg.pipelinedMaxWorkGroups = 64;
     cfg.pipelinedMaxGpuTimeUs = 100.0f;
     AsyncComputeScheduler sched(cfg);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // Small workgroup count → pipelined
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 200.0f, 32), ComputeDispatchMode::Pipelined);
     // Small GPU time → pipelined
@@ -11597,7 +11597,7 @@ TEST(PhaseG_DispatchMode, AmdLargeDispatchAsync) {
     cfg.pipelinedMaxWorkGroups = 64;
     cfg.pipelinedMaxGpuTimeUs = 100.0f;
     AsyncComputeScheduler sched(cfg);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // Large dispatch: workgroups > threshold AND time > threshold → async
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 500.0f, 256), ComputeDispatchMode::Async);
 }
@@ -11607,7 +11607,7 @@ TEST(PhaseG_DispatchMode, IntelSmallDispatchPipelined) {
     cfg.gpuVendor = GpuVendor::Intel;
     cfg.pipelinedMaxWorkGroups = 64;
     AsyncComputeScheduler sched(cfg);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 200.0f, 16), ComputeDispatchMode::Pipelined);
 }
 
@@ -11615,7 +11615,7 @@ TEST(PhaseG_DispatchMode, UnknownVendorLargeIsAsync) {
     AsyncComputeSchedulerConfig cfg;
     cfg.gpuVendor = GpuVendor::Unknown;
     AsyncComputeScheduler sched(cfg);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 500.0f, 256), ComputeDispatchMode::Async);
 }
 
@@ -11626,7 +11626,7 @@ TEST(PhaseG_DispatchMode, EmaHistoryInfluencesPipelinedDecision) {
     cfg.warmUpFrames = 1;
     cfg.emaAlpha = 1.0f;
     AsyncComputeScheduler sched(cfg);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Feed a short async time to build EMA history
     PassTimingFeedback fb{.passIndex = 5, .asyncTimeUs = 30.0f, .overlappedGraphicsTimeUs = 50.0f};
@@ -11644,7 +11644,7 @@ TEST(PhaseG_DispatchMode, EmaHistoryInfluencesPipelinedDecision) {
 TEST(PhaseG_ShouldRunAsync, GraphicsOnlyQueueAlwaysFalse) {
     AsyncComputeScheduler sched;
     sched.SetComputeQueueLevel(ComputeQueueLevel::D_GraphicsOnly);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 9999.0f));
 }
 
@@ -11657,7 +11657,7 @@ TEST(PhaseG_ShouldRunAsync, MissingAsyncFlagReturnsFalse) {
 TEST(PhaseG_ShouldRunAsync, MissingComputeFlagReturnsFalse) {
     AsyncComputeScheduler sched;
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    EXPECT_FALSE(sched.ShouldRunAsync(0, RGPassFlags::AsyncCompute, 9999.0f));
+    EXPECT_FALSE(sched.ShouldRunAsync(0, RGPassFlags::AsyncEligible, 9999.0f));
 }
 
 TEST(PhaseG_ShouldRunAsync, GraphicsFlagReturnsFalse) {
@@ -11673,7 +11673,7 @@ TEST(PhaseG_ShouldRunAsync, WarmUpUsesStaticThreshold) {
     cfg.warmUpFrames = 8;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // During warm-up: threshold = staticThreshold + syncCost = 250
     EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 300.0f));   // 300 >= 250
@@ -11688,7 +11688,7 @@ TEST(PhaseG_ShouldRunAsync, WarmUpBoundaryExactThreshold) {
     cfg.warmUpFrames = 4;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::C_SingleQueueBatch);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 100.0f));
     EXPECT_FALSE(sched.ShouldRunAsync(1, flags, 99.9f));
 }
@@ -11702,7 +11702,7 @@ TEST(PhaseG_ShouldRunAsync, AdaptivePhaseUsesEmaBenefit) {
     cfg.hysteresisFrames = 0;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Feed high-benefit feedback to exit warm-up
     for (uint32_t i = 0; i < 3; ++i) {
@@ -11728,7 +11728,7 @@ TEST(PhaseG_ShouldRunAsync, HysteresisKeepsAsyncAfterBenefitDrops) {
     cfg.hysteresisFrames = 3;
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Build up benefit (2 frames of high overlap)
     for (uint32_t i = 0; i < 2; ++i) {
@@ -11763,7 +11763,7 @@ TEST(PhaseG_ShouldRunAsync, StatsTrackAsyncDecisions) {
     cfg.warmUpFrames = 999;  // stay in warm-up
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    auto flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     sched.BeginFrame();
     EXPECT_EQ(sched.GetStats().totalAsyncPasses, 0u);
@@ -13637,7 +13637,7 @@ TEST(PhaseG_SchedulingHints, SmallWorkGroupCountTriggersPipelinedMode) {
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // 32 workgroups, 50us — both below threshold → pipelined
     auto mode = sched.ClassifyDispatchMode(0, flags, 50.0f, 32);
     EXPECT_EQ(mode, ComputeDispatchMode::Pipelined);
@@ -13656,7 +13656,7 @@ TEST(PhaseG_SchedulingHints, WorkGroupCountZeroSkipsPipelineCheck) {
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // 0 workgroups (unknown) but high GPU time → should not be pipelined
     auto mode = sched.ClassifyDispatchMode(0, flags, 500.0f, 0);
     EXPECT_EQ(mode, ComputeDispatchMode::Async);
@@ -14656,7 +14656,7 @@ TEST(PhaseG_TransferScheduling_R2, NoSchedulerTransferUsesDefaultQueue) {
     auto result = compiler.Compile(builder);
     ASSERT_TRUE(result.has_value());
 
-    // Falls to else branch: queueAssignments[passIdx] = pass.queue = Transfer
+    // Falls to else branch: queueAssignments[passIdx] = pass.queueHint = Transfer
     ASSERT_GE(result->passes.size(), 1u);
     EXPECT_EQ(result->passes[0].queue, RGQueueType::Transfer);
 }
@@ -14672,7 +14672,7 @@ TEST(PhaseG_Scheduler_R2, NvidiaAlwaysAsync) {
     cfg.pipelinedMaxWorkGroups = 64;
     AsyncComputeScheduler sched(cfg);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 10.0f, 4), ComputeDispatchMode::Async);
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 10.0f, 64), ComputeDispatchMode::Async);
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 10.0f, 0), ComputeDispatchMode::Async);
@@ -14686,7 +14686,7 @@ TEST(PhaseG_Scheduler_R2, IntelFollowsSamePipelinedHeuristic) {
     cfg.pipelinedMaxGpuTimeUs = 100.0f;
     AsyncComputeScheduler sched(cfg);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 50.0f, 32), ComputeDispatchMode::Pipelined);
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 500.0f, 128), ComputeDispatchMode::Async);
 }
@@ -14698,7 +14698,7 @@ TEST(PhaseG_Scheduler_R2, UnknownVendorSkipsVendorCheckFallsToAsync) {
     cfg.pipelinedMaxWorkGroups = 64;
     AsyncComputeScheduler sched(cfg);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // 32 workgroups but Unknown vendor → no pipelined check → Async
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 50.0f, 32), ComputeDispatchMode::Async);
 }
@@ -14709,7 +14709,7 @@ TEST(PhaseG_Scheduler_R2, GraphicsOnlyQueueLevelRejectsShouldRunAsync) {
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::D_GraphicsOnly);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 500.0f, 128));
 }
 
@@ -14731,7 +14731,7 @@ TEST(PhaseG_Scheduler_R2, NoComputeFlagRejects) {
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
 
     // AsyncCompute flag but no Compute flag (invalid but should be rejected)
-    RGPassFlags flags = RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::AsyncEligible;
     EXPECT_FALSE(sched.ShouldRunAsync(0, flags, 500.0f, 128));
 }
 
@@ -14744,7 +14744,7 @@ TEST(PhaseG_Scheduler_R2, WarmUpUsesStaticThreshold) {
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // Warm-up: threshold = 200 + 50 = 250us. 300us >= 250 → true.
     EXPECT_TRUE(sched.ShouldRunAsync(0, flags, 300.0f));
     // 200us < 250us → false.
@@ -14782,7 +14782,7 @@ TEST(PhaseG_Scheduler_R2, BeginFrameResetsStatsAndIncrementsCounter) {
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
 
     // Trigger some stat increments
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     sched.ShouldRunAsync(0, flags, 500.0f);
 
     EXPECT_EQ(sched.GetFrameCount(), 0u);
@@ -14807,7 +14807,7 @@ TEST(PhaseG_Scheduler_R2, HysteresisKeepsAsyncAfterBenefitDrops) {
     AsyncComputeScheduler sched(cfg);
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
 
     // Frame 1: warm-up. High benefit.
     std::vector<PassTimingFeedback> fb1 = {{.passIndex = 0, .asyncTimeUs = 500.0f, .overlappedGraphicsTimeUs = 500.0f}};
@@ -14841,7 +14841,7 @@ TEST(PhaseG_Scheduler_R2, ReservePreAllocates) {
     EXPECT_EQ(sched.GetEstimate(50), nullptr);
     // But ShouldRunAsync should work without crash
     sched.SetComputeQueueLevel(ComputeQueueLevel::A_DualQueuePriority);
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // Should not crash
     sched.ShouldRunAsync(50, flags, 500.0f);
     // Now estimate exists
@@ -15487,7 +15487,7 @@ TEST(PhaseG_Scheduler_R2, AmdPipelinedByGpuTimeNotWorkGroupCount) {
     cfg.pipelinedMaxGpuTimeUs = 100.0f;
     AsyncComputeScheduler sched(cfg);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // workGroupCount=128 (> 64 max) but gpuTime=50 (< 100 max) → Pipelined by GPU time
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 50.0f, 128), ComputeDispatchMode::Pipelined);
     // Both large → Async
@@ -15504,7 +15504,7 @@ TEST(PhaseG_Scheduler_R2, AmdPipelinedByWorkGroupCountNotGpuTime) {
     cfg.pipelinedMaxGpuTimeUs = 100.0f;
     AsyncComputeScheduler sched(cfg);
 
-    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncCompute;
+    RGPassFlags flags = RGPassFlags::Compute | RGPassFlags::AsyncEligible;
     // workGroupCount=32 (<= 64) → Pipelined (first check)
     EXPECT_EQ(sched.ClassifyDispatchMode(0, flags, 200.0f, 32), ComputeDispatchMode::Pipelined);
 }
