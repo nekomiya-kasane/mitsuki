@@ -215,6 +215,13 @@ namespace miki::shader {
          *  The interface name must be provided in the value as "ConcreteType:IInterface".
          */
         std::vector<std::pair<std::string, std::string>> linkTimeTypes;
+
+        /** @brief SPIR-V specialization constant overrides (Phase 3a).
+         *  Key: constant_id (uint32_t), Value: integer value to set.
+         *  Used with VkSpecializationInfo at pipeline creation time.
+         *  The shader must declare constants with [SpecializationConstant] or [vk::constant_id(N)].
+         */
+        std::vector<std::pair<uint32_t, int32_t>> specializationConstants;
     };
 
     /** @brief Configuration for the PermutationCache. */

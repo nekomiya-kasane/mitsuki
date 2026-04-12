@@ -26,6 +26,13 @@
 
 namespace miki::shader {
 
+    /** @brief Session cache hit/miss statistics. */
+    struct CacheStats {
+        uint64_t sessionHits = 0;    ///< Pooled session reuse count
+        uint64_t sessionMisses = 0;  ///< New session creation count
+        uint64_t moduleLoads = 0;    ///< Total module load calls
+    };
+
     /** @brief Structured shader compilation diagnostic. */
     struct ShaderDiagnostic {
         std::string message;
@@ -91,6 +98,15 @@ namespace miki::shader {
 
         /** @brief Invalidate cached sessions (call after search path changes). */
         auto InvalidateSessionCache() -> void;
+
+        /** @brief Add a directory containing precompiled .slang-module files.
+         *  Enables UseUpToDateBinaryModule: sessions will prefer precompiled modules
+         *  but transparently recompile from source if stale.
+         */
+        auto AddPrecompiledModulePath(std::filesystem::path const& iPath) -> void;
+
+        /** @brief Get session cache hit/miss statistics. */
+        [[nodiscard]] auto GetCacheStats() const noexcept -> CacheStats;
 
        private:
         struct Impl;

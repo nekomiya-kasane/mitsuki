@@ -33,6 +33,8 @@ set(MIKI_SHADER_SOURCES
     src/miki/shader/ShaderLayoutGenerator.cpp
     src/miki/shader/StructLayoutValidator.cpp
     src/miki/shader/AsyncPipelineCompiler.cpp
+    src/miki/shader/ManagedPipeline.cpp
+    src/miki/shader/PipelineBatchCompiler.cpp
 )
 
 add_library(miki_shader OBJECT ${MIKI_SHADER_SOURCES})

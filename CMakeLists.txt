@@ -51,6 +51,11 @@ include(cmake/targets/miki_shader.cmake)
 include(cmake/targets/miki_rendergraph.cmake)
 
 # ---------------------------------------------------------------------------
+# Shader precompilation (Phase 3a — .slang -> .slang-module)
+# ---------------------------------------------------------------------------
+include(shaders/CMakeLists.txt)
+
+# ---------------------------------------------------------------------------
 # Unified shared library (DLL) — all tests and demos link to this
 # ---------------------------------------------------------------------------
 include(cmake/targets/miki.cmake)

@@ -272,6 +272,7 @@ namespace miki::rg {
         Ready,    ///< PSO is compiled and ready for use
         Pending,  ///< PSO is being compiled asynchronously
         Failed,   ///< PSO compilation failed (shader error, etc.)
+        Stale,    ///< Source changed, recompilation in progress (previous Ready pipeline still usable)
     };
 
     /// @brief Result of querying a PSO's readiness.

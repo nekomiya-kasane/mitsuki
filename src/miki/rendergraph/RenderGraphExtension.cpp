@@ -247,6 +247,16 @@ namespace miki::rg {
                     }
                     break;
 
+                case PsoCompileStatus::Stale:
+                    // Stale = recompiling, but previous Ready pipeline still usable.
+                    // Treat as Ready (zero frame stall — Phase 3b §12.5 Step 1).
+                    res.activePso = cfg.primaryPso;
+                    res.isPrimary = true;
+                    res.isSkipped = false;
+                    res.appliedPolicy = cfg.missPolicy;
+                    stats_.readyPasses++;
+                    break;
+
                 case PsoCompileStatus::Failed:
                     // PSO failed to compile — try fallback or skip
                     if (cfg.fallbackPso.IsValid()) {

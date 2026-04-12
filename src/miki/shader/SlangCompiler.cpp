@@ -337,6 +337,7 @@ namespace miki::shader {
         std::vector<std::string> searchPaths;
 
         // Session pool: one cached session per ShaderTarget (type + version, no permutation macros)
+        // Sessions are kept alive across frames for module caching (Phase 3a §12.4 Step 3).
         std::unordered_map<uint16_t, Slang::ComPtr<slang::ISession>> sessionPool;
 
         // CRITICAL: IGlobalSession and ISession are NOT thread-safe (Slang docs 08-compiling §Multithreading).
@@ -346,6 +347,12 @@ namespace miki::shader {
 
         // Diagnostics from last compilation
         std::vector<ShaderDiagnostic> lastDiagnostics;
+
+        // Phase 3a: Precompiled module support
+        bool usePrecompiledModules = false;  // Set when AddPrecompiledModulePath() is called
+
+        // Phase 3a: Session cache statistics
+        CacheStats cacheStats;
 
         auto RecordDiagnostic(std::string msg, ShaderDiagnostic::Severity severity = ShaderDiagnostic::Severity::Error)
             -> void {
@@ -421,6 +428,16 @@ namespace miki::shader {
             sessionDesc.preprocessorMacros = iMacros.data();
             sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(iMacros.size());
 
+            // Phase 3a: Enable staleness check so precompiled modules are auto-verified
+            slang::CompilerOptionEntry optionEntries[1] = {};
+            if (usePrecompiledModules) {
+                optionEntries[0].name = slang::CompilerOptionName::UseUpToDateBinaryModule;
+                optionEntries[0].value.kind = slang::CompilerOptionValueKind::Int;
+                optionEntries[0].value.intValue0 = 1;
+                sessionDesc.compilerOptionEntries = optionEntries;
+                sessionDesc.compilerOptionEntryCount = 1;
+            }
+
             Slang::ComPtr<slang::ISession> session;
             auto result = globalSession->createSession(sessionDesc, session.writeRef());
             if (SLANG_FAILED(result)) {
@@ -438,12 +455,14 @@ namespace miki::shader {
                        | (static_cast<uint16_t>(iTarget.versionMinor) << 8);
             auto it = sessionPool.find(key);
             if (it != sessionPool.end()) {
+                ++cacheStats.sessionHits;
                 MIKI_LOG_TRACE(
                     debug::LogCategory::Shader, "[SlangCompiler] Session pool hit for {}", TargetTypeName(iTarget.type)
                 );
                 return it->second.get();
             }
 
+            ++cacheStats.sessionMisses;
             MIKI_LOG_DEBUG(
                 debug::LogCategory::Shader, "[SlangCompiler] Session pool miss, creating session for {} {}.{}",
                 TargetTypeName(iTarget.type), iTarget.versionMajor, iTarget.versionMinor
@@ -545,6 +564,7 @@ namespace miki::shader {
         ) -> core::Result<ShaderBlob> {
             Slang::ComPtr<slang::IBlob> diagnostics;
 
+            ++cacheStats.moduleLoads;
             auto* module = iSession->loadModuleFromSourceString(
                 "mikiShader", iSourcePath.c_str(), iSource.c_str(), diagnostics.writeRef()
             );
@@ -1104,6 +1124,17 @@ namespace miki::shader {
                 debug::LogCategory::Shader, "[SlangCompiler] Session cache invalidated ({} sessions)", count
             );
         }
+    }
+
+    auto SlangCompiler::AddPrecompiledModulePath(std::filesystem::path const& iPath) -> void {
+        MIKI_LOG_INFO(debug::LogCategory::Shader, "[SlangCompiler] AddPrecompiledModulePath: {}", iPath.string());
+        impl_->searchPaths.push_back(iPath.string());
+        impl_->usePrecompiledModules = true;
+        InvalidateSessionCache();  // Recreate sessions with UseUpToDateBinaryModule enabled
+    }
+
+    auto SlangCompiler::GetCacheStats() const noexcept -> CacheStats {
+        return impl_->cacheStats;
     }
 
 }  // namespace miki::shader
