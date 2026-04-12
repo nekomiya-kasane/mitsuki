@@ -25,9 +25,8 @@ endif()
 set(MIKI_PRECOMPILED_DIR "${CMAKE_BINARY_DIR}/shaders/precompiled")
 file(MAKE_DIRECTORY "${MIKI_PRECOMPILED_DIR}")
 
-# Modules that currently have implementing files.
-# Additional domain modules (material, debug, xr, etc.) will be added
-# as they are implemented in later phases.
+# All 13 shader library modules (Phases 1b through 17+).
+# Each module is precompiled to .slang-module for pass-level linking.
 set(MIKI_SHADER_MODULES
     miki-core
     miki-math
@@ -36,6 +35,12 @@ set(MIKI_SHADER_MODULES
     miki-lighting
     miki-shadow
     miki-postfx
+    miki-debug
+    miki-cad
+    miki-cae
+    miki-rt
+    miki-xr
+    miki-neural
 )
 
 set(MIKI_PRECOMPILED_MODULES "")

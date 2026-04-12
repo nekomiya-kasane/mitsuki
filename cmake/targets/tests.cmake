@@ -214,6 +214,9 @@ miki_add_test(test_precompiled_modules     tests/shader/test_precompiled_modules
 miki_add_test(test_pipeline_state_machine  tests/shader/test_pipeline_state_machine.cpp)
 miki_add_test(test_phase3b_modules         tests/shader/test_phase3b_modules.cpp)
 
+# -- Shader pipeline tests (Phase 5+) -----------------------------------------
+miki_add_test(test_phase5_domain_modules   tests/shader/test_phase5_domain_modules.cpp)
+
 # Shader tests need to know where shader source files are
 foreach(_shader_test
     test_slang_compiler test_permutation_cache
@@ -222,11 +225,13 @@ foreach(_shader_test
     test_struct_layout_validation test_async_pipeline_compiler
     test_precompiled_modules
     test_pipeline_state_machine test_phase3b_modules
+    test_phase5_domain_modules
 )
     if(TARGET ${_shader_test})
         target_compile_definitions(${_shader_test} PRIVATE
             MIKI_SHADER_DIR="${CMAKE_SOURCE_DIR}/shaders/miki"
             MIKI_SHADER_TESTS_DIR="${CMAKE_SOURCE_DIR}/shaders/tests"
+            MIKI_PASS_DIR="${CMAKE_SOURCE_DIR}/shaders/passes"
             MIKI_PRECOMPILED_DIR="${CMAKE_BINARY_DIR}/shaders/precompiled"
         )
         set_tests_properties(${_shader_test} PROPERTIES TIMEOUT 60)

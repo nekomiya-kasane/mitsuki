@@ -19,3 +19,4 @@ __include "postfx/ssr.slang";
 __include "postfx/outline.slang";
 __include "postfx/gtao.slang";
 __include "postfx/ssao.slang";
+__include "postfx/rtao.slang";
