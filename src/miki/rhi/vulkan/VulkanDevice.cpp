@@ -483,6 +483,9 @@ namespace miki::rhi {
         VkPhysicalDeviceShaderDrawParametersFeatures drawParamsFeature{};
         VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeature{};
         VkPhysicalDeviceTextureCompressionASTCHDRFeaturesEXT astcHdrFeature{};
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR accelStructFeature{};
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtPipelineFeature{};
+        VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeature{};
 
         if (tier_ == BackendType::Vulkan14) {
             // -----------------------------------------------------------------
@@ -532,6 +535,32 @@ namespace miki::rhi {
                 meshShaderFeature.meshShader = VK_TRUE;
                 *pNextTail = &meshShaderFeature;
                 pNextTail = &meshShaderFeature.pNext;
+            }
+
+            // Ray tracing extensions (VK_KHR_acceleration_structure requires VK_KHR_deferred_host_operations)
+            if (hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+                && hasExt(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+                deviceExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+                accelStructFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+                accelStructFeature.accelerationStructure = VK_TRUE;
+                *pNextTail = &accelStructFeature;
+                pNextTail = &accelStructFeature.pNext;
+
+                if (hasExt(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
+                    deviceExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+                    rayQueryFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+                    rayQueryFeature.rayQuery = VK_TRUE;
+                    *pNextTail = &rayQueryFeature;
+                    pNextTail = &rayQueryFeature.pNext;
+                }
+                if (hasExt(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
+                    deviceExtensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+                    rtPipelineFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+                    rtPipelineFeature.rayTracingPipeline = VK_TRUE;
+                    *pNextTail = &rtPipelineFeature;
+                    pNextTail = &rtPipelineFeature.pNext;
+                }
             }
 
             // Chain: features2 -> features13 -> features12 -> features11 -> [optional extensions]
@@ -1023,18 +1052,20 @@ namespace miki::rhi {
             capabilities_.maxMeshPayloadAndSharedMemorySize = meshProps.maxMeshPayloadAndSharedMemorySize;
         }
 
-        // Ray tracing
-        if (hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
+        // Ray tracing (VK_KHR_acceleration_structure requires VK_KHR_deferred_host_operations)
+        if (hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+            && hasExt(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)) {
             capabilities_.hasAccelerationStructure = true;
             capabilities_.enabledFeatures.Add(DeviceFeature::AccelerationStructure);
-        }
-        if (hasExt(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
-            capabilities_.hasRayQuery = true;
-            capabilities_.enabledFeatures.Add(DeviceFeature::RayQuery);
-        }
-        if (hasExt(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
-            capabilities_.hasRayTracingPipeline = true;
-            capabilities_.enabledFeatures.Add(DeviceFeature::RayTracingPipeline);
+
+            if (hasExt(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
+                capabilities_.hasRayQuery = true;
+                capabilities_.enabledFeatures.Add(DeviceFeature::RayQuery);
+            }
+            if (hasExt(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
+                capabilities_.hasRayTracingPipeline = true;
+                capabilities_.enabledFeatures.Add(DeviceFeature::RayTracingPipeline);
+            }
         }
 
         // Variable rate shading
@@ -1576,7 +1607,7 @@ namespace miki::rhi {
         VkPhysicalDeviceMemoryProperties memProps{};
         vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memProps);
 
-        uint32_t outSize = static_cast<uint32_t>(out.size());
+        auto outSize = static_cast<uint32_t>(out.size());
         uint32_t count = (outSize < memProps.memoryHeapCount) ? outSize : memProps.memoryHeapCount;
         for (uint32_t i = 0; i < count; ++i) {
             out[i].heapIndex = i;
