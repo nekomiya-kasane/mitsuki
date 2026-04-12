@@ -201,8 +201,19 @@ miki_add_test(test_multi_target            tests/shader/test_multi_target.cpp)
 miki_add_test(test_shader_watcher          tests/shader/test_shader_watcher.cpp)
 miki_add_test(test_capability_annotations  tests/shader/test_capability_annotations.cpp)
 
+# -- Shader pipeline tests (Phase 2) -----------------------------------------
+miki_add_test(test_reflection_layout          tests/shader/test_reflection_layout.cpp)
+miki_add_test(test_link_time_specialization   tests/shader/test_link_time_specialization.cpp)
+miki_add_test(test_struct_layout_validation   tests/shader/test_struct_layout_validation.cpp)
+miki_add_test(test_async_pipeline_compiler    tests/shader/test_async_pipeline_compiler.cpp)
+
 # Shader tests need to know where shader source files are
-foreach(_shader_test test_slang_compiler test_permutation_cache test_multi_target test_shader_watcher test_capability_annotations)
+foreach(_shader_test
+    test_slang_compiler test_permutation_cache
+    test_multi_target test_shader_watcher test_capability_annotations
+    test_reflection_layout test_link_time_specialization
+    test_struct_layout_validation test_async_pipeline_compiler
+)
     if(TARGET ${_shader_test})
         target_compile_definitions(${_shader_test} PRIVATE
             MIKI_SHADER_DIR="${CMAKE_SOURCE_DIR}/shaders/miki"

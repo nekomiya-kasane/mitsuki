@@ -25,6 +25,7 @@
 #include <fstream>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -496,9 +497,51 @@ namespace miki::shader {
             return CreateSession(iDesc.target, macros);
         }
 
+        static auto SynthesizeLinkTimeModule(ShaderCompileDesc const& iDesc, std::string const& iMainSource)
+            -> std::string {
+            if (iDesc.linkTimeConstants.empty() && iDesc.linkTimeTypes.empty()) {
+                return {};
+            }
+
+            std::string src;
+            // Extract import statements from main shader so type names resolve in the link-time module
+            {
+                std::istringstream stream(iMainSource);
+                std::string line;
+                while (std::getline(stream, line)) {
+                    // Match lines like: import miki_brdf; or __include "foo";
+                    auto trimmed = line;
+                    while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t')) {
+                        trimmed.erase(trimmed.begin());
+                    }
+                    if (trimmed.starts_with("import ") || trimmed.starts_with("__include ")) {
+                        src += line + "\n";
+                    }
+                }
+                if (!src.empty()) {
+                    src += "\n";
+                }
+            }
+
+            for (auto const& [name, value] : iDesc.linkTimeConstants) {
+                src += "export static const int " + name + " = " + value + ";\n";
+            }
+            for (auto const& [name, typeSpec] : iDesc.linkTimeTypes) {
+                // typeSpec format: "ConcreteType:IInterface"
+                auto colonPos = typeSpec.find(':');
+                if (colonPos != std::string::npos) {
+                    auto concreteType = typeSpec.substr(0, colonPos);
+                    auto interfaceName = typeSpec.substr(colonPos + 1);
+                    src += "export struct " + name + " : " + interfaceName + " = " + concreteType + ";\n";
+                }
+            }
+            return src;
+        }
+
         auto CompileToBlob(
             slang::ISession* iSession, std::string const& iSource, std::string const& iSourcePath,
-            std::string const& iEntryPoint, ShaderStage iStage, ShaderTarget iTarget
+            std::string const& iEntryPoint, ShaderStage iStage, ShaderTarget iTarget,
+            std::string const& iLinkTimeModuleSrc = {}
         ) -> core::Result<ShaderBlob> {
             Slang::ComPtr<slang::IBlob> diagnostics;
 
@@ -519,10 +562,29 @@ namespace miki::shader {
                 return std::unexpected(core::ErrorCode::ShaderCompilationFailed);
             }
 
-            slang::IComponentType* components[] = {module, entryPoint.get()};
+            // Build component list: module + entry point + optional link-time specialization module
+            std::vector<slang::IComponentType*> components = {module, entryPoint.get()};
+
+            Slang::ComPtr<slang::IModule> linkTimeModule;  // must outlive createCompositeComponentType
+            if (!iLinkTimeModuleSrc.empty()) {
+                auto* ltm = iSession->loadModuleFromSourceString(
+                    "mikiLinkTimeSpec", "miki-link-time-spec.slang", iLinkTimeModuleSrc.c_str(), diagnostics.writeRef()
+                );
+                if (!ltm) {
+                    RecordBlobDiagnostic(diagnostics.get());
+                    MIKI_LOG_ERROR(
+                        debug::LogCategory::Shader, "[SlangCompiler] Failed to load link-time specialization module"
+                    );
+                    return std::unexpected(core::ErrorCode::ShaderCompilationFailed);
+                }
+                linkTimeModule = ltm;
+                components.push_back(ltm);
+            }
+
             Slang::ComPtr<slang::IComponentType> composedProgram;
             auto composeResult = iSession->createCompositeComponentType(
-                components, 2, composedProgram.writeRef(), diagnostics.writeRef()
+                components.data(), static_cast<SlangInt>(components.size()), composedProgram.writeRef(),
+                diagnostics.writeRef()
             );
             if (SLANG_FAILED(composeResult)) {
                 RecordBlobDiagnostic(diagnostics.get());
@@ -652,7 +714,7 @@ namespace miki::shader {
 
         auto ExtractReflection(
             slang::ISession* iSession, ShaderCompileDesc const& iDesc, std::string const& iSource,
-            std::string const& iSourcePath
+            std::string const& iSourcePath, std::string const& iLinkTimeModuleSrc = {}
         ) -> core::Result<ShaderReflection> {
             Slang::ComPtr<slang::IBlob> diagnostics;
 
@@ -680,10 +742,25 @@ namespace miki::shader {
                 return std::unexpected(core::ErrorCode::ShaderCompilationFailed);
             }
 
-            slang::IComponentType* components[] = {module, entryPoint.get()};
+            std::vector<slang::IComponentType*> components = {module, entryPoint.get()};
+
+            Slang::ComPtr<slang::IModule> linkTimeModule;
+            if (!iLinkTimeModuleSrc.empty()) {
+                auto* ltm = iSession->loadModuleFromSourceString(
+                    "mikiLinkTimeSpec", "miki-link-time-spec.slang", iLinkTimeModuleSrc.c_str(), diagnostics.writeRef()
+                );
+                if (!ltm) {
+                    RecordBlobDiagnostic(diagnostics.get());
+                    return std::unexpected(core::ErrorCode::ShaderCompilationFailed);
+                }
+                linkTimeModule = ltm;
+                components.push_back(ltm);
+            }
+
             Slang::ComPtr<slang::IComponentType> composedProgram;
             auto composeResult = iSession->createCompositeComponentType(
-                components, 2, composedProgram.writeRef(), diagnostics.writeRef()
+                components.data(), static_cast<SlangInt>(components.size()), composedProgram.writeRef(),
+                diagnostics.writeRef()
             );
             if (SLANG_FAILED(composeResult) || !composedProgram) {
                 RecordBlobDiagnostic(diagnostics.get());
@@ -822,8 +899,10 @@ namespace miki::shader {
             return std::unexpected(sessionResult.error());
         }
 
-        auto result
-            = impl_->CompileToBlob(sessionResult->get(), source, pathStr, iDesc.entryPoint, iDesc.stage, iDesc.target);
+        auto linkTimeSrc = Impl::SynthesizeLinkTimeModule(iDesc, source);
+        auto result = impl_->CompileToBlob(
+            sessionResult->get(), source, pathStr, iDesc.entryPoint, iDesc.stage, iDesc.target, linkTimeSrc
+        );
 
         auto t1 = std::chrono::steady_clock::now();
         auto ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -981,11 +1060,18 @@ namespace miki::shader {
     }
 
     auto SlangCompiler::Reflect(ShaderCompileDesc const& iDesc) -> core::Result<ShaderReflection> {
-        // Read source OUTSIDE the lock
-        auto source = ReadFileToString(iDesc.sourcePath);
-        if (source.empty()) {
-            return std::unexpected(core::ErrorCode::IoError);
+        // Read source OUTSIDE the lock (same logic as Compile)
+        std::string source;
+        if (!iDesc.sourceCode.empty()) {
+            source = iDesc.sourceCode;
+        } else {
+            source = ReadFileToString(iDesc.sourcePath);
+            if (source.empty()) {
+                return std::unexpected(core::ErrorCode::IoError);
+            }
         }
+
+        auto pathStr = iDesc.sourcePath.empty() ? std::string("<embedded>") : iDesc.sourcePath.string();
 
         std::lock_guard lock(impl_->compileMutex);
         impl_->lastDiagnostics.clear();
@@ -995,8 +1081,8 @@ namespace miki::shader {
             return std::unexpected(sessionResult.error());
         }
 
-        auto pathStr = iDesc.sourcePath.string();
-        return impl_->ExtractReflection(sessionResult->get(), iDesc, source, pathStr);
+        auto linkTimeSrc = Impl::SynthesizeLinkTimeModule(iDesc, source);
+        return impl_->ExtractReflection(sessionResult->get(), iDesc, source, pathStr, linkTimeSrc);
     }
 
     auto SlangCompiler::AddSearchPath(std::filesystem::path const& iPath) -> void {

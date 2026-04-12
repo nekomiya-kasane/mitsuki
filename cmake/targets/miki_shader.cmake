@@ -30,6 +30,9 @@ set(MIKI_SHADER_SOURCES
     src/miki/shader/SlangFeatureProbe.cpp
     src/miki/shader/PermutationCache.cpp
     src/miki/shader/ShaderWatcher.cpp
+    src/miki/shader/ShaderLayoutGenerator.cpp
+    src/miki/shader/StructLayoutValidator.cpp
+    src/miki/shader/AsyncPipelineCompiler.cpp
 )
 
 add_library(miki_shader OBJECT ${MIKI_SHADER_SOURCES})

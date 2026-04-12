@@ -201,6 +201,20 @@ namespace miki::shader {
         ShaderTarget target;  ///< Target type + version (use PreferredShaderTarget() or factory methods)
         ShaderPermutationKey permutation;
         std::vector<std::pair<std::string, std::string>> defines;
+
+        /** @brief Link-time constant overrides (§15.5.2).
+         *  Key: constant name (e.g. "kMaxClusterLights"), Value: integer value as string.
+         *  Synthesized into: `export static const int <key> = <value>;`
+         */
+        std::vector<std::pair<std::string, std::string>> linkTimeConstants;
+
+        /** @brief Link-time type specializations (§15.5.2).
+         *  Key: extern struct name (e.g. "MaterialImpl"), Value: concrete type (e.g. "DSPBR").
+         *  The interface conformance is inferred from the extern declaration in the shader.
+         *  Synthesized into: `export struct <key> : <interface> = <value>;`
+         *  The interface name must be provided in the value as "ConcreteType:IInterface".
+         */
+        std::vector<std::pair<std::string, std::string>> linkTimeTypes;
     };
 
     /** @brief Configuration for the PermutationCache. */
