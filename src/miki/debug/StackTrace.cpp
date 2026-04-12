@@ -51,7 +51,9 @@ namespace miki::debug {
 
         /** @brief Extract basename from a full path. */
         auto ExtractModuleName(const char* path) -> std::string {
-            if (!path || !*path) return {};
+            if (!path || !*path) {
+                return {};
+            }
             std::string_view sv{path};
             auto pos = sv.find_last_of("\\/");
             return std::string{(pos != std::string_view::npos) ? sv.substr(pos + 1) : sv};
@@ -64,12 +66,13 @@ namespace miki::debug {
         // +1 to skip Capture() itself
         uint32_t totalSkip = skipFrames + 1;
         uint32_t totalCapture = totalSkip + maxFrames;
-        if (totalCapture > 128) totalCapture = 128;
+        if (totalCapture > 128) {
+            totalCapture = 128;
+        }
 
         std::vector<void*> rawFrames(totalCapture);
         USHORT captured = CaptureStackBackTrace(
-            static_cast<DWORD>(totalSkip), static_cast<DWORD>(maxFrames),
-            rawFrames.data(), nullptr
+            static_cast<DWORD>(totalSkip), static_cast<DWORD>(maxFrames), rawFrames.data(), nullptr
         );
 
         StackTrace trace;
@@ -124,7 +127,9 @@ namespace miki::debug {
 
     namespace {
         auto DemangleSymbol(const char* mangled) -> std::string {
-            if (!mangled || !*mangled) return {};
+            if (!mangled || !*mangled) {
+                return {};
+            }
             int status = 0;
             char* demangled = abi::__cxa_demangle(mangled, nullptr, nullptr, &status);
             std::string result = (status == 0 && demangled) ? demangled : mangled;
@@ -133,7 +138,9 @@ namespace miki::debug {
         }
 
         auto ExtractModuleName(const char* path) -> std::string {
-            if (!path || !*path) return {};
+            if (!path || !*path) {
+                return {};
+            }
             std::string_view sv{path};
             auto pos = sv.find_last_of('/');
             return std::string{(pos != std::string_view::npos) ? sv.substr(pos + 1) : sv};
@@ -143,14 +150,18 @@ namespace miki::debug {
     auto StackTrace::Capture(uint32_t skipFrames, uint32_t maxFrames) -> StackTrace {
         uint32_t totalSkip = skipFrames + 1;  // +1 to skip Capture() itself
         uint32_t totalCapture = totalSkip + maxFrames;
-        if (totalCapture > 128) totalCapture = 128;
+        if (totalCapture > 128) {
+            totalCapture = 128;
+        }
 
         std::vector<void*> rawFrames(totalCapture);
         int captured = backtrace(rawFrames.data(), static_cast<int>(totalCapture));
 
         StackTrace trace;
         int start = static_cast<int>(totalSkip);
-        if (start > captured) start = captured;
+        if (start > captured) {
+            start = captured;
+        }
         trace.frames_.reserve(static_cast<size_t>(captured - start));
 
         for (int i = start; i < captured; ++i) {
@@ -162,8 +173,7 @@ namespace miki::debug {
                 if (info.dli_sname) {
                     frame.symbol = DemangleSymbol(info.dli_sname);
                     frame.offset = static_cast<uint64_t>(
-                        reinterpret_cast<const char*>(rawFrames[i])
-                        - reinterpret_cast<const char*>(info.dli_saddr)
+                        reinterpret_cast<const char*>(rawFrames[i]) - reinterpret_cast<const char*>(info.dli_saddr)
                     );
                 }
                 if (info.dli_fname) {
@@ -183,9 +193,15 @@ namespace miki::debug {
     // Accessors
     // =========================================================================
 
-    auto StackTrace::GetFrames() const -> const std::vector<StackFrame>& { return frames_; }
-    auto StackTrace::Size() const -> uint32_t { return static_cast<uint32_t>(frames_.size()); }
-    auto StackTrace::Empty() const -> bool { return frames_.empty(); }
+    auto StackTrace::GetFrames() const -> const std::vector<StackFrame>& {
+        return frames_;
+    }
+    auto StackTrace::Size() const -> uint32_t {
+        return static_cast<uint32_t>(frames_.size());
+    }
+    auto StackTrace::Empty() const -> bool {
+        return frames_.empty();
+    }
 
     // =========================================================================
     // FormatFrameCompact — single line, ≤ ~200 chars, no ANSI
@@ -196,7 +212,9 @@ namespace miki::debug {
         auto RepeatStr(std::string_view s, uint32_t n) -> std::string {
             std::string result;
             result.reserve(s.size() * n);
-            for (uint32_t i = 0; i < n; ++i) result += s;
+            for (uint32_t i = 0; i < n; ++i) {
+                result += s;
+            }
             return result;
         }
     }  // namespace
@@ -215,7 +233,9 @@ namespace miki::debug {
             // Extract just filename for compact format
             std::string_view file{frame.sourceFile};
             auto pos = file.find_last_of("\\/");
-            if (pos != std::string_view::npos) file = file.substr(pos + 1);
+            if (pos != std::string_view::npos) {
+                file = file.substr(pos + 1);
+            }
             return std::format("#{:<2} {} ({}:{} +0x{:X})", index, sym, file, frame.sourceLine, frame.offset);
         }
 
@@ -249,9 +269,12 @@ namespace miki::debug {
     namespace {
         // Shared thread-local console for stderr
         auto GetStderrConsole() -> tapioca::basic_console& {
-            thread_local tapioca::basic_console console{
-                tapioca::console_config{tapioca::pal::stderr_sink()}
-            };
+            static std::once_flag initFlag;
+            std::call_once(initFlag, [] {
+                tapioca::terminal::enable_utf8();
+                tapioca::terminal::enable_vt_processing();
+            });
+            thread_local tapioca::basic_console console{tapioca::console_config{.sink = tapioca::pal::stderr_sink()}};
             return console;
         }
 
@@ -284,12 +307,18 @@ namespace miki::debug {
     }  // namespace
 
     void StackTrace::PrintColored(std::string_view title) const {
-        if (frames_.empty()) return;
+        if (frames_.empty()) {
+            return;
+        }
 
         auto& con = GetStderrConsole();
         uint32_t termWidth = con.term_width();
-        if (termWidth < 40) termWidth = 80;
-        if (termWidth > 160) termWidth = 160;
+        if (termWidth < 40) {
+            termWidth = 80;
+        }
+        if (termWidth > 160) {
+            termWidth = 160;
+        }
 
         // Compute content width (inside box borders)
         uint32_t innerWidth = termWidth - 4;  // "│ " ... " │"
@@ -312,7 +341,7 @@ namespace miki::debug {
 
             // Calculate decorative fill
             // "╭─ " + title + " ─...─ " + count + " ─╮"
-            uint32_t fixedChars = 6;  // "╭─ " + " ─╮"
+            uint32_t fixedChars = 6;                                                             // "╭─ " + " ─╮"
             uint32_t contentLen = static_cast<uint32_t>(titleStr.size() + countStr.size()) + 3;  // " ─ " separator
             uint32_t fillLen = (termWidth > fixedChars + contentLen) ? (termWidth - fixedChars - contentLen) : 1;
 
@@ -365,7 +394,9 @@ namespace miki::debug {
                     con.emit_styled(kUnknownStyle, sym, buf);
                 } else {
                     con.emit_styled(kSymbolStyle, sym, buf);
-                    if (truncated) con.emit_styled(kBoxStyle, "\u2026", buf);  // …
+                    if (truncated) {
+                        con.emit_styled(kBoxStyle, "\u2026", buf);  // …
+                    }
                 }
                 used += static_cast<uint32_t>(sym.size()) + (truncated ? 1 : 0);
 
@@ -427,10 +458,10 @@ namespace miki::debug {
 
             // Separator between frames (thin dotted line) — skip after last
             if (i + 1 < static_cast<uint32_t>(frames_.size())) {
-                con.emit_styled(kBoxStyle, "\u2502  ", buf);  // │
+                con.emit_styled(kBoxStyle, "\u2502  ", buf);             // │
                 std::string dots = RepeatStr("\u00B7", innerWidth - 2);  // · repeated
                 con.emit_styled(kBoxStyle, dots, buf);
-                con.emit_styled(kBoxStyle, " \u2502", buf);   // │
+                con.emit_styled(kBoxStyle, " \u2502", buf);  // │
                 con.emit_reset(buf);
                 buf += '\n';
             }
@@ -439,7 +470,7 @@ namespace miki::debug {
         // ── Bottom border ───────────────────────────────────────────────────
         emitEmptyLine();
         {
-            con.emit_styled(kBoxStyle, "\u2570", buf);  // ╰
+            con.emit_styled(kBoxStyle, "\u2570", buf);              // ╰
             std::string fill = RepeatStr("\u2500", termWidth - 2);  // ─ repeated
             con.emit_styled(kBoxStyle, fill, buf);
             con.emit_styled(kBoxStyle, "\u256F", buf);  // ╯

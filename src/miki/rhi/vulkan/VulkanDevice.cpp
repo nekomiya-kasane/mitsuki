@@ -499,6 +499,18 @@ namespace miki::rhi {
             features12.descriptorBindingPartiallyBound = VK_TRUE;
             features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
             features12.runtimeDescriptorArray = VK_TRUE;
+            // UpdateAfterBind per descriptor type — required by CreateDescriptorLayoutImpl
+            // which sets VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT on all bindings
+            features12.descriptorBindingSampledImageUpdateAfterBind
+                = supported12.descriptorBindingSampledImageUpdateAfterBind;
+            features12.descriptorBindingStorageImageUpdateAfterBind
+                = supported12.descriptorBindingStorageImageUpdateAfterBind;
+            features12.descriptorBindingStorageBufferUpdateAfterBind
+                = supported12.descriptorBindingStorageBufferUpdateAfterBind;
+            features12.descriptorBindingUniformTexelBufferUpdateAfterBind
+                = supported12.descriptorBindingUniformTexelBufferUpdateAfterBind;
+            features12.descriptorBindingStorageTexelBufferUpdateAfterBind
+                = supported12.descriptorBindingStorageTexelBufferUpdateAfterBind;
             features12.timelineSemaphore = VK_TRUE;
             features12.bufferDeviceAddress = VK_TRUE;
 

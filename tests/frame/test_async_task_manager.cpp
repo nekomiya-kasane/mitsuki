@@ -1034,7 +1034,7 @@ TEST_P(AsyncTaskManagerTest, Complex01_SubmitWaitCycleSchedulerState) {
             << "Completion value must exceed previous cycle's value at cycle " << cycle;
 
         // Verify scheduler currentValue advanced exactly by 1 per submit
-        auto schedulerCurrent = scheduler_.GetCurrentValue(QueueType::Compute);
+        auto schedulerCurrent = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
         EXPECT_EQ(schedulerCurrent, point.value)
             << "Scheduler currentValue must equal completion value at cycle " << cycle;
 
@@ -1068,7 +1068,7 @@ TEST_P(AsyncTaskManagerTest, Complex02_CascadingBatchSingleSignalArithmetic) {
     ASSERT_TRUE(result.has_value());
     auto& atm = *result;
 
-    auto baselineValue = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto baselineValue = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
 
     // Phase 1: SubmitBatched(3 cmds) → allocates 3 signals
     std::vector<CommandBufferHandle> batch1;
@@ -1083,7 +1083,7 @@ TEST_P(AsyncTaskManagerTest, Complex02_CascadingBatchSingleSignalArithmetic) {
     ASSERT_TRUE(h1.has_value());
     auto p1 = atm.GetCompletionPoint(*h1);
     EXPECT_EQ(p1.value, baselineValue + 3) << "3-batch must advance by exactly 3";
-    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Compute), baselineValue + 3);
+    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::AsyncCompute), baselineValue + 3);
 
     // Phase 2: Submit(single) → allocates 1 signal
     auto cmd2 = RecordEmptyComputeCmd();
@@ -1094,7 +1094,7 @@ TEST_P(AsyncTaskManagerTest, Complex02_CascadingBatchSingleSignalArithmetic) {
     ASSERT_TRUE(h2.has_value());
     auto p2 = atm.GetCompletionPoint(*h2);
     EXPECT_EQ(p2.value, baselineValue + 4) << "Single submit after 3-batch must be baseline+4";
-    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Compute), baselineValue + 4);
+    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::AsyncCompute), baselineValue + 4);
 
     // Phase 3: SubmitBatched(2 cmds) → allocates 2 signals
     std::vector<CommandBufferHandle> batch3;
@@ -1109,7 +1109,7 @@ TEST_P(AsyncTaskManagerTest, Complex02_CascadingBatchSingleSignalArithmetic) {
     ASSERT_TRUE(h3.has_value());
     auto p3 = atm.GetCompletionPoint(*h3);
     EXPECT_EQ(p3.value, baselineValue + 6) << "2-batch after single must be baseline+6";
-    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Compute), baselineValue + 6);
+    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::AsyncCompute), baselineValue + 6);
 
     // Total: 3 tasks tracked, 6 signals allocated
     EXPECT_EQ(atm.ActiveTaskCount(), 3u);
@@ -1152,9 +1152,9 @@ TEST_P(AsyncTaskManagerTest, Complex03_CrossQueueDependencyInjection) {
     EXPECT_TRUE(completionPoint.semaphore.IsValid());
     EXPECT_GT(completionPoint.value, 0u);
 
-    // Inject dependency: Graphics queue must wait for ATM's compute task
+    // Inject dependency: Graphics queue must wait for ATM's async compute task
     scheduler_.AddDependency(
-        QueueType::Graphics, QueueType::Compute, completionPoint.value, PipelineStage::AllCommands
+        QueueType::Graphics, QueueType::AsyncCompute, completionPoint.value, PipelineStage::AllCommands
     );
 
     // Verify the dependency was recorded
@@ -1204,10 +1204,10 @@ TEST_P(AsyncTaskManagerTest, Complex04_DualATMQueueIsolation) {
     ASSERT_TRUE(resultD.has_value());
     auto& atmD = *resultD;
 
-    auto computeBefore = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto asyncComputeBefore = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
     auto graphicsBefore = scheduler_.GetCurrentValue(QueueType::Graphics);
 
-    // Submit to Level C ATM → should advance Compute timeline
+    // Submit to Level C ATM → should advance AsyncCompute timeline
     auto cmdC = RecordEmptyComputeCmd();
     if (!cmdC.IsValid()) {
         GTEST_SKIP() << "Compute cmd failed";
@@ -1215,9 +1215,9 @@ TEST_P(AsyncTaskManagerTest, Complex04_DualATMQueueIsolation) {
     auto hC = atmC.Submit(cmdC);
     ASSERT_TRUE(hC.has_value());
 
-    auto computeAfterC = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto asyncComputeAfterC = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
     auto graphicsAfterC = scheduler_.GetCurrentValue(QueueType::Graphics);
-    EXPECT_EQ(computeAfterC, computeBefore + 1) << "Level C must advance Compute by exactly 1";
+    EXPECT_EQ(asyncComputeAfterC, asyncComputeBefore + 1) << "Level C must advance AsyncCompute by exactly 1";
     EXPECT_EQ(graphicsAfterC, graphicsBefore) << "Level C must not touch Graphics";
 
     // Submit to Level D ATM → should advance Graphics timeline
@@ -1228,9 +1228,9 @@ TEST_P(AsyncTaskManagerTest, Complex04_DualATMQueueIsolation) {
     auto hD = atmD.Submit(cmdD);
     ASSERT_TRUE(hD.has_value());
 
-    auto computeAfterD = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto asyncComputeAfterD = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
     auto graphicsAfterD = scheduler_.GetCurrentValue(QueueType::Graphics);
-    EXPECT_EQ(computeAfterD, computeBefore + 1) << "Level D must not touch Compute";
+    EXPECT_EQ(asyncComputeAfterD, asyncComputeBefore + 1) << "Level D must not touch AsyncCompute";
     EXPECT_EQ(graphicsAfterD, graphicsBefore + 1) << "Level D must advance Graphics by exactly 1";
 
     // Completion semaphores must be different
@@ -1317,7 +1317,7 @@ TEST_P(AsyncTaskManagerTest, Complex06_IncreasingBatchSizes) {
     ASSERT_TRUE(result.has_value());
     auto& atm = *result;
 
-    auto baseline = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto baseline = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
 
     // Batch(1)
     auto cmd1 = RecordEmptyComputeCmd();
@@ -1359,7 +1359,7 @@ TEST_P(AsyncTaskManagerTest, Complex06_IncreasingBatchSizes) {
     EXPECT_EQ(p3.value, baseline + 6) << "Batch(3) signal must be baseline+6";
 
     // Scheduler state: 6 total signals allocated
-    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Compute), baseline + 6);
+    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::AsyncCompute), baseline + 6);
 
     // 3 tracked tasks
     EXPECT_EQ(atm.ActiveTaskCount(), 3u);
@@ -1497,7 +1497,7 @@ TEST_P(AsyncTaskManagerTest, Deadlock03_MultiATMInterleavedStress) {
     ASSERT_TRUE(resultD.has_value());
     auto& atmD = *resultD;
 
-    auto computeBaseline = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto asyncComputeBaseline = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
     auto graphicsBaseline = scheduler_.GetCurrentValue(QueueType::Graphics);
 
     constexpr int kRounds = 4;
@@ -1518,7 +1518,7 @@ TEST_P(AsyncTaskManagerTest, Deadlock03_MultiATMInterleavedStress) {
         }
         auto hA = atmA.Submit(cmdA);
         ASSERT_TRUE(hA.has_value());
-        allTasks.push_back({&atmA, *hA, atmA.GetCompletionPoint(*hA), QueueType::Compute});
+        allTasks.push_back({&atmA, *hA, atmA.GetCompletionPoint(*hA), QueueType::AsyncCompute});
 
         // ATM-D submits to Graphics
         auto cmdD = RecordEmptyGraphicsCmd();
@@ -1536,23 +1536,23 @@ TEST_P(AsyncTaskManagerTest, Deadlock03_MultiATMInterleavedStress) {
         }
         auto hB = atmB.Submit(cmdB);
         ASSERT_TRUE(hB.has_value());
-        allTasks.push_back({&atmB, *hB, atmB.GetCompletionPoint(*hB), QueueType::Compute});
+        allTasks.push_back({&atmB, *hB, atmB.GetCompletionPoint(*hB), QueueType::AsyncCompute});
     }
 
-    // Verify scheduler advanced correctly: 2*kRounds compute signals, kRounds graphics signals
-    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Compute), computeBaseline + 2 * kRounds)
-        << "Compute timeline must advance by 2 per round (ATM-A + ATM-B)";
+    // Verify scheduler advanced correctly: 2*kRounds asyncCompute signals, kRounds graphics signals
+    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::AsyncCompute), asyncComputeBaseline + 2 * kRounds)
+        << "AsyncCompute timeline must advance by 2 per round (ATM-A + ATM-B)";
     EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Graphics), graphicsBaseline + kRounds)
         << "Graphics timeline must advance by 1 per round (ATM-D)";
 
     // Verify each task's completion point uses the correct semaphore
-    auto computeSem = scheduler_.GetSemaphore(QueueType::Compute);
+    auto asyncComputeSem = scheduler_.GetSemaphore(QueueType::AsyncCompute);
     auto graphicsSem = scheduler_.GetSemaphore(QueueType::Graphics);
     for (size_t i = 0; i < allTasks.size(); ++i) {
         auto& t = allTasks[i];
         EXPECT_TRUE(t.point.semaphore.IsValid()) << "Task " << i << " must have valid semaphore";
-        if (t.expectedQueue == QueueType::Compute) {
-            EXPECT_EQ(t.point.semaphore.value, computeSem.value) << "Task " << i << " must use Compute sem";
+        if (t.expectedQueue == QueueType::AsyncCompute) {
+            EXPECT_EQ(t.point.semaphore.value, asyncComputeSem.value) << "Task " << i << " must use AsyncCompute sem";
         } else {
             EXPECT_EQ(t.point.semaphore.value, graphicsSem.value) << "Task " << i << " must use Graphics sem";
         }
@@ -1593,7 +1593,7 @@ TEST_P(AsyncTaskManagerTest, Deadlock04_MassiveSequentialSubmitStress) {
     ASSERT_TRUE(result.has_value());
     auto& atm = *result;
 
-    auto baseline = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto baseline = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
     constexpr int kTaskCount = 32;
 
     std::vector<AsyncTaskHandle> handles;
@@ -1611,7 +1611,7 @@ TEST_P(AsyncTaskManagerTest, Deadlock04_MassiveSequentialSubmitStress) {
 
     // Verify state
     EXPECT_EQ(atm.ActiveTaskCount(), static_cast<uint32_t>(kTaskCount));
-    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Compute), baseline + kTaskCount);
+    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::AsyncCompute), baseline + kTaskCount);
 
     // All signal values must be strictly sequential
     for (int i = 0; i < kTaskCount; ++i) {
@@ -1688,7 +1688,7 @@ TEST_P(AsyncTaskManagerTest, Deadlock06_BatchCrossQueueThenShutdown) {
     ASSERT_TRUE(result.has_value());
     auto& atm = *result;
 
-    auto computeBaseline = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto asyncComputeBaseline = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
 
     // Phase 1: Batched compute work (3 sub-batches)
     std::vector<CommandBufferHandle> batch;
@@ -1702,10 +1702,12 @@ TEST_P(AsyncTaskManagerTest, Deadlock06_BatchCrossQueueThenShutdown) {
     auto hBatch = atm.SubmitBatched(batch);
     ASSERT_TRUE(hBatch.has_value());
     auto ptBatch = atm.GetCompletionPoint(*hBatch);
-    EXPECT_EQ(ptBatch.value, computeBaseline + 3);
+    EXPECT_EQ(ptBatch.value, asyncComputeBaseline + 3);
 
     // Phase 2: Graphics injects dependency on the batch result
-    scheduler_.AddDependency(QueueType::Graphics, QueueType::Compute, ptBatch.value, PipelineStage::FragmentShader);
+    scheduler_.AddDependency(
+        QueueType::Graphics, QueueType::AsyncCompute, ptBatch.value, PipelineStage::FragmentShader
+    );
     EXPECT_FALSE(scheduler_.DetectDeadlock()) << "Uni-directional G→C must not deadlock";
 
     // Verify the dependency entry
@@ -1728,16 +1730,16 @@ TEST_P(AsyncTaskManagerTest, Deadlock06_BatchCrossQueueThenShutdown) {
     auto hSingle = atm.Submit(cmd2);
     ASSERT_TRUE(hSingle.has_value());
     auto ptSingle = atm.GetCompletionPoint(*hSingle);
-    EXPECT_EQ(ptSingle.value, computeBaseline + 4) << "Single submit after 3-batch must be baseline+4";
+    EXPECT_EQ(ptSingle.value, asyncComputeBaseline + 4) << "Single submit after 3-batch must be baseline+4";
 
-    // Phase 5: Reverse-inject — now Compute waits on Graphics (common for readback fence)
-    scheduler_.AddDependency(QueueType::Compute, QueueType::Graphics, gSig, PipelineStage::AllCommands);
+    // Phase 5: Reverse-inject — now AsyncCompute waits on Graphics (common for readback fence)
+    scheduler_.AddDependency(QueueType::AsyncCompute, QueueType::Graphics, gSig, PipelineStage::AllCommands);
     // gSig was committed → currentValue >= gSig → this edge should be "satisfied"
     // so no deadlock even though we have bidirectional edges (both are satisfied)
     EXPECT_FALSE(scheduler_.DetectDeadlock()) << "Bidirectional edges with all satisfied values must not deadlock";
 
     // Verify scheduler state
-    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Compute), computeBaseline + 4);
+    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::AsyncCompute), asyncComputeBaseline + 4);
     EXPECT_EQ(atm.ActiveTaskCount(), 2u);
 
     // Phase 6: Shutdown under this complex state
@@ -1811,7 +1813,7 @@ TEST_P(AsyncTaskManagerTest, Deadlock07_RapidSubmitShutdownCycles) {
     for (int c = 0; c < kCycles; ++c) {
         expectedTotal += (c % 3) + 1;
     }
-    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::Compute), static_cast<uint64_t>(expectedTotal));
+    EXPECT_EQ(scheduler_.GetCurrentValue(QueueType::AsyncCompute), static_cast<uint64_t>(expectedTotal));
 }
 
 // ============================================================================
