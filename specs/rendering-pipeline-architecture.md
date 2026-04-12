@@ -605,16 +605,29 @@ BLAS Update (per-body, mode-selected):
   -> TLAS Rebuild (<0.1ms)
   |
   v
-GPU Culling (frustum + HiZ + LOD select + normal cone backface)
-  |
-  v
-Macro-Binning (3 buckets via atomic append)
+GPU Culling Pass A (frustum + prev-frame HiZ + LOD + normal cone)
+  |                              |
+  v                              v
+VisibleList_A              RejectedList_A
+  |                              |
+  v                              |
+DepthPrePass 1A -> HiZ Build    |
+                     |           |
+                     v           v
+              GPU Re-Culling Pass B (frustum + current-frame HiZ)
+                     |
+                     v
+               VisibleList_B -> DepthPrePass 1B (incremental)
+                     |
+                     v
+Macro-Binning (3 buckets via atomic append, VisibleList_A + VisibleList_B)
   |                    |                    |
   v                    v                    v
 Bucket 1: Opaque    Bucket 2: Transparent  Bucket 3: Edge/HLR
-Task->Mesh->VisBuffer  LL-OIT Insert         Edge Classify
-(1 PSO, 1 draw)                              Edge Visibility
-  |                    |                    Edge SDF Render
+Task(meshlet cull)    LL-OIT Insert         Edge Classify
+  ->Mesh(tri cull)                          Edge Visibility
+  ->VisBuffer                               Edge SDF Render
+  |                    |                      |
   v                    v                      |
 Material Resolve    OIT Sort+Resolve          |
 (tile-based DSPBR)     |                      |
@@ -670,41 +683,43 @@ Every step references the DAG pass number from §3.
 | ---- | ----------- | ----------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | —           | CPU: SceneBuffer upload | CPU→GPU              | Upload dirty GpuInstance[128B] to GPU SSBO (only changed instances)                                                                    |
 | 2    | —           | BLAS/TLAS update        | Compute/RT           | Refit (rigid) or Rebuild (topology change) → TLAS rebuild. §15.4                                                                       |
-| 3    | #1          | DepthPrePass + HiZ      | Graphics             | Depth-only render (all opaque) → D32F Reverse-Z. Compute HiZ mip pyramid (min per 2×2)                                                 |
-| 4    | #2          | GPU Culling             | Compute              | 2-phase: instance-level (frustum + HiZ occlusion + LOD + normal cone) → meshlet-level (task shader)                                    |
-| 5    | #3          | Light Cluster Assign    | Compute              | 3D froxel grid, light-centric atomicAdd, up to 4096 lights                                                                             |
-| 6    | #4          | Macro-Binning           | Compute              | Classify visible instances into 3 buckets: Opaque / Transparent / Edge                                                                 |
-| 7    | #5→#6→#9    | Task→Mesh→VisBuffer     | Graphics             | Single PSO, 1 draw call. Task shader emits meshlet groups → Mesh shader outputs triangles → VisBuffer R32G32_UINT                      |
-| 8    | #7          | SW Rasterizer (opt)     | Compute              | Small triangles (<4px²) → uint64 SSBO atomicMax → resolve pass → VisBuffer                                                             |
-| 9    | #10         | Material Resolve        | Compute (Async)      | Tile-based (16×16): BDA vertex fetch → DSPBR 8-layer BSDF → GBuffer MRT (RT0 albedo+metallic, RT1 normal+roughness, RT2 motion, Depth) |
-| 10   | #12         | VSM Render              | Graphics (Mesh)      | Virtual Shadow Maps: render only dirty pages (128×128 tiles, 16K² virtual)                                                             |
-| 11   | #14         | Shadow Atlas            | Graphics             | Point/spot light shadow: LRU tile atlas, distance-scaled resolution                                                                    |
-| 12   | #15         | GTAO                    | Compute              | Half-res, 8 directions × 2 horizon steps, bilateral upsample. Async compute candidate                                                  |
-| 13   | #17         | RTAO (opt)              | Compute (ray query)  | 1spp + 8-frame EMA, short-range ray (<1m)                                                                                              |
-| 14   | #18         | Deferred Resolve        | Compute              | Central lighting: GBuffer + ClusterGrid + IBL (SH L2 + specular cubemap) + VSM/Atlas + AO → HDR RGBA16F                                |
-| 15   | #19         | IBL Precompute          | Compute              | One-time: equirect→cubemap + SH L2 + specular prefilter + BRDF LUT. Cached                                                             |
-| 16   | #20         | RT Reflections (opt)    | Compute (ray query)  | Roughness < 0.3, full material eval on hit                                                                                             |
-| 17   | #21         | RT Shadows (opt)        | Compute (ray query)  | 1spp + temporal, soft penumbra                                                                                                         |
-| 18   | #22         | RT GI (opt)             | Compute (ray query)  | Half-res, SH probe cache                                                                                                               |
-| 19   | #25→#26     | LL-OIT Insert→Resolve   | Fragment+Compute     | Per-pixel linked list (per-tile counter), insertion sort ≤16 layers                                                                    |
-| 20   | #28→#29→#30 | HLR 4-stage             | Compute+Graphics     | Classify → HiZ visibility → SDF edge render → dash pattern                                                                             |
-| 21   | #31         | Section Plane           | Fragment (stencil)   | Clip + cap + ISO 128 hatch                                                                                                             |
-| 22   | #48         | SSR (opt)               | Compute              | Hi-Z ray march, half-res, temporal accumulation                                                                                        |
-| 23   | #49         | Bloom                   | Compute              | 6-level Gaussian chain, brightness extract > 1.0                                                                                       |
-| 24   | #50         | DoF (opt)               | Compute              | Gather-based bokeh (Jimenez 2014), half-res 16 samples                                                                                 |
-| 25   | #51         | Motion Blur (opt)       | Fragment             | McGuire 2012 tile-based, per-pixel directional                                                                                         |
-| 26   | #52         | Tone Mapping            | Fragment             | ACES/AgX/Khronos/Reinhard/Uncharted2/Linear + vignette + CA                                                                            |
-| 27   | #53         | TAA                     | Compute              | Halton(2,3) jitter, YCoCg clamp, motion rejection, reactive mask                                                                       |
-| 28   | #54         | Temporal Upscale (opt)  | Compute              | FSR 3.0 / DLSS 3.5                                                                                                                     |
-| 29   | #56         | CAS Sharpen             | Compute              | AMD FidelityFX CAS                                                                                                                     |
-| 30   | #57         | Color Grading (opt)     | Fragment             | 3D LUT 32³ RGBA8                                                                                                                       |
-| 31   | #59         | VRS Image (opt)         | Compute              | Luminance gradient → per-16×16 shading rate                                                                                            |
-| 32   | #60–#64     | Overlays                | Graphics (instanced) | Gizmo, Grid, ViewCube, Snap, Measurement                                                                                               |
-| 33   | #45         | PMI Render              | Graphics (instanced) | MSDF text + leaders + symbols                                                                                                          |
-| 34   | #46         | Analysis Overlay (opt)  | Fragment             | Zebra/Iso/Curvature/Draft/...                                                                                                          |
-| 35   | #47         | Color Bar               | Fragment             | Auto-generated legend                                                                                                                  |
-| 36   | #65         | LayerStack Compositor   | Fragment             | 6-layer alpha-blend: Scene + Preview + Overlay + Widgets + SVG + HUD                                                                   |
-| 37   | —           | Present                 | —                    | Swapchain present (VkQueuePresent / IDXGISwapChain::Present)                                                                           |
+| 3    | #2A         | GPU Culling Pass A      | Compute              | Instance-level cull (frustum + prev-frame HiZ occlusion + LOD + normal cone) → VisibleList_A + RejectedList_A                          |
+| 4    | #1A         | DepthPrePass + HiZ      | Graphics             | Render VisibleList_A (depth-only) → D32F Reverse-Z. Compute current-frame HiZ mip pyramid (min per 2×2)                                |
+| 5    | #2B         | GPU Re-Culling Pass B   | Compute              | Re-test RejectedList_A against current-frame HiZ → VisibleList_B. Static frames: skipped (dirty flag)                                  |
+| 5b   | #1B         | DepthPrePass Append     | Graphics             | Render VisibleList_B → incremental depth update + HiZ refresh. Skipped if VisibleList_B empty                                          |
+| 6    | #3          | Light Cluster Assign    | Compute              | 3D froxel grid, light-centric atomicAdd, up to 4096 lights                                                                             |
+| 7    | #4          | Macro-Binning           | Compute              | Classify visible instances into 3 buckets: Opaque / Transparent / Edge                                                                 |
+| 8    | #5→#6→#9    | Task→Mesh→VisBuffer     | Graphics             | Single PSO, 1 draw. Task: meshlet cull + compact. Mesh: per-triangle cull + VisBuffer R32G32_UINT                                      |
+| 9    | #7          | SW Rasterizer (opt)     | Compute              | Small triangles (<4px²) → uint64 SSBO atomicMax → resolve pass → VisBuffer                                                             |
+| 10   | #10         | Material Resolve        | Compute (Async)      | Tile-based (16×16): BDA vertex fetch → DSPBR 8-layer BSDF → GBuffer MRT (RT0 albedo+metallic, RT1 normal+roughness, RT2 motion, Depth) |
+| 11   | #12         | VSM Render              | Graphics (Mesh)      | Virtual Shadow Maps: render only dirty pages (128×128 tiles, 16K² virtual)                                                             |
+| 12   | #14         | Shadow Atlas            | Graphics             | Point/spot light shadow: LRU tile atlas, distance-scaled resolution                                                                    |
+| 13   | #15         | GTAO                    | Compute              | Half-res, 8 directions × 2 horizon steps, bilateral upsample. Async compute candidate                                                  |
+| 14   | #17         | RTAO (opt)              | Compute (ray query)  | 1spp + 8-frame EMA, short-range ray (<1m)                                                                                              |
+| 15   | #18         | Deferred Resolve        | Compute              | Central lighting: GBuffer + ClusterGrid + IBL (SH L2 + specular cubemap) + VSM/Atlas + AO → HDR RGBA16F                                |
+| 16   | #19         | IBL Precompute          | Compute              | One-time: equirect→cubemap + SH L2 + specular prefilter + BRDF LUT. Cached                                                             |
+| 17   | #20         | RT Reflections (opt)    | Compute (ray query)  | Roughness < 0.3, full material eval on hit                                                                                             |
+| 18   | #21         | RT Shadows (opt)        | Compute (ray query)  | 1spp + temporal, soft penumbra                                                                                                         |
+| 19   | #22         | RT GI (opt)             | Compute (ray query)  | Half-res, SH probe cache                                                                                                               |
+| 20   | #25→#26     | LL-OIT Insert→Resolve   | Fragment+Compute     | Per-pixel linked list (per-tile counter), insertion sort ≤16 layers                                                                    |
+| 21   | #28→#29→#30 | HLR 4-stage             | Compute+Graphics     | Classify → HiZ visibility → SDF edge render → dash pattern                                                                             |
+| 22   | #31         | Section Plane           | Fragment (stencil)   | Clip + cap + ISO 128 hatch                                                                                                             |
+| 23   | #48         | SSR (opt)               | Compute              | Hi-Z ray march, half-res, temporal accumulation                                                                                        |
+| 24   | #49         | Bloom                   | Compute              | 6-level Gaussian chain, brightness extract > 1.0                                                                                       |
+| 25   | #50         | DoF (opt)               | Compute              | Gather-based bokeh (Jimenez 2014), half-res 16 samples                                                                                 |
+| 26   | #51         | Motion Blur (opt)       | Fragment             | McGuire 2012 tile-based, per-pixel directional                                                                                         |
+| 27   | #52         | Tone Mapping            | Fragment             | ACES/AgX/Khronos/Reinhard/Uncharted2/Linear + vignette + CA                                                                            |
+| 28   | #53         | TAA                     | Compute              | Halton(2,3) jitter, YCoCg clamp, motion rejection, reactive mask                                                                       |
+| 29   | #54         | Temporal Upscale (opt)  | Compute              | FSR 3.0 / DLSS 3.5                                                                                                                     |
+| 30   | #56         | CAS Sharpen             | Compute              | AMD FidelityFX CAS                                                                                                                     |
+| 31   | #57         | Color Grading (opt)     | Fragment             | 3D LUT 32³ RGBA8                                                                                                                       |
+| 32   | #59         | VRS Image (opt)         | Compute              | Luminance gradient → per-16×16 shading rate                                                                                            |
+| 33   | #60–#64     | Overlays                | Graphics (instanced) | Gizmo, Grid, ViewCube, Snap, Measurement                                                                                               |
+| 34   | #45         | PMI Render              | Graphics (instanced) | MSDF text + leaders + symbols                                                                                                          |
+| 35   | #46         | Analysis Overlay (opt)  | Fragment             | Zebra/Iso/Curvature/Draft/...                                                                                                          |
+| 36   | #47         | Color Bar               | Fragment             | Auto-generated legend                                                                                                                  |
+| 37   | #65         | LayerStack Compositor   | Fragment             | 6-layer alpha-blend: Scene + Preview + Overlay + Widgets + SVG + HUD                                                                   |
+| 38   | —           | Present                 | —                    | Swapchain present (VkQueuePresent / IDXGISwapChain::Present)                                                                           |
 
 ### 4.3 Tier2 Complete Step-by-Step (Compat Vulkan 1.1+, no mesh shader)
 
@@ -793,35 +808,41 @@ Every step references the DAG pass number from §3.
 
 Detailed resource formats for passes #1--#11:
 
-#### Pass #1: DepthPrePass + HiZ
+#### Pass #1: DepthPrePass + HiZ (Two-Pass)
 
-| Item          | Specification                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------ |
-| **Condition** | Always active (all tiers, all frames)                                                      |
-| **Input**     | `SceneBuffer` SSBO: `GpuInstance[N]` (128B each, BDA pointer in push constant)             |
-|               | `MeshletBuffer` SSBO: meshlet vertex/index data (BDA)                                      |
-|               | `GpuCameraUBO` (set 0, binding 0): viewProj, near, far                                     |
-| **Output**    | `DepthTarget`: D32_SFLOAT, viewport resolution, Reverse-Z (clear=0.0)                      |
-|               | `HiZPyramid`: R32_SFLOAT, mip chain from viewport to 1x1 (compute downsample, min per 2x2) |
-| **PSO**       | Graphics: depthTest=GreaterOrEqual, depthWrite=true, colorWrite=none                       |
-| **Dispatch**  | Tier1: `vkCmdDrawMeshTasksIndirectCountEXT` (same meshlet path as #5/#6)                   |
-|               | Tier2/3/4: `vkCmdDrawIndexedIndirect` / `glMultiDrawElementsIndirect`                      |
-| **Budget**    | <0.5ms @10M tri @4K on RTX 4070                                                            |
+Runs in the two-pass occlusion culling loop: **Pass 1A** renders `VisibleList_A` (from GPU Culling Pass A), **Pass 1B** renders `VisibleList_B` (from GPU Re-Culling Pass B). HiZ is rebuilt after each sub-pass. See §5.3.
 
-#### Pass #2: GPU Culling
+| Item          | Specification                                                                             |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| **Condition** | Always active (all tiers, all frames)                                                     |
+| **Input**     | Pass 1A: `VisibleList_A` SSBO (from GPU Culling Pass A) + `SceneBuffer` + `MeshletBuffer` |
+|               | Pass 1B: `VisibleList_B` SSBO (from GPU Re-Culling Pass B). Skipped if empty              |
+|               | `GpuCameraUBO` (set 0, binding 0): viewProj, near, far                                    |
+| **Output**    | `DepthTarget`: D32_SFLOAT, viewport resolution, Reverse-Z (clear=0.0 on Pass 1A only)     |
+|               | `HiZPyramid`: R32_SFLOAT, mip chain from viewport to 1x1 (rebuilt after each sub-pass)    |
+| **PSO**       | Graphics: depthTest=GreaterOrEqual, depthWrite=true, colorWrite=none                      |
+| **Dispatch**  | Tier1: `vkCmdDrawMeshTasksIndirectCountEXT` (same meshlet path as #5/#6)                  |
+|               | Tier2/3/4: `vkCmdDrawIndexedIndirect` / `glMultiDrawElementsIndirect`                     |
+| **Budget**    | <0.5ms total (Pass 1A + 1B) @10M tri @4K on RTX 4070                                      |
 
-| Item          | Specification                                                                       |
-| ------------- | ----------------------------------------------------------------------------------- |
-| **Condition** | Always active (all tiers). Skipped if dirty flag clean (static scene optimization). |
-| **Input**     | `HiZPyramid` R32_SFLOAT (sampled, previous frame)                                   |
-|               | `SceneBuffer` SSBO: `GpuInstance[N]`                                                |
-|               | `BVH` SSBO: flat BvhNode[] array (SAH build Phase 5, LBVH refit Phase 6a)           |
-|               | `GpuCameraUBO`: frustum planes (6x float4), viewProj                                |
-|               | Push constant: `visibleLayerMask` (uint16), `selectableLayerMask` (uint16)          |
-| **Output**    | `VisibleInstanceList` SSBO: uint32[] (atomic append)                                |
-|               | `VisibleMeshletList` SSBO: uint32[] (atomic append)                                 |
-| **Dispatch**  | Compute: `ceil(instanceCount / 256)` workgroups, 256 threads each                   |
-| **Budget**    | <0.3ms @100K instances @4K                                                          |
+#### Pass #2: GPU Culling (Two-Pass)
+
+Runs twice per frame: **Pass A** (prev-frame HiZ) then **Pass B** (current-frame HiZ). See §5.3 for full two-pass protocol.
+
+| Item          | Specification                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------ |
+| **Condition** | Always active (all tiers). Skipped if dirty flag clean (static scene optimization).                    |
+| **Input**     | `HiZPyramid` R32_SFLOAT (Pass A: previous frame, Pass B: current frame)                                |
+|               | `SceneBuffer` SSBO: `GpuInstance[N]`                                                                   |
+|               | `BVH` SSBO: flat BvhNode[] array (SAH build Phase 5, LBVH refit Phase 6a)                              |
+|               | `GpuCameraUBO`: frustum planes (6x float4), viewProj                                                   |
+|               | Push constant: `visibleLayerMask` (uint16), `selectableLayerMask` (uint16), `passId` (uint8: 0=A, 1=B) |
+| **Output**    | Pass A: `VisibleList_A` SSBO (atomic append) + `RejectedList_A` SSBO (atomic append)                   |
+|               | Pass B: `VisibleList_B` SSBO (atomic append). Input: `RejectedList_A`                                  |
+|               | Combined: `VisibleInstanceList` = `VisibleList_A` ∪ `VisibleList_B`                                    |
+| **Dispatch**  | Compute: `ceil(instanceCount / 256)` workgroups, 256 threads each (Pass A)                             |
+|               | Compute: `ceil(rejectedCount / 256)` workgroups (Pass B, typically 10-40% of Pass A)                   |
+| **Budget**    | <0.3ms total (Pass A + Pass B) @100K instances @4K                                                     |
 
 #### Pass #3: Light Cluster Assign
 
@@ -873,7 +894,7 @@ Detailed resource formats for passes #1--#11:
 | Item                | Specification                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Condition**       | Tier1, enabled when small-triangle ratio >30%. Optional optimization.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| **Input**           | `SmallTriList` SSBO: triangles <4px^2 (classified during #5 Task shader)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Input**           | `SmallTriList` SSBO: triangles <4px^2 (classified during #6 Mesh shader per-triangle cull, see §5.3 Level 3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | **Output**          | `VisBuffer` via SSBO atomic (same pixel space as #9)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **Dispatch**        | Compute: 1 thread per small triangle                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **Budget**          | <0.3ms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -912,25 +933,62 @@ GPU cull compute classifies each visible instance into one of 3 buckets via atom
 
 ### 5.3 Culling Pipeline
 
-Two-phase hierarchical culling:
+**Three-level hierarchical culling with two-pass occlusion** (Nanite-style):
 
 ```
-Phase 1 -- Instance Level (Task Shader):
+=== Two-Pass Occlusion Culling (eliminates false-negatives from stale HiZ) ===
+
+Pass A -- Cull against PREVIOUS FRAME HiZ (conservative):
+  GPU Culling compute (#2): instance-level frustum + prev-frame HiZ occlusion
+    → VisibleList_A (definitely visible) + RejectedList_A (potentially occluded)
+  DepthPrePass (#1): render VisibleList_A → current-frame depth
+  HiZ Build: generate current-frame HiZ pyramid from fresh depth
+
+Pass B -- Re-test rejected geometry against CURRENT FRAME HiZ:
+  GPU Re-Culling compute: test RejectedList_A against current-frame HiZ
+    → VisibleList_B (newly visible, were false-negatives in Pass A)
+  DepthPrePass Append: render VisibleList_B → update depth (incremental)
+
+Combined: VisibleList = VisibleList_A ∪ VisibleList_B
+  → Macro-Binning (#4) → Task/Mesh pipeline (#5/#6)
+
+Benefit: 10-30% additional geometry culled vs single-pass (dynamic scenes).
+Cost: ~0.1ms for re-cull compute + incremental depth write. Net gain in all
+non-trivial scenes. Static scenes: Pass B skipped (dirty flag optimization).
+
+=== Level 1 -- Instance Level (GPU Culling Compute #2): ===
   For each GpuInstance:
     +-- Frustum test (AABB vs 6 planes)
-    +-- HiZ occlusion test (project AABB -> read HiZ from prev frame)
+    +-- HiZ occlusion test (project AABB → HiZ pyramid)
     +-- LOD select (ClusterDAG projected-sphere-error metric)
     +-- Normal cone backface test (dp4a quantized, subgroup early-out)
-  Emit surviving meshlet workgroups via SetMeshOutputCounts()
+  Output: per-instance visible/rejected classification
 
-Phase 2 -- Meshlet Level (Mesh Shader):
-  For each meshlet:
-    +-- Meshlet normal cone backface cull
+=== Level 2 -- Meshlet Level (Task Shader #5): ===
+  For each visible instance, process kTaskShaderMeshletCount meshlets per workgroup:
+    +-- Meshlet normal cone backface cull (meshoptimizer cone data)
     +-- Meshlet frustum test (bounding sphere)
-    +-- Output triangles -> VisBuffer
+    +-- Compact visible meshlet indices into MeshPayload via WavePrefixCountBits
+    +-- DispatchMesh(visibleCount, 1, 1, payload)
+  AMD: ≥32 meshlets/workgroup to amortize DispatchMesh CP latency.
+
+=== Level 3 -- Triangle Level (Mesh Shader #6): ===
+  For each meshlet:
+    +-- Vertex phase: transform vertices to clip space (1:1 thread-to-vertex)
+    +-- Per-triangle culling (Zeux/niagara 2023, AMD GPUOpen 2024):
+        +-- Backface cull (cross product sign in clip space)
+        +-- Degenerate triangle rejection (zero area)
+        +-- Small triangle cull (<1 pixel, subpixel grid test)
+        +-- Micro-frustum cull (all 3 verts outside same clip plane)
+    +-- Surviving triangles → VisBuffer write
+    +-- Culled triangles → emit degenerate index (0,0,0), zero raster cost
+  Benefit: eliminates 30-50% additional triangles beyond meshlet-level culling.
+  Critical for CAD: dense planar regions have ~60% backface ratio per meshlet.
 ```
 
-Subgroup ops (WaveBallot, WavePrefixSum) for wave-level early-out. Static frames: skip cull entirely (dirty flag optimization).
+Subgroup ops (WaveBallot, WavePrefixCountBits, WavePrefixSum) for wave-level early-out. Static frames: skip cull entirely (dirty flag optimization).
+
+**Vendor-adaptive meshlet sizing**: Meshlet vertex/primitive limits are link-time constants (see `05-shader-pipeline.md` §15.9 `core/constants.slang`). NVidia optimal: 64V/126T/numthreads(64). AMD RDNA3+ optimal: 128V/256T/numthreads(128). `meshoptimizer::buildMeshlets()` receives the active constants at asset build time. Runtime `SlangCompiler` selects the matching link-time override based on `GpuCapabilityProfile::GetVendor()`.
 
 ### 5.4 Visibility Buffer
 

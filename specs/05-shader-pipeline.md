@@ -172,7 +172,9 @@ All render passes call `ShaderTargetForBackend()` — **no duplicate mapping log
 
 ```cpp
 enum class ShaderStage : uint8_t {
-    Vertex, Fragment, Compute, Mesh, Amplification,
+    Vertex, Fragment, Compute, Mesh,
+    Amplification,                    // D3D12 naming
+    Task = Amplification,             // Vulkan/Slang naming (alias)
     RayGen, ClosestHit, Miss, AnyHit, Intersection,
 };
 ```
@@ -1960,8 +1962,42 @@ public interface IGeometryPipeline {
 
     /// Encode primitive ID for visibility buffer.
     uint encodePrimitiveId(uint instanceId, uint primitiveId);
+
+    // --- Culling interface (critical for performance) ---
+
+    /// Meshlet-level frustum + cone backface test (task shader or mesh shader entry).
+    bool cullMeshlet(uint meshletIndex, float4 boundingSphere, int8_t4 normalCone,
+                     float4x4 viewProj, float3 cameraPos);
+
+    /// Per-triangle backface + small-triangle + frustum culling in mesh shader.
+    /// Returns true if triangle should be DISCARDED.
+    /// Industry practice (Zeux/niagara 2023, AMD GPUOpen 2024): per-triangle cull
+    /// eliminates 30-50% additional triangles beyond meshlet-level culling.
+    bool cullTriangle(float4 clipV0, float4 clipV1, float4 clipV2);
+
+    /// Classify small triangle (< kSmallTriThreshold pixels^2) for SW rasterizer.
+    bool isSmallTriangle(float2 ndcV0, float2 ndcV1, float2 ndcV2, float2 viewportSize);
 };
 ```
+
+#### 15.4.2.1 MeshPayload Structure
+
+```slang
+// geometry/meshlet.slang (implementing miki_geometry)
+
+/// Task→Mesh shader payload. Keep minimal to reduce memory traffic.
+/// AMD recommendation: payload ≤ 16KB, prefer meshlet indices only.
+/// Each task workgroup processes kTaskShaderMeshletCount meshlets,
+/// compacts visible ones into payload, then DispatchMesh().
+struct MeshPayload {
+    uint meshletIndices[kTaskShaderMeshletCount];  // compacted visible meshlet indices
+    uint instanceId;                                // parent instance (shared for group)
+    uint visibleMeshletCount;                       // set by task shader before DispatchMesh
+};
+// sizeof(MeshPayload) = 32*4 + 4 + 4 = 136 bytes (well within 16KB limit)
+```
+
+**Task shader workgroup budget**: Each task workgroup processes `kTaskShaderMeshletCount` (default 32) meshlets. For an instance with 1024 meshlets, this means 32 task workgroups. AMD requires ≥32 meshlets/group to amortize `DispatchMesh` command processor round-trip latency. NVidia is more forgiving but still benefits from batching.
 
 #### 15.4.3 Capability-Based Tier Safety
 
@@ -2014,21 +2050,51 @@ Slang infers the capability of `getInvocationId()` as `(vertex | fragment | comp
 import miki_geometry;
 import miki_brdf;
 
+// Link-time type specialization: resolved at link, no vtable, no runtime cost.
+extern struct GeoPipeline : IGeometryPipeline = MeshGeoPipeline;
+
 // Tier1: concrete type for mesh shader pipeline
 struct MeshGeoPipeline : IGeometryPipeline {
-    // ... meshlet-based implementation
+    // ... meshlet-based implementation (fetchVertex, cullTriangle, etc.)
 };
 
-// The compiler specializes all generic code for MeshGeoPipeline at link time.
-// No dynamic dispatch, no vtable, no runtime branching.
+// Mesh shader entry point. Workgroup size and output limits use link-time constants
+// so meshoptimizer meshlet generation and shader are always in sync.
+// NVidia default: numthreads(64), 64V/126T. AMD override: numthreads(128), 128V/256T.
 [shader("mesh")]
-[numthreads(128, 1, 1)]
-void meshMain<G : IGeometryPipeline>(
+[numthreads(kMeshShaderWorkgroupSize, 1, 1)]
+void meshMain(
     in payload MeshPayload p,
-    OutputVertices<VertexOut, 64> verts,
-    OutputIndices<uint3, 126> tris
-) where G == MeshGeoPipeline {
-    // Fully specialized at compile time
+    uint gtid : SV_GroupThreadID,
+    uint gid  : SV_GroupIndex,
+    OutputVertices<VertexOut, kMeshletMaxVertices> verts,
+    OutputIndices<uint3, kMeshletMaxPrimitives> tris
+) {
+    let meshletIdx = p.meshletIndices[gid];
+    MeshletDescriptor meshlet = LoadMeshlet(meshletIdx);
+    SetMeshOutputCounts(meshlet.vertexCount, meshlet.triangleCount);
+
+    // Vertex phase: 1:1 thread-to-vertex mapping (kMeshShaderWorkgroupSize == kMeshletMaxVertices)
+    if (gtid < meshlet.vertexCount) {
+        let v = GeoPipeline.fetchVertex(meshlet.vertexOffset + gtid);
+        verts[gtid].clipPos = GeoPipeline.transformToClip(v, viewProj);
+        verts[gtid].data = PackVertexOutput(v);
+    }
+
+    // Primitive phase: stride pattern for T > workgroup size (AMD RDNA3: 128 threads, 256 tris)
+    for (uint i = 0; i < (kMeshletMaxPrimitives + kMeshShaderWorkgroupSize - 1) / kMeshShaderWorkgroupSize; i++) {
+        let primIdx = gtid + i * kMeshShaderWorkgroupSize;
+        if (primIdx < meshlet.triangleCount) {
+            uint3 tri = LoadTriangleIndices(meshlet, primIdx);
+            // Per-triangle culling: backface + degenerate + small-triangle + micro-frustum
+            // Eliminates 30-50% additional triangles (Zeux 2023, AMD GPUOpen 2024)
+            if (GeoPipeline.cullTriangle(verts[tri.x].clipPos, verts[tri.y].clipPos, verts[tri.z].clipPos)) {
+                tris[primIdx] = uint3(0, 0, 0);  // degenerate (GPU skips rasterization)
+            } else {
+                tris[primIdx] = tri;
+            }
+        }
+    }
 }
 ```
 
@@ -2295,8 +2361,28 @@ public static const uint kMaxBindlessTextures = 1048576;  // 1M
 public static const uint kMaxBindlessBuffers  = 262144;   // 256K
 public static const uint kMaxBindlessSamplers = 2048;
 public static const uint kMaxMeshlets        = 16777216;  // 16M
-public static const uint kMeshletMaxVertices = 64;
-public static const uint kMeshletMaxPrimitives = 126;
+
+// Vendor-adaptive meshlet sizing via link-time specialization.
+// Default: NVidia-optimal (64V/126T). Override at link time for AMD (128V/256T).
+//
+// Rationale (2025 industry consensus):
+//   NVidia: shader export allocates primitive indices in 128-byte groups.
+//     126*3 = 378 bytes fits well. 64 vertices = 1:1 thread mapping at numthreads(64).
+//   AMD RDNA3+: exp instruction supports wave-wide offset, 128 threads can export
+//     256 primitives in 2 strides. 128V/256T maximizes vertex reuse and occupancy.
+//   Intel Arc: same limits as VK_EXT_mesh_shader minimum (256/256), 64V/126T works.
+//
+// SlangCompiler generates override module:
+//   export static const uint kMeshletMaxVertices = 128;   // AMD path
+//   export static const uint kMeshletMaxPrimitives = 256; // AMD path
+extern static const uint kMeshletMaxVertices   = 64;   // NVidia default
+extern static const uint kMeshletMaxPrimitives = 126;  // NVidia default (126*3=378B aligned)
+extern static const uint kMeshShaderWorkgroupSize = 64; // must == kMeshletMaxVertices for 1:1 mapping
+
+// Task shader workgroup size: number of meshlets processed per task invocation.
+// AMD recommends >= 32 to amortize DispatchMesh command processor latency.
+extern static const uint kTaskShaderMeshletCount = 32;  // meshlets per task workgroup
+
 public static const uint kClusterTileSize    = 16;        // 16x16x24 light cluster grid
 public static const float kPI               = 3.14159265358979323846;
 public static const float kInvPI            = 0.31830988618379067154;
