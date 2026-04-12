@@ -188,3 +188,21 @@ miki_add_test(test_integration_multiflow tests/rendergraph/test_integration_mult
 if(TARGET test_integration_multiflow)
     set_tests_properties(test_integration_multiflow PROPERTIES TIMEOUT 180)
 endif()
+
+# -- Shader pipeline tests (Phase 1a) ----------------------------------------
+miki_add_test(test_shader_types         tests/shader/test_shader_types.cpp)
+miki_add_test(test_slang_compiler       tests/shader/test_slang_compiler.cpp)
+miki_add_test(test_permutation_cache    tests/shader/test_permutation_cache.cpp)
+miki_add_test(test_pipeline_cache       tests/shader/test_pipeline_cache.cpp)
+miki_add_test(test_pipeline_factory     tests/shader/test_pipeline_factory.cpp)
+
+# Shader tests need to know where shader source files are
+foreach(_shader_test test_slang_compiler test_permutation_cache)
+    if(TARGET ${_shader_test})
+        target_compile_definitions(${_shader_test} PRIVATE
+            MIKI_SHADER_DIR="${CMAKE_SOURCE_DIR}/shaders/miki"
+            MIKI_SHADER_TESTS_DIR="${CMAKE_SOURCE_DIR}/shaders/tests"
+        )
+        set_tests_properties(${_shader_test} PROPERTIES TIMEOUT 60)
+    endif()
+endforeach()

@@ -76,7 +76,26 @@ src/miki/rhi/
     PipelineFactoryImpl.cpp  # IPipelineFactory::Create dispatch
 
 shaders/tests/
-    probe_*.slang            # 29 probe test shaders (see S7)
+    probe_*.slang            # 29 probe test shaders (see §7)
+    test_*.slang             # L3 COMPARE_COMPUTE GPU tests (see §13.4.1)
+
+tests/shader_cpu/              # L1 CPU golden reference tests (§13.2)
+    CMakeLists.txt             # Standalone: depends only on slang + Catch2, not miki C++
+    test_culling.cpp           # Backface, cone, frustum, small-tri cull
+    test_packing.cpp           # Octahedral normal, R11G11B10, tangent frame
+    test_color_space.cpp       # sRGB↔linear, ACES, Rec2020
+    test_encoding.cpp          # VisBuffer encode/decode, Morton code
+    test_brdf_math.cpp         # GGX NDF, Fresnel, Smith G, diffuse
+    test_meshlet_bounds.cpp    # Cross-validate against meshoptimizer golden data
+    golden/                    # Golden reference data (JSON/binary)
+
+tests/shader_gpu/              # L3 SlangPy GPU integration tests (§13.4.2)
+    conftest.py                # SlangPy device fixture
+    test_culling_gpu.py        # Per-triangle and meshlet cull on GPU
+    test_two_pass_cull.py      # Two-pass occlusion culling multi-dispatch
+    test_meshlet_output.py     # Compute mesh shader equivalent → verify index buffer
+    test_visbuffer_encode.py   # Full VisBuffer encode/decode pipeline
+    golden/                    # numpy .npy golden data
 ```
 
 ### 2.2 Dependency Graph
@@ -1593,7 +1612,218 @@ graph TD
 
 ## 13. Test Strategy
 
-### 13.1 Unit Tests
+### 13.1 Architecture: Four-Layer Shader Test Pyramid
+
+Shader testing must satisfy three constraints simultaneously:
+
+1. **Trusted golden reference** — deterministic ground truth, not "a GPU driver happened to output correct values".
+2. **C++ codebase independence** — shader tests survive RHI/Engine refactoring without modification.
+3. **Coverage of GPU-only stages** — task/mesh shaders, wave intrinsics, atomics, barriers.
+
+```
+                            ┌─────────────────────────────┐
+                            │ L4: Visual Regression       │ ← GPU-dependent, full pipeline
+                            │     Screenshot + perceptual │   (~20 tests, nightly CI)
+                            │     diff (full E2E)         │
+                          ┌─┴─────────────────────────────┴─┐
+                          │ L3: GPU Integration              │ ← GPU-dependent, C++-independent
+                          │     SlangPy / Slang render-test  │   (~100 tests, per-commit GPU CI)
+                          │     Buffer readback + golden     │
+                        ┌─┴───────────────────────────────────┴─┐
+                        │ L2: Compilation Correctness             │ ← No GPU required
+                        │     SlangFeatureProbe (§7) + spirv-val  │   (~200 tests, per-commit CI)
+                        │     + SPIR-V structure checks + CTS    │
+                      ┌─┴─────────────────────────────────────────┴─┐
+                      │ L1: CPU Golden Reference                      │ ← No GPU, no C++ codebase
+                      │     Slang -target host-callable               │   (~300 tests, per-commit CI)
+                      │     Pure function bit-exact verification      │
+                      └───────────────────────────────────────────────┘
+```
+
+**Design principle — shader code layering**: All shader logic is split into two categories:
+
+| Category             | Example                                                                                                                             | CPU-testable? | Location                               |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | :-----------: | -------------------------------------- |
+| **Pure functions**   | `cullTriangleBackface`, `cullMeshletCone`, `isSmallTriangle`, `encodeVisBuffer`, `transformToClip`, `packOctNormal`, `sRGBToLinear` |      Yes      | `*_functions.slang` implementing files |
+| **GPU entry points** | `meshMain`, `taskMain`, `computeMain` (use `SetMeshOutputCounts`, `DispatchMesh`, `groupshared`, wave intrinsics, atomics)          |      No       | `passes/*.slang`, `*_kernel.slang`     |
+
+Pure functions are **required** to avoid GPU-specific intrinsics. This constraint is enforced by CI: every `*_functions.slang` file must compile with `-target host-callable` without errors.
+
+### 13.2 Layer 1 — CPU Golden Reference (Slang `-target host-callable`)
+
+**Goal**: Bit-exact verification of all pure shader functions on CPU, independent of any GPU or C++ engine code.
+
+**Mechanism**: Slang compiles `.slang` source to native CPU code via `-target host-callable` (uses `slang-llvm` JIT or system C++ compiler). The compiled function is loaded as a host-callable entry point and invoked directly from a Catch2 test harness. No GPU, no RHI, no miki C++ codebase dependency.
+
+**Limitations**: No `groupshared`, no barriers, no atomics, no `float16_t`, no mesh/task stage intrinsics. Entry points cannot be named `main`.
+
+**Directory structure**:
+
+```
+tests/shader_cpu/
+    CMakeLists.txt              # Standalone CMake target, depends only on slang + Catch2
+    test_culling.cpp            # CPU golden tests for culling pure functions
+    test_packing.cpp            # CPU golden tests for octahedral normal, R11G11B10
+    test_color_space.cpp        # sRGB↔linear, ACES tonemap
+    test_encoding.cpp           # VisBuffer encode/decode, Morton code
+    test_brdf_math.cpp          # GGX NDF, Fresnel, Smith G, diffuse
+    test_meshlet_bounds.cpp     # Bounding sphere / cone validation against meshoptimizer
+    golden/                     # Golden reference data (JSON/binary)
+        meshoptimizer_cone.json # Exported from meshoptimizer::computeMeshletBounds()
+        cube_meshlets.json      # meshopt_buildMeshlets() output for unit cube
+```
+
+**Test count**: ~300 tests across ~15 pure-function modules.
+
+| Test Group                                     | Count | Key Tests                                                                  |
+| ---------------------------------------------- | :---: | -------------------------------------------------------------------------- |
+| Culling (backface, cone, frustum, small-tri)   |  40   | CW/CCW winding, degenerate, edge-on, near-plane clip, NDC area threshold   |
+| Packing (oct normal, R11G11B10, tangent frame) |  30   | Round-trip encode→decode error < 1e-3, edge cases (0,0,±1), denormals      |
+| Color space (sRGB, ACES, Rec2020)              |  20   | Linear round-trip, HDR clamp, gamma accuracy                               |
+| VisBuffer encoding                             |  15   | instanceId/primitiveId pack/unpack, overflow, max values                   |
+| BRDF math (GGX, Fresnel, Smith, Lambert)       |  40   | Energy conservation (∫ BRDF cos θ dω ≤ 1), reciprocity, grazing angle      |
+| Geometry transforms                            |  25   | MVP multiply, perspective divide, viewport transform, W clip               |
+| Meshlet bounds validation                      |  30   | Cross-validate against `meshoptimizer::computeMeshletBounds()` golden data |
+| Morton code / space-filling curve              |  15   | Encode/decode round-trip, sort order preservation                          |
+| Material parameter packing                     |  15   | DSPBR 8-layer parameter encode/decode                                      |
+| Normal mapping / TBN                           |  15   | Mikktspace-compatible tangent frame, mirrored UVs                          |
+
+**External golden reference data**:
+
+| Source                                                    | Data                                                                                                                        | Usage                                                                                                                                         |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **meshoptimizer** (`zeux/meshoptimizer` `demo/tests.cpp`) | `meshopt_buildMeshlets()` output, `meshopt_computeMeshletBounds()` cone/sphere data, `clusterBoundsDegenerate()` edge cases | Cross-validate miki meshlet bounds computation against meshoptimizer reference. Export golden JSON at build time via a small extraction tool. |
+| **Slang CTS** (`shader-slang/slang` `tests/`)             | `COMPARE_COMPUTE -cpu` golden outputs for math functions, type layout verification                                          | Adopt Slang's own CPU target validation patterns as baseline.                                                                                 |
+| **Filament / Google** PBR reference                       | GGX specular + Lambert diffuse reference values for fixed (N,V,L,roughness) tuples                                          | Validate BRDF evaluation accuracy. Well-known reference from Google Filament's `material_model` docs.                                         |
+
+### 13.3 Layer 2 — Compilation Correctness (No GPU Required)
+
+Extends existing §7 `SlangFeatureProbe` with structural validation of compiled output.
+
+| Test Category                         | Count | Description                                                            |
+| ------------------------------------- | :---: | ---------------------------------------------------------------------- |
+| SlangFeatureProbe (existing §7)       |  29   | Compile-only probes across all targets                                 |
+| SPIR-V structure validation           |  20   | Post-compile: `spirv-val` + custom checks (see below)                  |
+| Cross-target reflection consistency   |  10   | Same shader → SPIRV + DXIL → compare binding layouts                   |
+| Link-time constant folding            |   5   | `extern static const` → verify inlined in SPIR-V (no `OpSpecConstant`) |
+| Dead code elimination                 |   5   | `IMaterial<DSPBR>` → verify unused interface methods eliminated        |
+| `*_functions.slang` CPU compilability |  ~15  | Every `*_functions.slang` file compiles with `-target host-callable`   |
+
+**SPIR-V structure validation** (new, post-compile, no GPU):
+
+```
+For each Tier1 mesh shader SPIR-V blob:
+  1. spirv-val --target-env vulkan1.3 → must pass
+  2. grep OpSetMeshOutputsEXT → must exist (mesh shader entry)
+  3. grep OpEmitMeshTasksEXT → must exist if task shader present
+  4. Verify WorkgroupSize matches kMeshShaderWorkgroupSize link-time constant
+  5. Verify OutputVertices/OutputPrimitives match kMeshletMaxVertices/kMeshletMaxPrimitives
+  6. Verify no OpGroupNonUniformBallot without SPV_KHR_subgroup_ballot capability
+```
+
+### 13.4 Layer 3 — GPU Integration (GPU Required, C++ Independent)
+
+Two complementary harnesses, both independent of miki C++ codebase:
+
+#### 13.4.1 Slang `COMPARE_COMPUTE` (Slang's own test infrastructure)
+
+Shader test files using Slang's `//TEST` / `//TEST_INPUT` / `filecheck-buffer=CHECK` directives, executed by `slang-test` + `render-test`. Tests live in `shaders/tests/` and are self-contained `.slang` files.
+
+```slang
+// shaders/tests/test_cull_triangle.slang
+// Tests cullTriangle() pure function on GPU compute, cross-validated against CPU golden.
+
+//TEST(compute):COMPARE_COMPUTE(filecheck-buffer=CHECK):-slang -compute -shaderobj
+//TEST(compute):COMPARE_COMPUTE(filecheck-buffer=CHECK):-cpu -compute -shaderobj
+//TEST(compute, vulkan):COMPARE_COMPUTE(filecheck-buffer=CHECK):-vk -compute -shaderobj
+
+import miki_geometry;
+
+//TEST_INPUT:ubuffer(data=[0 0 0 0 0 0 0 0], stride=4):out,name=outputBuffer
+RWStructuredBuffer<uint> outputBuffer;
+
+[numthreads(1, 1, 1)]
+void computeMain() {
+    // CW triangle → backface → culled (1)
+    float4 v0 = float4(0, 0, 0.5, 1);
+    float4 v1 = float4(1, 0, 0.5, 1);
+    float4 v2 = float4(0, 1, 0.5, 1);
+    outputBuffer[0] = GeoPipeline.cullTriangle(v0, v1, v2) ? 1u : 0u;
+
+    // CCW triangle → visible (0)
+    outputBuffer[1] = GeoPipeline.cullTriangle(v0, v2, v1) ? 1u : 0u;
+}
+
+// CHECK: 1
+// CHECK-NEXT: 0
+```
+
+**Key**: The same test runs on both `-cpu` (Slang CPU target) and `-vk` / `-slang` (GPU), providing cross-validation between CPU golden reference and GPU execution. Disagreement = bug in either Slang codegen or driver.
+
+| Test File                      | What It Validates                                              |
+| ------------------------------ | -------------------------------------------------------------- |
+| `test_cull_triangle.slang`     | Per-triangle backface + degenerate + small-tri cull            |
+| `test_cull_meshlet_cone.slang` | Meshlet normal cone cull against meshoptimizer golden          |
+| `test_encode_visbuffer.slang`  | VisBuffer (instanceId, primitiveId) encode/decode round-trip   |
+| `test_pack_oct_normal.slang`   | Octahedral normal pack/unpack round-trip, error < 1e-3         |
+| `test_brdf_ggx.slang`          | GGX NDF + Smith G + Fresnel for fixed (N,V,L,roughness) tuples |
+| `test_morton_code.slang`       | 3D Morton encode/decode, sort order                            |
+| `test_hiz_sample.slang`        | HiZ pyramid 2×2 min-reduction correctness                      |
+| `test_wave_compact.slang`      | `WavePrefixCountBits` compaction correctness (GPU-only)        |
+
+#### 13.4.2 SlangPy GPU Harness (Python, zero C++ dependency)
+
+For tests requiring richer data setup, multi-dispatch sequences, or buffer comparison beyond what Slang `COMPARE_COMPUTE` supports. Uses `pip install slangpy`.
+
+```
+tests/shader_gpu/
+    conftest.py               # SlangPy device fixture (auto-select Vulkan/D3D12/Metal)
+    test_culling_gpu.py       # Per-triangle and meshlet cull on GPU
+    test_two_pass_cull.py     # Two-pass occlusion culling: dispatch A → depth → dispatch B
+    test_meshlet_output.py    # Feed meshoptimizer golden meshlets → compute mesh shader
+                              #   equivalent → verify index buffer output
+    test_visbuffer_encode.py  # Full VisBuffer encode/decode pipeline
+    golden/                   # Golden reference data (numpy .npy files)
+        cube_meshlets.npy     # meshoptimizer output for unit cube
+        frustum_cull_expected.npy
+```
+
+**Mesh/task shader testing strategy** (these stages cannot be directly readback-tested):
+
+| Strategy                                   | When to Use                            | How                                                                                                                 |
+| ------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Extract pure functions → L1/L3 compute** | Culling math, encoding, transforms     | Tested above                                                                                                        |
+| **Compute shader equivalence**             | Full meshlet processing pipeline       | Rewrite `meshMain` logic as compute shader, same inputs → same index buffer output. Bit-exact comparison.           |
+| **Task shader indirect count readback**    | Task shader visible count accuracy     | Dispatch task shader equivalent compute → readback `IndirectDrawArgs` → verify `meshletCount` matches expected      |
+| **VisBuffer readback**                     | Full pipeline correctness (Phase 6a+)  | Render known geometry (unit cube, 6 meshlets) → readback VisBuffer → verify every pixel's (instanceId, primitiveId) |
+| **Depth buffer readback**                  | Two-pass occlusion culling correctness | Dispatch Pass A → readback depth → dispatch Pass B → verify VisibleList_B count                                     |
+
+### 13.5 Layer 4 — Visual Regression (Full Pipeline, GPU Required)
+
+Screenshot comparison with perceptual diff. Most expensive, fewest tests. Run nightly.
+
+| Test                              | Scene                                  | Metric             | Threshold                   |
+| --------------------------------- | -------------------------------------- | ------------------ | --------------------------- |
+| Opaque render (Tier1 mesh path)   | Stanford Bunny (50K tri, 800 meshlets) | SSIM               | > 0.999                     |
+| Opaque render (Tier2 vertex path) | Same bunny                             | SSIM diff vs Tier1 | < 0.01 (visual equivalence) |
+| Wireframe + HLR                   | ISO mechanical part                    | Pixel diff         | < 0.5%                      |
+| Transparency (OIT)                | 3 overlapping glass planes             | SSIM               | > 0.995                     |
+| Material resolve                  | DSPBR sphere under env light           | FLIP               | < 0.02                      |
+
+### 13.6 External Test Suite Inventory
+
+Mature external test suites to pull golden reference data and validation patterns from:
+
+| Suite                      | Repository                 | What We Use                                                                                                                                                                                                                                          | Integration                                                                                                                                                |
+| -------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **meshoptimizer**          | `zeux/meshoptimizer`       | `demo/tests.cpp`: golden `meshopt_buildMeshlets()` output, `meshopt_computeMeshletBounds()` bounding sphere/cone data, `clusterBoundsDegenerate()` edge cases. Used as golden truth for L1 meshlet bounds tests.                                     | CMake `FetchContent` at test-build time. Extract golden data via `meshopt_*` API calls into JSON. Compare against miki shader bounds computation.          |
+| **Vulkan CTS** (dEQP)      | `KhronosGroup/VK-GL-CTS`   | `dEQP-VK.mesh_shader.ext.*`: mesh output validation, `SV_CullDistance`/`SV_ClipDistance` built-in tests, task→mesh pipeline smoke tests, conditional rendering, workgroup limits. Run selectively as L3 GPU conformance check.                       | Build `deqp-vk` from source (CMake). Run `dEQP-VK.mesh_shader.ext.*` subset on CI GPU agents. Pass = conformant driver + correct pipeline setup.           |
+| **Slang CTS**              | `shader-slang/slang`       | `tests/pipeline/rasterization/mesh/`: `hello.slang` (mesh shader smoke), `task-simple.slang` (task→mesh pipeline), `primitive-output.slang` (`SV_CullPrimitive`). `tests/compute/`: COMPARE_COMPUTE patterns. CPU target tests for cross-validation. | Slang test files run via `slang-test` binary. Integrated into CI alongside miki shader tests. Validates Slang compiler correctness for our usage patterns. |
+| **Google Amber**           | `google/amber`             | SPIR-V compute shader buffer comparison tests. Does **not** support mesh shaders, but useful for compute-path golden validation (culling compute dispatch, HiZ build, macro-binning).                                                                | Build `amber` from source. Write `.amber` test scripts for compute pipeline stages.                                                                        |
+| **Filament PBR reference** | `google/filament`          | BRDF reference values from `shaders/src/brdf.fs`: GGX NDF, Smith-GGX visibility, Schlick Fresnel. Fixed (N,V,L,roughness) tuple golden values for BRDF correctness.                                                                                  | Extract reference values from Filament source, hard-code in L1 CPU tests as golden truth.                                                                  |
+| **SPIRV-Tools**            | `KhronosGroup/SPIRV-Tools` | `spirv-val` for L2 structural validation. `spirv-dis` for human-readable inspection. `spirv-opt` for verifying optimization passes don't break mesh shader output.                                                                                   | Already a transitive dependency via Slang. Run `spirv-val` in L2 CI step.                                                                                  |
+
+### 13.7 C++ Unit Tests (Existing, Renumbered)
 
 | Test Group                 | Count | Key Tests                                                                                                                                                                                                                                                                                                                  |
 | -------------------------- | :---: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1608,7 +1838,7 @@ graph TD
 | IPipelineFactory           |   5   | Create dispatch (Tier1→Main, Tier2→Compat), CreateGeometryPass, GetTier, NotImplemented for unimplemented passes                                                                                                                                                                                                           |
 | PipelineCache              |   5   | Load empty, Load valid, Load stale header, Save, GetNativeHandle                                                                                                                                                                                                                                                           |
 
-### 13.2 Integration Tests
+### 13.8 C++ Integration Tests (Existing, Renumbered)
 
 | Test                   | Description                                                                                                           |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -1629,6 +1859,22 @@ graph TD
 | Capability reject E2E  | Compile Tier2 pass shader that calls `[require(SPV_EXT_mesh_shader)]` function → verify compile error (§15.4.3)       |
 | Staleness check E2E    | Precompile module → modify source → `loadModule` with `UseUpToDateBinaryModule` → verify recompile triggered (§15.8)  |
 | Spec constant E2E      | Compile shader with `[SpecializationConstant]` → verify `OpSpecConstant` in SPIR-V → patch at PSO creation (§15.5.4)  |
+
+### 13.9 CI Matrix
+
+| CI Job                      |        Layer         | GPU? | Runner          | Trigger    | Budget  |
+| --------------------------- | :------------------: | :--: | --------------- | ---------- | ------- |
+| `shader-cpu-golden`         |          L1          |  No  | Any (Linux/Win) | Per-commit | < 30s   |
+| `shader-compile-validation` |          L2          |  No  | Any (Linux/Win) | Per-commit | < 60s   |
+| `shader-gpu-compute`        | L3 (COMPARE_COMPUTE) | Yes  | NVidia CI agent | Per-commit | < 120s  |
+| `shader-gpu-slangpy`        |     L3 (SlangPy)     | Yes  | NVidia CI agent | Per-commit | < 180s  |
+| `shader-gpu-amd`            |          L3          | Yes  | AMD CI agent    | Nightly    | < 300s  |
+| `shader-visual-regression`  |          L4          | Yes  | NVidia CI agent | Nightly    | < 600s  |
+| `cpp-unit-tests`            |        §13.7         |  No  | Any             | Per-commit | < 30s   |
+| `cpp-integration-tests`     |        §13.8         | Yes  | NVidia CI agent | Per-commit | < 120s  |
+| `vulkan-cts-mesh-subset`    |       External       | Yes  | NVidia CI agent | Weekly     | < 1800s |
+
+**Total per-commit CI budget**: < 8 minutes (L1+L2+L3+cpp). No GPU required for L1+L2 (~40% of all shader tests).
 
 ---
 

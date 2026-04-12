@@ -13,11 +13,10 @@
 #pragma once
 
 #include <cstdint>
-#include <expected>
 #include <filesystem>
 #include <vector>
 
-#include "miki/core/ErrorCode.h"
+#include "miki/core/Result.h"
 #include "miki/rhi/Device.h"
 #include "miki/rhi/Handle.h"
 #include "miki/rhi/RhiTypes.h"
@@ -61,13 +60,13 @@ namespace miki::rhi {
          *  @return PipelineCache instance (always valid — empty on file miss/mismatch).
          */
         [[nodiscard]] static auto Load(DeviceHandle iDevice, const std::filesystem::path& iPath)
-            -> std::expected<PipelineCache, core::ErrorCode>;
+            -> core::Result<PipelineCache>;
 
         /** @brief Save pipeline cache to disk.
          *  @param iPath File path to write to.
          *  @return void on success, ErrorCode on I/O failure.
          */
-        [[nodiscard]] auto Save(const std::filesystem::path& iPath) -> std::expected<void, core::ErrorCode>;
+        [[nodiscard]] auto Save(const std::filesystem::path& iPath) -> core::VoidResult;
 
         /** @brief Get the RHI handle for use in pipeline creation descriptors. */
         [[nodiscard]] auto GetHandle() const noexcept -> PipelineCacheHandle { return handle_; }

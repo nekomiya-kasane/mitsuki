@@ -9,6 +9,7 @@
 #include "miki/rhi/PipelineCache.h"
 
 #include <cstring>
+#include <expected>
 #include <fstream>
 #include <utility>
 
@@ -20,8 +21,7 @@ namespace miki::rhi {
     // Load
     // ===========================================================================
 
-    auto PipelineCache::Load(DeviceHandle iDevice, const std::filesystem::path& iPath)
-        -> std::expected<PipelineCache, core::ErrorCode> {
+    auto PipelineCache::Load(DeviceHandle iDevice, const std::filesystem::path& iPath) -> core::Result<PipelineCache> {
         PipelineCache pc;
         pc.valid_ = true;
         pc.backendType_ = iDevice.GetBackendType();
@@ -80,7 +80,7 @@ namespace miki::rhi {
     // Save
     // ===========================================================================
 
-    auto PipelineCache::Save(const std::filesystem::path& iPath) -> std::expected<void, core::ErrorCode> {
+    auto PipelineCache::Save(const std::filesystem::path& iPath) -> core::VoidResult {
         if (!valid_) {
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }

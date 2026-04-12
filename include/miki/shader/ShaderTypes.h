@@ -24,13 +24,14 @@ namespace miki::shader {
     enum class ShaderTargetType : uint8_t {
         SPIRV,  // Vulkan (Tier1/Tier2), OpenGL (via GL_ARB_gl_spirv)
         DXIL,   // D3D12
-        GLSL,   // OpenGL 4.3+ (GLSL 4.30 text), fallback when GL_ARB_gl_spirv unavailable
+        GLSL,   // Reserved for offline tooling / debug dump (GL runtime consumes SPIR-V)
         WGSL,   // WebGPU (Dawn)
+        MSL,    // Metal (Apple platforms -- macOS, iOS, visionOS; Phase 15a+)
     };
 
     /** @brief Shader compilation target with version info.
      *
-     * Encapsulates target type (SPIRV/DXIL/GLSL/WGSL) and version (major.minor).
+     * Encapsulates target type (SPIRV/DXIL/GLSL/WGSL/MSL) and version (major.minor).
      * Use factory methods for common configurations.
      */
     struct ShaderTarget {
@@ -57,6 +58,9 @@ namespace miki::shader {
         }
         static constexpr auto WGSL_1_0() noexcept -> ShaderTarget {
             return {.type = ShaderTargetType::WGSL, .versionMajor = 1, .versionMinor = 0};
+        }
+        static constexpr auto MSL_3_0() noexcept -> ShaderTarget {
+            return {.type = ShaderTargetType::MSL, .versionMajor = 3, .versionMinor = 0};
         }
     };
 

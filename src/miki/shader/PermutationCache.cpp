@@ -155,6 +155,7 @@ namespace miki::shader {
             case ShaderTargetType::DXIL: filename += ".dxil"; break;
             case ShaderTargetType::GLSL: filename += ".glsl"; break;
             case ShaderTargetType::WGSL: filename += ".wgsl"; break;
+            case ShaderTargetType::MSL: filename += ".msl"; break;
         }
         return iCacheDir / filename;
     }

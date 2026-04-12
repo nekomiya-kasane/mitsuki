@@ -43,6 +43,7 @@ namespace miki::shader {
             case ShaderTargetType::DXIL: return "DXIL";
             case ShaderTargetType::GLSL: return "GLSL";
             case ShaderTargetType::WGSL: return "WGSL";
+            case ShaderTargetType::MSL: return "MSL";
         }
         return "Unknown";
     }
@@ -117,6 +118,14 @@ namespace miki::shader {
                 }
                 break;
             }
+            case ShaderTargetType::MSL: {
+                std::string_view msl(reinterpret_cast<char const*>(blob.data.data()), blob.data.size());
+                if (msl.find("#include <metal_stdlib>") == std::string_view::npos
+                    && msl.find("using namespace metal") == std::string_view::npos) {
+                    return "MSL output missing metal_stdlib include or namespace declaration";
+                }
+                break;
+            }
         }
         return {};  // Valid
     }
@@ -131,6 +140,7 @@ namespace miki::shader {
             case ShaderTargetType::DXIL: return SLANG_DXIL;
             case ShaderTargetType::GLSL: return SLANG_GLSL;
             case ShaderTargetType::WGSL: return SLANG_WGSL;
+            case ShaderTargetType::MSL: return SLANG_METAL;
         }
         return SLANG_TARGET_UNKNOWN;
     }
@@ -194,21 +204,21 @@ namespace miki::shader {
             switch (cols) {
                 case 1: return rhi::Format::R32_FLOAT;
                 case 2: return rhi::Format::RG32_FLOAT;
-                case 3: return rhi::Format::RGBA32_FLOAT;
+                case 3: return rhi::Format::RGB32_FLOAT;
                 case 4: return rhi::Format::RGBA32_FLOAT;
             }
         } else if (scalar == slang::TypeReflection::ScalarType::Int32) {
             switch (cols) {
                 case 1: return rhi::Format::R32_SINT;
                 case 2: return rhi::Format::RG32_SINT;
-                case 3: return rhi::Format::RGBA32_SINT;
+                case 3: return rhi::Format::RGB32_SINT;
                 case 4: return rhi::Format::RGBA32_SINT;
             }
         } else if (scalar == slang::TypeReflection::ScalarType::UInt32) {
             switch (cols) {
                 case 1: return rhi::Format::R32_UINT;
                 case 2: return rhi::Format::RG32_UINT;
-                case 3: return rhi::Format::RGBA32_UINT;
+                case 3: return rhi::Format::RGB32_UINT;
                 case 4: return rhi::Format::RGBA32_UINT;
             }
         } else if (scalar == slang::TypeReflection::ScalarType::Float16) {
@@ -327,7 +337,11 @@ namespace miki::shader {
 
         // Session pool: one cached session per ShaderTarget (type + version, no permutation macros)
         std::unordered_map<uint16_t, Slang::ComPtr<slang::ISession>> sessionPool;
-        std::mutex sessionPoolMutex;
+
+        // CRITICAL: IGlobalSession and ISession are NOT thread-safe (Slang docs 08-compiling §Multithreading).
+        // All Slang API calls (createSession, loadModule, findEntryPoint, compose, link, getEntryPointCode)
+        // must be serialized. This single mutex protects ALL Slang interactions.
+        std::mutex compileMutex;
 
         // Diagnostics from last compilation
         std::vector<ShaderDiagnostic> lastDiagnostics;
@@ -375,6 +389,11 @@ namespace miki::shader {
                     );
                     return globalSession->findProfile(profileStr);
                 case ShaderTargetType::WGSL: return globalSession->findProfile("wgsl");
+                case ShaderTargetType::MSL:
+                    std::snprintf(
+                        profileStr, sizeof(profileStr), "metal_%u_%u", iTarget.versionMajor, iTarget.versionMinor
+                    );
+                    return globalSession->findProfile(profileStr);
             }
             return globalSession->findProfile("spirv_1_5");
         }
@@ -409,12 +428,13 @@ namespace miki::shader {
             return session;
         }
 
-        /** @brief Get or create a cached session for the given target (no custom macros). */
+        /** @brief Get or create a cached session for the given target (no custom macros).
+         *  Caller MUST hold compileMutex.
+         */
         auto GetPooledSession(ShaderTarget iTarget) -> core::Result<slang::ISession*> {
             // Key combines type (4 bits) + versionMajor (4 bits) + versionMinor (8 bits)
             auto key = static_cast<uint16_t>(iTarget.type) | (static_cast<uint16_t>(iTarget.versionMajor) << 4)
                        | (static_cast<uint16_t>(iTarget.versionMinor) << 8);
-            std::lock_guard lock(sessionPoolMutex);
             auto it = sessionPool.find(key);
             if (it != sessionPool.end()) {
                 MIKI_LOG_TRACE(
@@ -772,21 +792,13 @@ namespace miki::shader {
     }
 
     auto SlangCompiler::Compile(ShaderCompileDesc const& iDesc) -> core::Result<ShaderBlob> {
-        impl_->lastDiagnostics.clear();
         auto pathStr = iDesc.sourcePath.empty() ? std::string("<embedded>") : iDesc.sourcePath.string();
         MIKI_LOG_DEBUG(
             debug::LogCategory::Shader, "[SlangCompiler] Compile: {} -> {} [{}]", pathStr,
             TargetTypeName(iDesc.target.type), StageName(iDesc.stage)
         );
 
-        auto t0 = std::chrono::steady_clock::now();
-
-        auto sessionResult = impl_->CreateSessionForDesc(iDesc);
-        if (!sessionResult) {
-            MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Session creation failed for {}", pathStr);
-            return std::unexpected(sessionResult.error());
-        }
-
+        // Read source OUTSIDE the lock (file I/O is thread-safe and may be slow)
         std::string source;
         if (!iDesc.sourceCode.empty()) {
             source = iDesc.sourceCode;
@@ -796,6 +808,18 @@ namespace miki::shader {
                 MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Failed to read source: {}", pathStr);
                 return std::unexpected(core::ErrorCode::IoError);
             }
+        }
+
+        auto t0 = std::chrono::steady_clock::now();
+
+        // Lock for ALL Slang API calls (IGlobalSession + ISession are not thread-safe)
+        std::lock_guard lock(impl_->compileMutex);
+        impl_->lastDiagnostics.clear();
+
+        auto sessionResult = impl_->CreateSessionForDesc(iDesc);
+        if (!sessionResult) {
+            MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Session creation failed for {}", pathStr);
+            return std::unexpected(sessionResult.error());
         }
 
         auto result
@@ -821,18 +845,21 @@ namespace miki::shader {
     auto SlangCompiler::CompileDualTarget(
         std::filesystem::path const& iSourcePath, std::string const& iEntryPoint, ShaderStage iStage
     ) -> core::Result<std::pair<ShaderBlob, ShaderBlob>> {
-        impl_->lastDiagnostics.clear();
         auto pathStr = iSourcePath.string();
         MIKI_LOG_DEBUG(
             debug::LogCategory::Shader, "[SlangCompiler] CompileDualTarget: {} [{}]", pathStr, StageName(iStage)
         );
-        auto t0 = std::chrono::steady_clock::now();
 
+        // Read source OUTSIDE the lock
         auto source = ReadFileToString(iSourcePath);
         if (source.empty()) {
             MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Failed to read source: {}", pathStr);
             return std::unexpected(core::ErrorCode::IoError);
         }
+
+        auto t0 = std::chrono::steady_clock::now();
+        std::lock_guard lock(impl_->compileMutex);
+        impl_->lastDiagnostics.clear();
 
         auto spirvTarget = ShaderTarget::SPIRV_1_5();
         auto spirvSession = impl_->GetPooledSession(spirvTarget);
@@ -866,18 +893,21 @@ namespace miki::shader {
     auto SlangCompiler::CompileQuadTarget(
         std::filesystem::path const& iSourcePath, std::string const& iEntryPoint, ShaderStage iStage
     ) -> core::Result<std::array<ShaderBlob, kTargetCount>> {
-        impl_->lastDiagnostics.clear();
         auto pathStr = iSourcePath.string();
         MIKI_LOG_DEBUG(
             debug::LogCategory::Shader, "[SlangCompiler] CompileQuadTarget: {} [{}]", pathStr, StageName(iStage)
         );
-        auto t0 = std::chrono::steady_clock::now();
 
+        // Read source OUTSIDE the lock
         auto source = ReadFileToString(iSourcePath);
         if (source.empty()) {
             MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Failed to read source: {}", pathStr);
             return std::unexpected(core::ErrorCode::IoError);
         }
+
+        auto t0 = std::chrono::steady_clock::now();
+        std::lock_guard lock(impl_->compileMutex);
+        impl_->lastDiagnostics.clear();
 
         static constexpr std::array<ShaderTarget, kTargetCount> kTargets
             = {ShaderTarget::SPIRV_1_5(), ShaderTarget::DXIL_6_6(), ShaderTarget::GLSL_430(), ShaderTarget::WGSL_1_0()};
@@ -903,15 +933,18 @@ namespace miki::shader {
     }
 
     auto SlangCompiler::Reflect(ShaderCompileDesc const& iDesc) -> core::Result<ShaderReflection> {
-        impl_->lastDiagnostics.clear();
-        auto sessionResult = impl_->CreateSessionForDesc(iDesc);
-        if (!sessionResult) {
-            return std::unexpected(sessionResult.error());
-        }
-
+        // Read source OUTSIDE the lock
         auto source = ReadFileToString(iDesc.sourcePath);
         if (source.empty()) {
             return std::unexpected(core::ErrorCode::IoError);
+        }
+
+        std::lock_guard lock(impl_->compileMutex);
+        impl_->lastDiagnostics.clear();
+
+        auto sessionResult = impl_->CreateSessionForDesc(iDesc);
+        if (!sessionResult) {
+            return std::unexpected(sessionResult.error());
         }
 
         auto pathStr = iDesc.sourcePath.string();
@@ -929,7 +962,7 @@ namespace miki::shader {
     }
 
     auto SlangCompiler::InvalidateSessionCache() -> void {
-        std::lock_guard lock(impl_->sessionPoolMutex);
+        std::lock_guard lock(impl_->compileMutex);
         auto count = impl_->sessionPool.size();
         impl_->sessionPool.clear();
         if (count > 0) {
