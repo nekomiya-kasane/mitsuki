@@ -94,6 +94,7 @@ namespace miki::rhi {
         // --- ASTC (mobile/WebGPU) ---
         ASTC_4x4_UNORM,
         ASTC_4x4_SRGB,
+        ASTC_4x4_HDR,  ///< VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK (Vulkan 1.3 / VK_EXT_texture_compression_astc_hdr)
 
         Count_
     };
@@ -214,7 +215,8 @@ namespace miki::rhi {
 
             // ASTC 4x4: 16 bytes per 4x4 block, 4 channels
             case Format::ASTC_4x4_UNORM:
-            case Format::ASTC_4x4_SRGB: return {16, 4, 4, true, false, false};
+            case Format::ASTC_4x4_SRGB:
+            case Format::ASTC_4x4_HDR: return {16, 4, 4, true, false, false};
 
             case Format::Undefined:
             case Format::Count_:

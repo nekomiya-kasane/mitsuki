@@ -3,6 +3,15 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
+# Windows.h macro restrictions (prevents min, max, ClassName, etc.)
+# ---------------------------------------------------------------------------
+if(WIN32)
+    add_compile_definitions(
+        NOMINMAX              # Disable min/max macros (use std::min/std::max instead)
+    )
+endif()
+
+# ---------------------------------------------------------------------------
 # Debug build: comprehensive debug information for debuggers
 # ---------------------------------------------------------------------------
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "")

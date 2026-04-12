@@ -94,6 +94,7 @@ namespace miki::rhi {
                 case Format::BC7_SRGB: return DXGI_FORMAT_BC7_UNORM_SRGB;
                 case Format::ASTC_4x4_UNORM: return DXGI_FORMAT_UNKNOWN;  // No ASTC on D3D12
                 case Format::ASTC_4x4_SRGB: return DXGI_FORMAT_UNKNOWN;
+                case Format::ASTC_4x4_HDR: return DXGI_FORMAT_UNKNOWN;
                 default: return DXGI_FORMAT_UNKNOWN;
             }
         }

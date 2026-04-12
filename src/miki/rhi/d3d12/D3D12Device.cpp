@@ -565,6 +565,7 @@ namespace miki::rhi {
             DXGI_FORMAT_BC7_UNORM_SRGB,        // BC7_SRGB
             DXGI_FORMAT_UNKNOWN,               // ASTC_4x4_UNORM (not supported on D3D12)
             DXGI_FORMAT_UNKNOWN,               // ASTC_4x4_SRGB
+            DXGI_FORMAT_UNKNOWN,               // ASTC_4x4_HDR
         };
         static_assert(std::size(kFormatMap) == GpuCapabilityProfile::kFormatCount);
 

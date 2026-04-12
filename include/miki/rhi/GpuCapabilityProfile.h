@@ -168,6 +168,11 @@ namespace miki::rhi {
         uint64_t hostVisibleMemoryBytes = 0;
         bool hasResizableBAR = false;
         bool hasSparseBinding = false;
+        bool hasSparseResidencyBuffer = false;     ///< Sparse residency for buffers (page-granularity bind/unbind)
+        bool hasSparseResidencyImage2D = false;    ///< Sparse residency for 2D images
+        bool hasSparseResidencyImage3D = false;    ///< Sparse residency for 3D images
+        bool hasStandardSparseBlockShape = false;  ///< residencyStandard2DBlockShape (standard tile sizes per format)
+        bool hasTextureCompressionASTC_HDR = false; ///< ASTC HDR (SFLOAT) texture format support
         bool hasHardwareDecompression = false;  ///< GDeflate HW decode (VK_NV_memory_decompression / DirectStorage)
         bool hasMemoryBudgetQuery = false;
 
@@ -247,6 +252,12 @@ namespace miki::rhi {
         }
         [[nodiscard]] bool HasSparseBinding() const noexcept {
             return enabledFeatures.Has(DeviceFeature::SparseBinding);
+        }
+        [[nodiscard]] bool HasSparseResidency() const noexcept {
+            return enabledFeatures.Has(DeviceFeature::SparseResidency);
+        }
+        [[nodiscard]] bool HasTextureCompressionASTC_HDR() const noexcept {
+            return enabledFeatures.Has(DeviceFeature::TextureCompressionASTC_HDR);
         }
         [[nodiscard]] bool HasAsyncCompute() const noexcept { return enabledFeatures.Has(DeviceFeature::AsyncCompute); }
         [[nodiscard]] bool HasWorkGraphs() const noexcept { return enabledFeatures.Has(DeviceFeature::WorkGraphs); }

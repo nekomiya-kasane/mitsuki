@@ -158,8 +158,14 @@ namespace miki::rhi {
     // =========================================================================
 
     struct SparsePageSize {
-        uint64_t bufferPageSize = 0;  ///< Typical: 64KB
-        uint64_t imagePageSize = 0;   ///< Typical: 64KB or 2MB
+        uint64_t bufferPageSize = 0;               ///< Typical: 64KB
+        uint64_t imagePageSize = 0;                ///< Typical: 64KB (standard block shape)
+        
+        bool standardBlockShape2D = false;          ///< Implementation uses spec-defined standard 2D block shapes
+        bool standardBlockShape3D = false;          ///< Implementation uses spec-defined standard 3D block shapes
+        bool standardBlockShapeMultisample = false;  ///< Standard block shapes for multisample images
+        bool alignedMipSize = false;                ///< Mip tail starts at aligned mip level
+        bool nonResidentStrict = false;             ///< Reads from unbound pages return well-defined values
     };
 
     struct SparseBufferBind {

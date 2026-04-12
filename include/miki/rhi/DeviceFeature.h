@@ -137,7 +137,12 @@ namespace miki::rhi {
          *  GL: ARB_sparse_texture | WebGPU: N/A */
         SparseBinding,
 
-        /** @brief Resizable BAR (large CPU-visible GPU memory).
+        /** @brief Sparse residency (page-granularity memory management).
+         *  Vk: sparseResidencyBuffer + sparseResidencyImage2D | D3D12: Tiled Resources Tier 2+ |
+         *  GL: ARB_sparse_texture2 | WebGPU: N/A */
+        SparseResidency,
+
+        /** @brief Resizable BAR
          *  Vk: VK_EXT_memory_budget + large HOST_VISIBLE heap | D3D12: D3D12_FEATURE_DATA_ARCHITECTURE1 |
          *  GL: N/A | WebGPU: N/A */
         ResizableBAR,
@@ -199,6 +204,11 @@ namespace miki::rhi {
          *  Vk: textureCompressionASTC_LDR feature | D3D12: N/A (no HW decode on desktop) |
          *  GL: KHR_texture_compression_astc_ldr | WebGPU: texture-compression-astc */
         TextureCompressionASTC,
+
+        /** @brief ASTC HDR (float) block compression.
+         *  Vk: core 1.3 (VK_EXT_texture_compression_astc_hdr) | D3D12: N/A |
+         *  GL: KHR_texture_compression_astc_hdr | WebGPU: N/A */
+        TextureCompressionASTC_HDR,
 
         /** @brief ETC2 block compression.
          *  Vk: textureCompressionETC2 feature | D3D12: N/A (no HW decode on desktop) |

@@ -213,9 +213,67 @@ namespace miki::rhi {
         auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
 
         // -- Swapchain (VulkanSwapchain.cpp) --
+        //
+        // Lifecycle & data flow:
+        //
+        // @verbatim embed:rst:leading-slashes
+        //
+        //   ┌─────────────────────────────────────────────────────────────────┐
+        //   │                    Swapchain Lifecycle                          │
+        //   │                                                                │
+        //   │  CreateSwapchainImpl ─┬─► ResolveSwapchainExtent               │
+        //   │         │             └─► RegisterSwapchainImages               │
+        //   │         │                      │                               │
+        //   │         │                      ├─► textures_.Allocate (per img) │
+        //   │         │                      └─► CreateTextureViewImpl        │
+        //   │         ▼                                                      │
+        //   │  ┌──────────────┐                                              │
+        //   │  │ Swapchain    │◄── Handle returned to caller                 │
+        //   │  │ (active)     │                                              │
+        //   │  └──┬───┬───┬──┘                                              │
+        //   │     │   │   │                                                  │
+        //   │     │   │   └──► ResizeSwapchainImpl                           │
+        //   │     │   │            ├─► ReleaseSwapchainResources              │
+        //   │     │   │            ├─► ResolveSwapchainExtent                 │
+        //   │     │   │            └─► RegisterSwapchainImages                │
+        //   │     │   │                                                      │
+        //   │     │   └──────► DestroySwapchainImpl                          │
+        //   │     │                 └─► ReleaseSwapchainResources             │
+        //   │     │                                                          │
+        //   │     ▼                                                          │
+        //   │  Per-frame presentation loop:                                  │
+        //   │                                                                │
+        //   │  AcquireNextImageImpl ──► imageIndex                           │
+        //   │         │                    │                                  │
+        //   │         │     ┌──────────────┼──────────────┐                  │
+        //   │         │     ▼              ▼              ▼                  │
+        //   │         │  GetSwapchain  GetSwapchain  GetSwapchain            │
+        //   │         │  TextureImpl   TextureView  ImageCountImpl           │
+        //   │         │     │          Impl   │                              │
+        //   │         │     ▼              ▼                                  │
+        //   │         │   [ render pass uses texture/view ]                  │
+        //   │         │                    │                                  │
+        //   │         │                    ▼                                  │
+        //   │         └──────────────► PresentImpl                           │
+        //   │                              │                                 │
+        //   │                              └─► vkQueuePresentKHR             │
+        //   └─────────────────────────────────────────────────────────────────┘
+        //
+        //   Internal helpers (shared by Create & Resize):
+        //
+        //   ReleaseSwapchainResources ──┬─► DestroyTextureViewImpl (per view)
+        //                               └─► textures_.MarkDead/Reclaim (per img)
+        //
+        //   RegisterSwapchainImages ────┬─► textures_.Allocate (per img)
+        //                               └─► CreateTextureViewImpl (per img)
+        //
+        //   ResolveSwapchainExtent ─────► vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+        //
+        // @endverbatim
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
         void DestroySwapchainImpl(SwapchainHandle h);
         auto ResizeSwapchainImpl(SwapchainHandle h, uint32_t w, uint32_t ht) -> RhiResult<void>;
+
         // Swapchain helpers (internal)
         void ReleaseSwapchainResources(VulkanSwapchainData* data);
         auto RegisterSwapchainImages(VulkanSwapchainData* data, VkExtent2D extent) -> RhiResult<void>;

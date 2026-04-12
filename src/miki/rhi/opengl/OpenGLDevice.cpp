@@ -482,6 +482,7 @@ namespace miki::rhi {
             0x8E8D,                 // BC7_SRGB
             0,                      // ASTC_4x4_UNORM (not core GL 4.3)
             0,                      // ASTC_4x4_SRGB
+            0,                      // ASTC_4x4_HDR
         };
         static_assert(sizeof(kFormatMap) / sizeof(kFormatMap[0]) == GpuCapabilityProfile::kFormatCount);
 

@@ -155,6 +155,7 @@ namespace miki::rhi {
                 case Format::BC7_SRGB: return VK_FORMAT_BC7_SRGB_BLOCK;
                 case Format::ASTC_4x4_UNORM: return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
                 case Format::ASTC_4x4_SRGB: return VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
+                case Format::ASTC_4x4_HDR: return VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK;
                 default: return VK_FORMAT_UNDEFINED;
             }
         }
@@ -819,10 +820,46 @@ namespace miki::rhi {
     auto VulkanDevice::GetSparsePageSizeImpl() const -> SparsePageSize {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physicalDevice_, &props);
-        return {
-            props.limits.sparseAddressSpaceSize > 0 ? 65536ULL : 0ULL,
-            props.limits.sparseAddressSpaceSize > 0 ? 65536ULL : 0ULL,
-        };
+
+        SparsePageSize result{};
+        if (props.limits.sparseAddressSpaceSize == 0) {
+            return result;
+        }
+
+        // Buffer sparse page: universally 64KB on all known implementations
+        result.bufferPageSize = 65536ULL;
+
+        // Query sparse image format properties for a representative format (RGBA8)
+        // to determine the actual image page size
+        VkSparseImageFormatProperties sparseImgProps[8]{};
+        uint32_t propCount = 0;
+        vkGetPhysicalDeviceSparseImageFormatProperties(
+            physicalDevice_, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT,
+            VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_TILING_OPTIMAL, &propCount, nullptr
+        );
+        propCount = std::min(propCount, 8u);
+        if (propCount > 0) {
+            vkGetPhysicalDeviceSparseImageFormatProperties(
+                physicalDevice_, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT,
+                VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_TILING_OPTIMAL, &propCount, sparseImgProps
+            );
+            // Image page size = granularity.width * height * depth * bytesPerTexel
+            // For RGBA8 (4 bpp): typical 128x128x1 * 4 = 65536 (64KB)
+            auto& g = sparseImgProps[0].imageGranularity;
+            result.imagePageSize = static_cast<uint64_t>(g.width) * g.height * g.depth * 4;
+        } else {
+            result.imagePageSize = 65536ULL;  // fallback
+        }
+
+        // Sparse properties from device
+        result.standardBlockShape2D = (props.sparseProperties.residencyStandard2DBlockShape == VK_TRUE);
+        result.standardBlockShape3D = (props.sparseProperties.residencyStandard3DBlockShape == VK_TRUE);
+        result.standardBlockShapeMultisample
+            = (props.sparseProperties.residencyStandard2DMultisampleBlockShape == VK_TRUE);
+        result.alignedMipSize = (props.sparseProperties.residencyAlignedMipSize == VK_TRUE);
+        result.nonResidentStrict = (props.sparseProperties.residencyNonResidentStrict == VK_TRUE);
+
+        return result;
     }
 
     void VulkanDevice::SubmitSparseBindsImpl(

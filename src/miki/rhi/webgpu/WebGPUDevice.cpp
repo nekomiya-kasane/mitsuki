@@ -398,6 +398,8 @@ namespace miki::rhi {
         FormatFeatureFlags astcFlags = hasAstcCompression ? SF : F::None;
         fs[static_cast<uint32_t>(Format::ASTC_4x4_UNORM)] = astcFlags;
         fs[static_cast<uint32_t>(Format::ASTC_4x4_SRGB)] = astcFlags;
+        // ASTC HDR: not available in WebGPU
+        fs[static_cast<uint32_t>(Format::ASTC_4x4_HDR)] = F::None;
     }
 
     // =========================================================================

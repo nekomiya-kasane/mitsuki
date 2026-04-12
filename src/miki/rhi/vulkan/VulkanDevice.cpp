@@ -466,6 +466,13 @@ namespace miki::rhi {
         features2.features.depthBiasClamp = supported2.features.depthBiasClamp;
         features2.features.multiDrawIndirect = supported2.features.multiDrawIndirect;
         features2.features.drawIndirectFirstInstance = supported2.features.drawIndirectFirstInstance;
+        features2.features.textureCompressionASTC_LDR = supported2.features.textureCompressionASTC_LDR;
+
+        // Sparse binding + residency (optional, both tiers)
+        features2.features.sparseBinding = supported2.features.sparseBinding;
+        features2.features.sparseResidencyBuffer = supported2.features.sparseResidencyBuffer;
+        features2.features.sparseResidencyImage2D = supported2.features.sparseResidencyImage2D;
+        features2.features.sparseResidencyImage3D = supported2.features.sparseResidencyImage3D;
 
         // Feature structs — declared here, conditionally initialized below
         VkPhysicalDeviceVulkan11Features features11{};
@@ -475,6 +482,7 @@ namespace miki::rhi {
         VkPhysicalDeviceSynchronization2FeaturesKHR sync2Feature{};
         VkPhysicalDeviceShaderDrawParametersFeatures drawParamsFeature{};
         VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeature{};
+        VkPhysicalDeviceTextureCompressionASTCHDRFeaturesEXT astcHdrFeature{};
 
         if (tier_ == BackendType::Vulkan14) {
             // -----------------------------------------------------------------
@@ -499,6 +507,8 @@ namespace miki::rhi {
             features13.synchronization2 = VK_TRUE;
             features13.dynamicRendering = VK_TRUE;
             features13.maintenance4 = VK_TRUE;
+            // ASTC HDR — promoted to core 1.3, enable if GPU supports it
+            features13.textureCompressionASTC_HDR = supported13.textureCompressionASTC_HDR;
 
             // Optional Tier1 extensions — append to end of chain (features11.pNext)
             void** pNextTail = &features11.pNext;
@@ -566,6 +576,15 @@ namespace miki::rhi {
                 drawParamsFeature.shaderDrawParameters = VK_TRUE;
                 *pNextTail = &drawParamsFeature;
                 pNextTail = &drawParamsFeature.pNext;
+            }
+
+            // Optional: ASTC HDR (VK_EXT_texture_compression_astc_hdr, pre-1.3 path)
+            if (hasExt(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME)) {
+                deviceExtensions.push_back(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME);
+                astcHdrFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES_EXT;
+                astcHdrFeature.textureCompressionASTC_HDR = VK_TRUE;
+                *pNextTail = &astcHdrFeature;
+                pNextTail = &astcHdrFeature.pNext;
             }
         }
 
@@ -845,10 +864,34 @@ namespace miki::rhi {
             capabilities_.enabledFeatures.Add(DeviceFeature::AsyncCompute);
         }
 
-        // Sparse binding
+        // Sparse binding + residency
         capabilities_.hasSparseBinding = (deviceFeatures.sparseBinding == VK_TRUE);
+        capabilities_.hasSparseResidencyBuffer = (deviceFeatures.sparseResidencyBuffer == VK_TRUE);
+        capabilities_.hasSparseResidencyImage2D = (deviceFeatures.sparseResidencyImage2D == VK_TRUE);
+        capabilities_.hasSparseResidencyImage3D = (deviceFeatures.sparseResidencyImage3D == VK_TRUE);
+        capabilities_.hasStandardSparseBlockShape = (props.sparseProperties.residencyStandard2DBlockShape == VK_TRUE);
         if (capabilities_.hasSparseBinding) {
             capabilities_.enabledFeatures.Add(DeviceFeature::SparseBinding);
+        }
+        if (capabilities_.hasSparseResidencyBuffer || capabilities_.hasSparseResidencyImage2D) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::SparseResidency);
+        }
+
+        // ASTC HDR detection
+        if (isTier1) {
+            VkPhysicalDeviceVulkan13Features features13Query{};
+            features13Query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+            VkPhysicalDeviceFeatures2 features2Query{};
+            features2Query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features2Query.pNext = &features13Query;
+            vkGetPhysicalDeviceFeatures2(physicalDevice_, &features2Query);
+            capabilities_.hasTextureCompressionASTC_HDR = (features13Query.textureCompressionASTC_HDR == VK_TRUE);
+        } else {
+            capabilities_.hasTextureCompressionASTC_HDR
+                = hasExt(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME);
+        }
+        if (capabilities_.hasTextureCompressionASTC_HDR) {
+            capabilities_.enabledFeatures.Add(DeviceFeature::TextureCompressionASTC_HDR);
         }
 
         // ReBAR detection
@@ -883,6 +926,15 @@ namespace miki::rhi {
             Rhi, "[Vulkan] Capability tier: {} (backend: {}, GPU: {})", isTier1 ? "Tier1_Vulkan" : "Tier2_Compat",
             isTier1 ? "Vulkan14" : "VulkanCompat", capabilities_.deviceName
         );
+        MIKI_LOG_INFO(
+            Rhi,
+            "[Vulkan] Sparse: binding={}, residencyBuffer={}, residencyImage2D={}, residencyImage3D={}, "
+            "standardBlockShape={}",
+            capabilities_.hasSparseBinding, capabilities_.hasSparseResidencyBuffer,
+            capabilities_.hasSparseResidencyImage2D, capabilities_.hasSparseResidencyImage3D,
+            capabilities_.hasStandardSparseBlockShape
+        );
+        MIKI_LOG_INFO(Rhi, "[Vulkan] ASTC HDR: {}", capabilities_.hasTextureCompressionASTC_HDR);
 
         PopulateFormatSupport();
     }
@@ -1091,6 +1143,7 @@ namespace miki::rhi {
             VK_FORMAT_BC7_SRGB_BLOCK,            // BC7_SRGB
             VK_FORMAT_ASTC_4x4_UNORM_BLOCK,      // ASTC_4x4_UNORM
             VK_FORMAT_ASTC_4x4_SRGB_BLOCK,       // ASTC_4x4_SRGB
+            VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK,     // ASTC_4x4_HDR
         };
         static_assert(std::size(kFormatMap) == GpuCapabilityProfile::kFormatCount);
 
