@@ -301,6 +301,20 @@ namespace miki::rhi {
                 return std::unexpected(comp.error());
             }
             queueTimelines_.compute = *comp;
+        } else {
+            queueTimelines_.compute = queueTimelines_.graphics;  // compute == graphics → share timeline
+        }
+
+        // Level A: computeAsync is a distinct queue → separate timeline semaphore
+        // Level B/C/D: computeAsync aliases compute → share semaphore
+        if (queues_.computeAsync && queues_.computeAsync.Get() != queues_.compute.Get()) {
+            auto asyncComp = makeSem();
+            if (!asyncComp) {
+                return std::unexpected(asyncComp.error());
+            }
+            queueTimelines_.asyncCompute = *asyncComp;
+        } else {
+            queueTimelines_.asyncCompute = queueTimelines_.compute;
         }
 
         if (queues_.copy && queues_.copy.Get() != queues_.graphics.Get()) {
@@ -309,6 +323,8 @@ namespace miki::rhi {
                 return std::unexpected(xfer.error());
             }
             queueTimelines_.transfer = *xfer;
+        } else {
+            queueTimelines_.transfer = queueTimelines_.graphics;  // transfer == graphics → share timeline
         }
 
         return {};
@@ -899,9 +915,12 @@ namespace miki::rhi {
     void D3D12Device::SubmitImpl(QueueType queue, const SubmitDesc& desc) {
         ID3D12CommandQueue* targetQueue = queues_.graphics.Get();
         if (queue == QueueType::Compute && queues_.compute) {
-            if (desc.preferAsyncQueue && queues_.computeAsync && queues_.computeAsync.Get() != queues_.compute.Get()) {
+            targetQueue = queues_.compute.Get();
+        } else if (queue == QueueType::AsyncCompute) {
+            // Level A: separate queue; Level B/C/D: falls back to compute or graphics
+            if (queues_.computeAsync) {
                 targetQueue = queues_.computeAsync.Get();
-            } else {
+            } else if (queues_.compute) {
                 targetQueue = queues_.compute.Get();
             }
         } else if (queue == QueueType::Transfer && queues_.copy) {

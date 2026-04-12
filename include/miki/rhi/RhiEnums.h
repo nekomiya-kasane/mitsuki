@@ -20,9 +20,10 @@ namespace miki::rhi {
     // =========================================================================
 
     enum class QueueType : uint8_t {
-        Graphics,  ///< Graphics + compute + transfer
-        Compute,   ///< Compute + transfer (async compute)
-        Transfer,  ///< Transfer only (DMA / copy engine)
+        Graphics,      ///< Graphics + compute + transfer (main queue)
+        Compute,       ///< Dedicated compute queue (frame-sync, HIGH priority)
+        AsyncCompute,  ///< Async compute queue (cross-frame, NORMAL priority; Level A only, else alias Compute)
+        Transfer,      ///< Transfer only (DMA / copy engine)
     };
 
     // =========================================================================

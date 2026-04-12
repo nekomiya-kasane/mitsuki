@@ -53,6 +53,7 @@ namespace miki::frame {
             switch (q) {
                 case rhi::QueueType::Graphics: return 0;
                 case rhi::QueueType::Compute: return 1;
+                case rhi::QueueType::AsyncCompute: return 1;  // same command pool type as Compute
                 case rhi::QueueType::Transfer: return 2;
             }
             return 0;
@@ -62,7 +63,7 @@ namespace miki::frame {
             if (q == rhi::QueueType::Graphics) {
                 return true;
             }
-            if (q == rhi::QueueType::Compute) {
+            if (q == rhi::QueueType::Compute || q == rhi::QueueType::AsyncCompute) {
                 return hasAsyncCompute;
             }
             if (q == rhi::QueueType::Transfer) {

@@ -29,7 +29,7 @@ namespace miki::frame {
     class CommandPoolAllocator {
        public:
         static constexpr uint32_t kMaxFramesInFlight = 4;
-        static constexpr uint32_t kMaxQueueTypes = 3;         // Graphics, Compute, Transfer
+        static constexpr uint32_t kMaxQueueTypes = 4;         // Graphics, Compute, Transfer, AsyncCompute
         static constexpr uint32_t kMaxRecordingThreads = 16;  // §19.8
 
         struct Desc {

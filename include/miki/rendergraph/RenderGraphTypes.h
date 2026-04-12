@@ -90,7 +90,7 @@ namespace miki::rg {
     [[nodiscard]] constexpr auto ToRhiQueueType(RGQueueType q) noexcept -> rhi::QueueType {
         switch (q) {
             case RGQueueType::Graphics: return rhi::QueueType::Graphics;
-            case RGQueueType::AsyncCompute: return rhi::QueueType::Compute;
+            case RGQueueType::AsyncCompute: return rhi::QueueType::AsyncCompute;
             case RGQueueType::Transfer: return rhi::QueueType::Transfer;
         }
         return rhi::QueueType::Graphics;

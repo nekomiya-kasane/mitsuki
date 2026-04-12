@@ -208,12 +208,12 @@ TEST_P(AsyncTaskManagerTest, Submit02_CompletionPoint) {
     auto point = atm.GetCompletionPoint(*handle);
     EXPECT_TRUE(point.semaphore.IsValid());
     EXPECT_GT(point.value, 0u);
-    // Completion point semaphore must match the Compute queue's timeline semaphore
-    auto computeSem = scheduler_.GetSemaphore(QueueType::Compute);
-    EXPECT_EQ(point.semaphore.IsValid(), computeSem.IsValid());
-    EXPECT_EQ(point.semaphore.value, computeSem.value) << "Semaphore handle must be the Compute timeline";
-    // signal value == 1 (first allocation on Compute queue after Init)
-    EXPECT_EQ(point.value, 1u) << "First signal on Compute queue must be value 1";
+    // Completion point semaphore must match the AsyncCompute queue's timeline semaphore
+    auto asyncComputeSem = scheduler_.GetSemaphore(QueueType::AsyncCompute);
+    EXPECT_EQ(point.semaphore.IsValid(), asyncComputeSem.IsValid());
+    EXPECT_EQ(point.semaphore.value, asyncComputeSem.value) << "Semaphore handle must be the AsyncCompute timeline";
+    // signal value == 1 (first allocation on AsyncCompute queue after Init)
+    EXPECT_EQ(point.value, 1u) << "First signal on AsyncCompute queue must be value 1";
 
     atm.Shutdown();
 }
@@ -417,7 +417,7 @@ TEST_P(AsyncTaskManagerTest, Route01_LevelDUsesGraphics) {
     atm.Shutdown();
 }
 
-// ATM-ROUTE-02: GIVEN Level A/B/C ATM WHEN Submit THEN timeline advances on Compute semaphore
+// ATM-ROUTE-02: GIVEN Level A/B/C ATM WHEN Submit THEN timeline advances on AsyncCompute semaphore
 TEST_P(AsyncTaskManagerTest, Route02_LevelABCUsesCompute) {
     auto caps = Caps();
     if (!caps.hasAsyncCompute) {
@@ -437,15 +437,15 @@ TEST_P(AsyncTaskManagerTest, Route02_LevelABCUsesCompute) {
     }
 
     auto graphicsBefore = scheduler_.GetCurrentValue(QueueType::Graphics);
-    auto computeBefore = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto asyncComputeBefore = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
 
     auto handle = atm.Submit(cmd);
     ASSERT_TRUE(handle.has_value());
 
     auto graphicsAfter = scheduler_.GetCurrentValue(QueueType::Graphics);
-    auto computeAfter = scheduler_.GetCurrentValue(QueueType::Compute);
+    auto asyncComputeAfter = scheduler_.GetCurrentValue(QueueType::AsyncCompute);
     EXPECT_EQ(graphicsAfter, graphicsBefore) << "Graphics timeline must NOT advance for Level A/B/C";
-    EXPECT_GT(computeAfter, computeBefore) << "Compute timeline must advance for Level A/B/C";
+    EXPECT_GT(asyncComputeAfter, asyncComputeBefore) << "AsyncCompute timeline must advance for Level A/B/C";
 
     atm.Shutdown();
 }
@@ -470,9 +470,9 @@ TEST_P(AsyncTaskManagerTest, Route03_CompletionPointSemaphoreMatchesQueue) {
     ASSERT_TRUE(handle.has_value());
 
     auto point = atm.GetCompletionPoint(*handle);
-    auto computeSem = scheduler_.GetSemaphore(QueueType::Compute);
+    auto asyncComputeSem = scheduler_.GetSemaphore(QueueType::AsyncCompute);
     EXPECT_TRUE(point.semaphore.IsValid());
-    EXPECT_EQ(point.semaphore.value, computeSem.value) << "Completion semaphore must be Compute timeline";
+    EXPECT_EQ(point.semaphore.value, asyncComputeSem.value) << "Completion semaphore must be AsyncCompute timeline";
     EXPECT_GT(point.value, 0u);
 
     atm.Shutdown();

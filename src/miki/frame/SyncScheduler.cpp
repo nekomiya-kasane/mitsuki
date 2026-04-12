@@ -14,6 +14,14 @@ namespace miki::frame {
         queues_[0].semaphore = timelines.graphics;
         queues_[1].semaphore = timelines.compute;
         queues_[2].semaphore = timelines.transfer;
+        // Level A: asyncCompute has its own semaphore → independent slot 3
+        // Level B/C/D: asyncCompute aliases compute → slot 1 (shared counter)
+        if (timelines.asyncCompute.value != timelines.compute.value) {
+            asyncComputeSlot_ = 3;
+            queues_[3].semaphore = timelines.asyncCompute;
+        } else {
+            asyncComputeSlot_ = 1;  // QueueIndex(AsyncCompute) returns 1, sharing Compute's state
+        }
         for (auto& q : queues_) {
             q.nextValue = 1;
             q.currentValue = 0;
@@ -74,7 +82,7 @@ namespace miki::frame {
     // Wait-Graph Diagnostic (specs/03-sync.md §12.4)
     // =========================================================================
 
-    static constexpr const char* kQueueNames[3] = {"Graphics", "Compute", "Transfer"};
+    static constexpr const char* kQueueNames[4] = {"Graphics", "Compute", "Transfer", "AsyncCompute"};
 
     void SyncScheduler::DumpWaitGraph(FILE* iOut) const {
         std::fprintf(iOut, "=== SyncScheduler Wait-Graph Dump ===\n\nQueue States:\n");

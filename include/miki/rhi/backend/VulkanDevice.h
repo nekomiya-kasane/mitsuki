@@ -454,7 +454,8 @@ namespace miki::rhi {
        public:
         [[nodiscard]] auto QueueFamilyIndex(QueueType q) const noexcept -> uint32_t {
             switch (q) {
-                case QueueType::Compute: return queueFamilies_.compute;
+                case QueueType::Compute:
+                case QueueType::AsyncCompute: return queueFamilies_.compute;  // same family, different queue index
                 case QueueType::Transfer: return queueFamilies_.transfer;
                 default: return queueFamilies_.graphics;
             }

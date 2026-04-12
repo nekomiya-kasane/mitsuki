@@ -718,6 +718,15 @@ namespace miki::rhi {
         if (auto r = createAndRegister(queueTimelines_.transfer); !r) {
             return r;
         }
+        // Level A: asyncCompute gets its own timeline semaphore (separate VkQueue, independent scheduling)
+        // Level B/C/D: alias compute semaphore (same VkQueue, shared FIFO ordering)
+        if (computeAsyncQueue_ != VK_NULL_HANDLE && computeAsyncQueue_ != computeQueue_) {
+            if (auto r = createAndRegister(queueTimelines_.asyncCompute); !r) {
+                return r;
+            }
+        } else {
+            queueTimelines_.asyncCompute = queueTimelines_.compute;
+        }
 
         graphicsTimelineValue_ = 0;
         computeTimelineValue_ = 0;
@@ -749,6 +758,8 @@ namespace miki::rhi {
         createEmulated(queueTimelines_.graphics);
         createEmulated(queueTimelines_.compute);
         createEmulated(queueTimelines_.transfer);
+        // Tier2 compat: no dual compute queue, always alias
+        queueTimelines_.asyncCompute = queueTimelines_.compute;
 
         graphicsTimelineValue_ = 0;
         computeTimelineValue_ = 0;
@@ -887,8 +898,7 @@ namespace miki::rhi {
             vkGetPhysicalDeviceFeatures2(physicalDevice_, &features2Query);
             capabilities_.hasTextureCompressionASTC_HDR = (features13Query.textureCompressionASTC_HDR == VK_TRUE);
         } else {
-            capabilities_.hasTextureCompressionASTC_HDR
-                = hasExt(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME);
+            capabilities_.hasTextureCompressionASTC_HDR = hasExt(VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME);
         }
         if (capabilities_.hasTextureCompressionASTC_HDR) {
             capabilities_.enabledFeatures.Add(DeviceFeature::TextureCompressionASTC_HDR);
@@ -1247,6 +1257,11 @@ namespace miki::rhi {
         if (queueTimelines_.compute.IsValid()) {
             DestroySemaphoreImpl(queueTimelines_.compute);
         }
+        // Only destroy asyncCompute if it's a separate semaphore (Level A), not aliased to compute
+        if (queueTimelines_.asyncCompute.IsValid()
+            && queueTimelines_.asyncCompute.value != queueTimelines_.compute.value) {
+            DestroySemaphoreImpl(queueTimelines_.asyncCompute);
+        }
         if (queueTimelines_.transfer.IsValid()) {
             DestroySemaphoreImpl(queueTimelines_.transfer);
         }
@@ -1433,14 +1448,14 @@ namespace miki::rhi {
         VkQueue targetQueue = graphicsQueue_;
         std::mutex* queueMutex = &graphicsQueueMutex_;
         if (queue == QueueType::Compute) {
-            if (desc.preferAsyncQueue && computeAsyncQueue_ != computeQueue_) {
-                // Level A: route to the dedicated async compute queue
-                targetQueue = computeAsyncQueue_;
-                queueMutex = &computeAsyncQueueMutex_;
-            } else {
-                targetQueue = computeQueue_;
-                queueMutex = (computeQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &computeQueueMutex_;
-            }
+            targetQueue = computeQueue_;
+            queueMutex = (computeQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &computeQueueMutex_;
+        } else if (queue == QueueType::AsyncCompute) {
+            // Level A: separate VkQueue with NORMAL priority; Level B/C/D: same as computeQueue_
+            targetQueue = computeAsyncQueue_;
+            queueMutex = (computeAsyncQueue_ == computeQueue_)
+                             ? ((computeQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &computeQueueMutex_)
+                             : &computeAsyncQueueMutex_;
         } else if (queue == QueueType::Transfer) {
             targetQueue = transferQueue_;
             queueMutex = (transferQueue_ == graphicsQueue_) ? &graphicsQueueMutex_ : &transferQueueMutex_;

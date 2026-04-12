@@ -110,13 +110,14 @@ namespace miki::frame {
         [[nodiscard]] auto DetectDeadlock() const -> bool;
 
        private:
-        static constexpr uint32_t kQueueCount = 3;
+        static constexpr uint32_t kQueueCount = 4;  // Graphics, Compute, Transfer, AsyncCompute
 
-        static auto QueueIndex(rhi::QueueType q) -> uint32_t {
+        auto QueueIndex(rhi::QueueType q) const -> uint32_t {
             switch (q) {
                 case rhi::QueueType::Graphics: return 0;
                 case rhi::QueueType::Compute: return 1;
                 case rhi::QueueType::Transfer: return 2;
+                case rhi::QueueType::AsyncCompute: return asyncComputeSlot_;
             }
             return 0;
         }
@@ -129,6 +130,7 @@ namespace miki::frame {
         };
 
         std::array<QueueState, kQueueCount> queues_{};
+        uint32_t asyncComputeSlot_ = 1;  // 3 = Level A (independent), 1 = Level B/C/D (alias Compute)
     };
 
 }  // namespace miki::frame

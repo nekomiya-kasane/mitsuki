@@ -33,9 +33,13 @@ namespace miki::rhi {
 
     /// Device-owned timeline semaphores, one per hardware queue.
     /// FrameManager and SyncScheduler reference these instead of creating their own.
+    /// Level A (dual compute queue): asyncCompute is a separate semaphore.
+    /// Level B/C/D: asyncCompute aliases compute (same SemaphoreHandle).
     struct QueueTimelines {
         SemaphoreHandle graphics;
-        SemaphoreHandle compute;
+        SemaphoreHandle compute;  ///< Frame-sync compute (HIGH priority queue)
+        SemaphoreHandle
+            asyncCompute;  ///< Cross-frame async compute (NORMAL priority queue; Level A: separate, else == compute)
         SemaphoreHandle transfer;
     };
 
@@ -84,7 +88,6 @@ namespace miki::rhi {
         std::span<const SemaphoreSubmitInfo> waitSemaphores;
         std::span<const SemaphoreSubmitInfo> signalSemaphores;
         FenceHandle signalFence;
-        bool preferAsyncQueue = false;  ///< When true and Level A, route to the async compute queue
     };
 
 }  // namespace miki::rhi
