@@ -1,9 +1,11 @@
-# 04 — Shader Compilation Pipeline Architecture
+# 05 — Shader Compilation Pipeline Architecture
 
 > **Scope**: Slang compiler integration, quad-target compilation, permutation cache,
-> shader hot-reload, feature probe, push constant emulation, descriptor strategy integration.
+> shader hot-reload, feature probe, push constant emulation, descriptor strategy integration,
+> **Slang shader project architecture**, **timeline semaphore integration with pipeline creation**,
+> **precompiled module strategy**, **neural shader support**.
 > **Layer**: L2 (Shader Toolchain) — serves all 5 backends and all upper-layer rendering passes.
-> **Depends on**: `00-infra` (ErrorCode, Result), `02-rhi-design` (Format, RhiTypes, IDevice, GpuCapabilityProfile).
+> **Depends on**: `00-infra` (ErrorCode, Result), `02-rhi-design` (Format, RhiTypes, IDevice, GpuCapabilityProfile), `03-sync` (timeline semaphores, SyncScheduler).
 > **Consumed by**: Phase 1a (dual-target), Phase 1b (quad-target + hot-reload), Phase 2+ (all rendering).
 
 ---
@@ -839,33 +841,44 @@ For Emscripten/WASM shipping:
 
 ## 11. Gap Analysis — Reference vs Target
 
-| Component                        | Reference (`D:\repos\miki`)                                | mitsuki Target                                                                          | Action        |
-| -------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------- |
-| `SlangCompiler`                  | Pimpl, quad-target, session-per-compile                    | **Reuse** with upgrades: session reuse for incremental, module caching                  | Refactor Impl |
-| `ShaderTypes`                    | Complete: all enums, BlOb, Reflection, PermutationKey      | **Reuse** as-is                                                                         | Direct import |
-| `ShaderTargetForBackend`         | Maps OpenGL → SPIRV (GL_ARB_gl_spirv)                      | **Reuse** — correct design                                                              | Direct import |
-| `PermutationCache`               | LRU + disk cache, thread-safe, source hash validation      | **Reuse** with upgrades: `#include`-aware hash (hash all transitively included sources) | Refactor      |
-| `ShaderWatcher`                  | ReadDirectoryChangesW + polling, IncludeDepGraph, debounce | **Reuse** with upgrades: `std::jthread` (C++20 → C++23), transitive dep closure         | Refactor      |
-| `SlangFeatureProbe`              | 29 probes, SPIR-V/DXIL/GLSL/WGSL targets, tier1Only flag   | **Reuse** as-is — well-designed                                                         | Direct import |
-| `IPipelineFactory`               | Dual factory (Main/Compat), 7 pass creation methods        | **Reuse** — matches spec exactly                                                        | Direct import |
-| `PipelineCache`                  | VkPipelineCache + D3D12PipelineLibrary + header validation | **Reuse** as-is                                                                         | Direct import |
-| `probe_*.slang` (29 files)       | Comprehensive test shaders                                 | **Reuse** — covers all target-specific edge cases                                       | Direct import |
-| Incremental module compilation   | Not implemented (new session per compile)                  | **New**: session reuse + module cache across frames                                     | New code      |
-| `#include`-aware disk cache hash | Hashes only root source file                               | **New**: hash must include all transitively `#include`'d files                          | New code      |
-| Transitive dep graph             | 1-level deep `GetAffected()`                               | **New**: full transitive closure via BFS/DFS                                            | New code      |
-| Offline WGSL compiler tool       | Not implemented                                            | **New**: CLI tool for WASM build pipeline                                               | New code      |
-| Slang source CMake integration   | Prebuilt DLLs                                              | **New**: `add_subdirectory` source build + hybrid option                                | New CMake     |
+| Component                         | Reference (`D:\repos\miki`)                                | mitsuki Target                                                                          | Action        |
+| --------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------- |
+| `SlangCompiler`                   | Pimpl, quad-target, session-per-compile                    | **Reuse** with upgrades: session reuse for incremental, module caching                  | Refactor Impl |
+| `ShaderTypes`                     | Complete: all enums, Blob, Reflection, PermutationKey      | **Reuse** as-is                                                                         | Direct import |
+| `ShaderTargetForBackend`          | Maps OpenGL → SPIRV (GL_ARB_gl_spirv)                      | **Reuse** — correct design                                                              | Direct import |
+| `PermutationCache`                | LRU + disk cache, thread-safe, source hash validation      | **Reuse** with upgrades: `#include`-aware hash (hash all transitively included sources) | Refactor      |
+| `ShaderWatcher`                   | ReadDirectoryChangesW + polling, IncludeDepGraph, debounce | **Reuse** with upgrades: `std::jthread` (C++20 → C++23), transitive dep closure         | Refactor      |
+| `SlangFeatureProbe`               | 29 probes, SPIR-V/DXIL/GLSL/WGSL targets, tier1Only flag   | **Reuse** as-is — well-designed                                                         | Direct import |
+| `IPipelineFactory`                | Dual factory (Main/Compat), 7 pass creation methods        | **Reuse** — matches spec exactly                                                        | Direct import |
+| `PipelineCache`                   | VkPipelineCache + D3D12PipelineLibrary + header validation | **Reuse** as-is                                                                         | Direct import |
+| `probe_*.slang` (29 files)        | Comprehensive test shaders                                 | **Reuse** — covers all target-specific edge cases                                       | Direct import |
+| Incremental module compilation    | Not implemented (new session per compile)                  | **New**: session reuse + module cache across frames                                     | New code      |
+| `#include`-aware disk cache hash  | Hashes only root source file                               | **New**: hash must include all transitively `#include`'d files                          | New code      |
+| Transitive dep graph              | 1-level deep `GetAffected()`                               | **New**: full transitive closure via BFS/DFS                                            | New code      |
+| Offline WGSL compiler tool        | Not implemented                                            | **New**: CLI tool for WASM build pipeline                                               | New code      |
+| Slang source CMake integration    | Prebuilt DLLs                                              | **New**: `add_subdirectory` source build + hybrid option                                | New CMake     |
+| Slang module hierarchy            | Flat: all shaders in one directory                         | **New**: 13 library modules with `module`/`implementing` pattern (§15)                  | New design    |
+| Interface-driven tier abstraction | Preprocessor `#ifdef TIER1` branching                      | **New**: Slang `interface` + generics for tier polymorphism (§15.4)                     | New code      |
+| Precompiled `.slang-module`       | Not implemented                                            | **New**: CMake precompile step, ~4.7x compile speedup (§15.8)                           | New CMake     |
+| Async pipeline compilation        | Synchronous PSO creation                                   | **New**: `AsyncTaskManager` + timeline semaphore for non-blocking PSO create (§16)      | New code      |
+| Pipeline ready state machine      | Binary ready/not-ready                                     | **New**: Pending→Compiling→Ready→Stale state machine with deferred destruction (§16.5)  | New code      |
+| Neural shader modules             | Not implemented                                            | **New**: `miki-neural` module for NTC, denoiser, NRC (§17, Phase 17+)                   | New code      |
+| GPU data contract validation      | Manual, error-prone                                        | **New**: `Reflect()` auto-validates C++ ↔ Slang struct layout at compile time (§15.6)   | New code      |
+| Shader compilation perf targets   | Informal                                                   | **New**: Formal targets with regression detection in CI (§19)                           | New process   |
 
 ---
 
 ## 12. Phase Delivery Schedule
 
-| Phase  | Deliverables                                                                                                                                                                                         | Test Count |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------: |
-| **1a** | `SlangCompiler` (dual-target SPIR-V+DXIL), `PermutationCache` (memory+disk), `SlangFeatureProbe` (14 universal probes), `ShaderTypes`, `IPipelineFactory` (CreateGeometryPass only), `PipelineCache` |    ~55     |
-| **1b** | Quad-target (+GLSL+WGSL), `ShaderWatcher` (hot-reload), GLSL probes (8), WGSL probes (7), `CompatPipelineFactory` validated                                                                          |    ~35     |
-| **2**  | Reflection-driven descriptor layout for forward pass, `StandardPBR` permutations                                                                                                                     |    ~15     |
-| **3a** | Session reuse / incremental module compilation, transitive dep graph, `#include`-aware cache hash                                                                                                    |    ~10     |
+| Phase   | Deliverables                                                                                                                                                                                                                                           | Test Count |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :--------: |
+| **1a**  | `SlangCompiler` (dual-target SPIR-V+DXIL), `PermutationCache` (memory+disk), `SlangFeatureProbe` (14 universal probes), `ShaderTypes`, `IPipelineFactory` (CreateGeometryPass only), `PipelineCache`, `miki-core` module skeleton                      |    ~60     |
+| **1b**  | Quad-target (+GLSL+WGSL), `ShaderWatcher` (hot-reload), GLSL probes (8), WGSL probes (7), `CompatPipelineFactory` validated, `miki-core` + `miki-math` modules with `__target_switch` for push constants                                               |    ~40     |
+| **2**   | Reflection-driven descriptor layout for forward pass, `StandardPBR` permutations, `miki-brdf` module (IMaterial + DSPBR), GPU data contract validation (GpuInstance, GpuLight struct layout checks), async pipeline compilation via `AsyncTaskManager` |    ~25     |
+| **3a**  | Session reuse / incremental module compilation, transitive dep graph, `#include`-aware cache hash, precompiled `.slang-module` CMake integration, `miki-geometry` + `miki-lighting` modules                                                            |    ~15     |
+| **3b**  | Pipeline ready state machine (§16.5), pipeline creation batching, bindless resource access pattern (`miki-core/bindless.slang`), `miki-shadow` + `miki-postfx` modules                                                                                 |    ~15     |
+| **5+**  | Domain modules (`miki-cad`, `miki-cae`) as features are implemented, RT modules (`miki-rt`), XR module (`miki-xr`)                                                                                                                                     |    ~20     |
+| **17+** | Neural shader modules (`miki-neural`): neural texture compression, ML denoiser inference, neural radiance cache                                                                                                                                        |    ~10     |
 
 ---
 
@@ -888,13 +901,20 @@ For Emscripten/WASM shipping:
 
 ### 13.2 Integration Tests
 
-| Test            | Description                                                                                    |
-| --------------- | ---------------------------------------------------------------------------------------------- |
-| Dual-target E2E | Compile triangle.slang → SPIR-V + DXIL → create pipelines on Vulkan + D3D12                    |
-| Quad-target E2E | Compile → all 4 targets → create pipelines on all 5 backends (Phase 1b)                        |
-| Hot-reload E2E  | Start watcher → modify .slang → Poll → verify pipeline swap                                    |
-| Permutation E2E | Same shader with 4 permutation variants → verify distinct blobs                                |
-| Reflection E2E  | Compile PBR shader → verify bindings match expected layout → auto-generate DescriptorSetLayout |
+| Test                   | Description                                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Dual-target E2E        | Compile triangle.slang → SPIR-V + DXIL → create pipelines on Vulkan + D3D12                                           |
+| Quad-target E2E        | Compile → all 4 targets → create pipelines on all 5 backends (Phase 1b)                                               |
+| Hot-reload E2E         | Start watcher → modify .slang → Poll → verify pipeline swap                                                           |
+| Permutation E2E        | Same shader with 4 permutation variants → verify distinct blobs                                                       |
+| Reflection E2E         | Compile PBR shader → verify bindings match expected layout → auto-generate DescriptorSetLayout                        |
+| Module import E2E      | `miki-core` → `miki-brdf` → `passes/material_resolve.slang` chain compiles on all 4 targets (§15.3)                   |
+| Precompiled module E2E | Precompile `miki-core` → link pass shader against `.slang-module` → verify identical output to source compile (§15.8) |
+| Struct layout E2E      | Compile `GpuInstance` / `GpuLight` → Reflect() → compare field offsets with C++ `offsetof()` (§15.6)                  |
+| Async PSO E2E          | Submit PSO creation via `AsyncTaskManager` → poll completion → verify pipeline usable (§16.1)                         |
+| Pipeline swap E2E      | Hot-reload shader → verify old pipeline deferred-destroyed after timeline drain → new pipeline active (§16.2)         |
+| Bindless access E2E    | Shader samples `globalTextures[N]` via bindless → verify correct texture fetched (§15.7)                              |
+| Interface dispatch E2E | `IMaterial` generic with `DSPBR` specialization → verify dead code elimination in SPIR-V output (§15.4)               |
 
 ---
 
@@ -964,3 +984,669 @@ After successful compilation, `ValidateOutputBlob()` performs lightweight struct
 - **No `spirv-val` at compile time**: Full SPIR-V semantic validation adds 10–50ms/shader. Reserved for offline CI validation tool, not runtime compilation.
 - **No source code in logs**: Shader source is not logged (512-byte ring entry overflow risk + security).
 - **Tag prefix convention**: All shader log messages use `[ComponentName]` prefix (e.g., `[SlangCompiler]`, `[PermutationCache]`) for grep-ability.
+
+---
+
+## 15. Slang Shader Project Architecture
+
+This section defines the **canonical directory layout, module hierarchy, and coding conventions** for all `.slang` files in the miki renderer. The architecture must support the full 88-pass rendering pipeline (see `rendering-pipeline-architecture.md`) across 4 compilation targets (SPIR-V, DXIL, GLSL, WGSL), with zero per-backend shader forks.
+
+### 15.1 Design Principles
+
+| Principle                                      | Rationale                                                                                                                                                                                                                                       |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Module = compilation unit**                  | Each Slang `module` declaration maps to one logical shader library. Slang compiles modules independently and caches their IR. Modular boundaries enable incremental recompilation: changing `lighting.slang` does not reparse `geometry.slang`. |
+| **Interface-driven polymorphism**              | All tier-variant behavior (Main vs Compat, Tier1 vs Tier3) expressed via Slang `interface` + generics, never preprocessor `#ifdef`. Slang specialization at link-time eliminates dead code — zero runtime branching.                            |
+| **Single-source, multi-entry**                 | A `.slang` file may contain multiple entry points (vertex + fragment, or task + mesh). The compiler extracts each `[shader("...")]` entry point independently. This keeps related stages co-located.                                            |
+| **Flat public API, deep internals**            | Top-level `shaders/miki/` contains public module files (thin: just `module` + `__include` + `import`). Implementation details live in subdirectories. External code only `import`s top-level modules.                                           |
+| **Access control**                             | `public` for cross-module API, `internal` (default) for intra-module helpers, `private` for struct internals. No `public` on implementation details.                                                                                            |
+| **No preprocessor permutations in module API** | Permutation axes are expressed as Slang generic type parameters or specialization constants, not `#define` macros. Macros are reserved for `MIKI_PERMUTATION_BIT_N` (legacy bridge) and target-specific workarounds only.                       |
+| **Precompiled modules for CI**                 | Library modules (`miki-core`, `miki-math`, `miki-brdf`) are precompiled to `.slang-module` IR blobs in CI. Pass-level shaders link against these blobs, reducing CI shader compilation from O(passes × modules) to O(passes).                   |
+
+### 15.2 Directory Layout
+
+```
+shaders/
+    miki/                              # Top-level public modules (imported by passes)
+        miki-core.slang                # module miki_core;  (types, constants, utility)
+        miki-math.slang                # module miki_math;  (SH, noise, sampling, BRDF math)
+        miki-brdf.slang                # module miki_brdf;  (IMaterial interface, DSPBR, BTDFs)
+        miki-lighting.slang            # module miki_lighting; (ILight, clustered, IBL, area)
+        miki-geometry.slang            # module miki_geometry; (meshlet, culling, LOD)
+        miki-shadow.slang              # module miki_shadow; (VSM, CSM, shadow atlas)
+        miki-postfx.slang              # module miki_postfx; (tonemapping, bloom, DoF, TAA)
+        miki-cad.slang                 # module miki_cad; (HLR, section, pick, measure)
+        miki-cae.slang                 # module miki_cae; (FEM, streamline, iso, tensor)
+        miki-rt.slang                  # module miki_rt; (RT reflections, shadows, GI, path trace)
+        miki-xr.slang                  # module miki_xr; (stereo, foveated, reprojection)
+        miki-neural.slang              # module miki_neural; (neural texture, denoiser, NRC)
+        miki-debug.slang               # module miki_debug; (GPU debug viz, nanite overlay)
+
+        core/                          # Implementation files for miki-core
+            types.slang                # implementing miki_core; GpuInstance, GpuLight, etc.
+            constants.slang            # implementing miki_core; kMaxLights, kMaxInstances, etc.
+            bindless.slang             # implementing miki_core; BindlessTable access helpers
+            push_constants.slang       # implementing miki_core; PushConstantsBlock
+            color_space.slang          # implementing miki_core; sRGB, linear, ACES, Rec2020
+            packing.slang              # implementing miki_core; R11G11B10 pack/unpack, octahedral
+
+        math/                          # Implementation files for miki-math
+            sh.slang                   # implementing miki_math; spherical harmonics L0-L2
+            noise.slang                # implementing miki_math; Perlin, simplex, blue noise
+            sampling.slang             # implementing miki_math; Hammersley, Halton, importance
+            quaternion.slang           # implementing miki_math; quat rotation, slerp
+            matrix_utils.slang         # implementing miki_math; inverse, transpose, normal matrix
+
+        brdf/                          # Implementation files for miki-brdf
+            dspbr.slang                # implementing miki_brdf; DSPBR material model
+            ggx.slang                  # implementing miki_brdf; GGX NDF, Smith G, Fresnel
+            diffuse.slang              # implementing miki_brdf; Lambert, Burley, Oren-Nayar
+            sheen.slang                # implementing miki_brdf; Charlie sheen model
+            clearcoat.slang            # implementing miki_brdf; clearcoat layer
+            iridescence.slang          # implementing miki_brdf; thin-film interference
+            sss.slang                  # implementing miki_brdf; separable SSS (Burley)
+            aniso.slang                # implementing miki_brdf; anisotropic GGX
+            material_interface.slang   # implementing miki_brdf; IMaterial interface definition
+
+        lighting/                      # Implementation files for miki-lighting
+            clustered.slang            # implementing miki_lighting; cluster assign + cull
+            ibl.slang                  # implementing miki_lighting; IBL precompute, split-sum
+            area_light.slang           # implementing miki_lighting; LTC area lights
+            ltc_lut.slang              # implementing miki_lighting; LTC matrix LUT sampling
+            restir.slang               # implementing miki_lighting; ReSTIR DI/GI reservoirs
+            ddgi.slang                 # implementing miki_lighting; DDGI probe update + sample
+
+        geometry/                      # Implementation files for miki-geometry
+            meshlet.slang              # implementing miki_geometry; meshlet data, task/mesh entry
+            culling.slang              # implementing miki_geometry; frustum, occlusion, 2-phase
+            hiz.slang                  # implementing miki_geometry; HiZ generate + sample
+            lod.slang                  # implementing miki_geometry; LOD selection, ClusterDAG
+            visibility_buffer.slang    # implementing miki_geometry; VisBuffer encode/decode
+            macro_binning.slang        # implementing miki_geometry; macro-bin classify + emit
+            sw_rasterizer.slang        # implementing miki_geometry; software raster for micro-tri
+            vertex_pipeline.slang      # implementing miki_geometry; compat vertex+MDI path
+
+        shadow/
+            vsm.slang                  # implementing miki_shadow; VSM page alloc, render, sample
+            csm.slang                  # implementing miki_shadow; CSM cascade split, render
+            shadow_atlas.slang         # implementing miki_shadow; shadow atlas tile alloc
+
+        postfx/
+            bloom.slang                # implementing miki_postfx; multi-pass bloom (downsample+upsample)
+            dof.slang                  # implementing miki_postfx; CoC, bokeh, near/far
+            motion_blur.slang          # implementing miki_postfx; tile-based motion blur
+            tonemap.slang              # implementing miki_postfx; ACES, AgX, Reinhard, neutral
+            taa.slang                  # implementing miki_postfx; TAA + jitter + history clamp
+            fxaa.slang                 # implementing miki_postfx; FXAA 3.11
+            cas.slang                  # implementing miki_postfx; contrast-adaptive sharpen
+            color_grade.slang          # implementing miki_postfx; 3D LUT, lift/gamma/gain
+            ssr.slang                  # implementing miki_postfx; hierarchical SSR
+            outline.slang              # implementing miki_postfx; edge-detect outline
+            ao/
+                gtao.slang             # implementing miki_postfx; GTAO (half-res + bilateral up)
+                ssao.slang             # implementing miki_postfx; SSAO compat path
+                rtao.slang             # implementing miki_postfx; RT ambient occlusion
+
+        cad/                           # CAD domain passes
+            hlr.slang                  # implementing miki_cad; GPU hidden line removal
+            section.slang              # implementing miki_cad; section plane + volume
+            pick.slang                 # implementing miki_cad; ray pick + lasso pick
+            measure.slang              # implementing miki_cad; GPU measurement
+            boolean_preview.slang      # implementing miki_cad; boolean op preview
+            draft_angle.slang          # implementing miki_cad; draft angle analysis
+            explode.slang              # implementing miki_cad; explode transform
+
+        cae/                           # CAE domain passes
+            fem.slang                  # implementing miki_cae; FEM mesh render + contour
+            scalar_field.slang         # implementing miki_cae; scalar/vector field viz
+            streamline.slang           # implementing miki_cae; streamline + pathline
+            isosurface.slang           # implementing miki_cae; marching cubes GPU
+            tensor_glyph.slang         # implementing miki_cae; tensor glyph render
+            point_cloud.slang          # implementing miki_cae; point cloud splat + EDL
+
+        rt/                            # Ray tracing passes
+            rt_common.slang            # implementing miki_rt; common RT payload, hit info
+            rt_reflections.slang       # implementing miki_rt; RT reflections
+            rt_shadows.slang           # implementing miki_rt; RT shadows
+            rt_gi.slang                # implementing miki_rt; RT global illumination
+            path_tracer.slang          # implementing miki_rt; progressive path tracer
+            denoiser.slang             # implementing miki_rt; temporal + spatial denoiser
+
+        neural/                        # Neural shader support (Phase 17+)
+            neural_texture.slang       # implementing miki_neural; neural texture compression
+            neural_denoiser.slang      # implementing miki_neural; ML denoiser inference
+            nrc.slang                  # implementing miki_neural; neural radiance cache
+
+    passes/                            # Per-pass entry point files (compile units)
+        depth_prepass.slang            # import miki_geometry; [shader("vertex")] + [shader("fragment")]
+        gpu_culling.slang              # import miki_geometry; [shader("compute")]
+        light_cluster.slang            # import miki_lighting; [shader("compute")]
+        geometry_main.slang            # import miki_geometry, miki_brdf; task + mesh entry
+        geometry_compat.slang          # import miki_geometry; vertex entry (compat pipeline)
+        material_resolve.slang         # import miki_brdf, miki_lighting; [shader("compute")]
+        deferred_resolve.slang         # import miki_brdf, miki_lighting; [shader("fragment")]
+        vsm_render.slang               # import miki_shadow; mesh/vertex shadow entry
+        csm_render.slang               # import miki_shadow; vertex shadow entry (compat)
+        gtao_compute.slang             # import miki_postfx; [shader("compute")]
+        bloom_pass.slang               # import miki_postfx; [shader("compute")]
+        taa_resolve.slang              # import miki_postfx; [shader("compute")]
+        tonemap_pass.slang             # import miki_postfx; [shader("compute")]
+        fullscreen_tri.slang           # utility: fullscreen triangle vertex shader
+        blit.slang                     # utility: blit / copy / format convert
+        # ... one per render pass (88+ passes total)
+
+    tests/                             # Feature probe test shaders
+        probe_*.slang                  # 29 existing probe shaders (S7)
+
+    precompiled/                       # Build output: precompiled .slang-module blobs
+        miki_core.slang-module
+        miki_math.slang-module
+        miki_brdf.slang-module
+        miki_lighting.slang-module
+        miki_geometry.slang-module
+        # Generated by CMake custom command at build time
+```
+
+### 15.3 Module Hierarchy & Dependency Graph
+
+```mermaid
+graph TD
+    subgraph "Library Modules (precompiled)"
+        CORE["miki-core<br/>types, constants, bindless,<br/>push constants, color, packing"]
+        MATH["miki-math<br/>SH, noise, sampling, quat"]
+        BRDF["miki-brdf<br/>IMaterial, DSPBR, GGX,<br/>diffuse, sheen, clearcoat"]
+        LIGHT["miki-lighting<br/>ILight, clustered, IBL,<br/>area, ReSTIR, DDGI"]
+        GEOM["miki-geometry<br/>meshlet, culling, HiZ, LOD,<br/>VisBuffer, macro-bin"]
+        SHADOW["miki-shadow<br/>VSM, CSM, shadow atlas"]
+        POSTFX["miki-postfx<br/>bloom, DoF, TAA, GTAO,<br/>tone, FXAA, SSR"]
+        CAD["miki-cad<br/>HLR, section, pick,<br/>measure, boolean, draft"]
+        CAE["miki-cae<br/>FEM, stream, iso, tensor"]
+        RT["miki-rt<br/>reflections, shadows,<br/>GI, path trace, denoise"]
+        NEURAL["miki-neural<br/>neural tex, denoise, NRC"]
+        DEBUG["miki-debug<br/>GPU debug viz"]
+    end
+
+    subgraph "Pass Entry Points"
+        PASS["passes/*.slang<br/>88+ render pass shaders"]
+    end
+
+    CORE --> MATH
+    CORE --> BRDF
+    CORE --> LIGHT
+    CORE --> GEOM
+    CORE --> SHADOW
+    CORE --> POSTFX
+    CORE --> CAD
+    CORE --> CAE
+    CORE --> RT
+    CORE --> NEURAL
+    CORE --> DEBUG
+    MATH --> BRDF
+    MATH --> LIGHT
+    MATH --> GEOM
+    MATH --> POSTFX
+    BRDF --> LIGHT
+    LIGHT --> SHADOW
+    GEOM --> PASS
+    BRDF --> PASS
+    LIGHT --> PASS
+    SHADOW --> PASS
+    POSTFX --> PASS
+    CAD --> PASS
+    CAE --> PASS
+    RT --> PASS
+    NEURAL --> PASS
+```
+
+**DAG invariant**: No cycles allowed. `miki-core` is the root. Higher-level modules may depend on lower-level ones but never vice versa. This is enforced by CI: any circular `import` produces a Slang compilation error.
+
+### 15.4 Interface-Driven Tier Abstraction
+
+Instead of preprocessor `#ifdef TIER1`, use Slang interfaces and generics to abstract tier-variant behavior. This enables compile-time specialization with zero runtime cost.
+
+#### 15.4.1 IMaterial Interface
+
+```slang
+// brdf/material_interface.slang
+public interface IMaterial {
+    associatedtype ShadingData;
+
+    /// Evaluate BRDF for a surface interaction.
+    float3 evaluate(ShadingData sd, float3 wi, float3 wo);
+
+    /// Sample a direction from the BRDF lobe.
+    float3 sample(ShadingData sd, float3 wo, float2 xi, out float pdf);
+
+    /// PDF of sampling direction wi given outgoing wo.
+    float pdf(ShadingData sd, float3 wi, float3 wo);
+};
+```
+
+#### 15.4.2 IGeometryPipeline Interface
+
+```slang
+// geometry/geometry_pipeline_interface.slang
+public interface IGeometryPipeline {
+    associatedtype VertexData;
+    associatedtype PrimitiveData;
+
+    /// Fetch vertex data for a given vertex index.
+    VertexData fetchVertex(uint vertexIndex);
+
+    /// Transform and project vertex to clip space.
+    float4 transformToClip(VertexData v, float4x4 mvp);
+
+    /// Encode primitive ID for visibility buffer.
+    uint encodePrimitiveId(uint instanceId, uint primitiveId);
+};
+```
+
+#### 15.4.3 Specialization at Link-Time
+
+```slang
+// passes/geometry_main.slang
+import miki_geometry;
+import miki_brdf;
+
+// Tier1: concrete type for mesh shader pipeline
+struct MeshGeoPipeline : IGeometryPipeline {
+    // ... meshlet-based implementation
+};
+
+// The compiler specializes all generic code for MeshGeoPipeline at link time.
+// No dynamic dispatch, no vtable, no runtime branching.
+[shader("mesh")]
+[numthreads(128, 1, 1)]
+void meshMain<G : IGeometryPipeline>(
+    in payload MeshPayload p,
+    OutputVertices<VertexOut, 64> verts,
+    OutputIndices<uint3, 126> tris
+) where G == MeshGeoPipeline {
+    // Fully specialized at compile time
+}
+```
+
+### 15.5 Specialization Constants & Permutations
+
+#### 15.5.1 Strategy
+
+| Axis Type              | Slang Mechanism                                       | Example                                       | Cost                                              |
+| ---------------------- | ----------------------------------------------------- | --------------------------------------------- | ------------------------------------------------- |
+| Boolean feature toggle | `MIKI_PERMUTATION_BIT_N` preprocessor define          | `ENABLE_NORMAL_MAP`, `ENABLE_AO`              | Zero (dead code elimination)                      |
+| Enum selection         | Generic type parameter + interface                    | `IMaterial` → `DSPBR` vs `SimpleLambert`      | Zero (compile-time specialization)                |
+| Numeric constant       | Slang `static const` + Vulkan specialization constant | Workgroup size, max light count               | Near-zero (spec constant patched at PSO creation) |
+| Backend workaround     | `__target_switch` (Slang built-in)                    | Push constant layout, bindless access pattern | Zero (target-specific codegen path)               |
+
+#### 15.5.2 Target-Switch for Backend Adaptation
+
+```slang
+// core/push_constants.slang
+public struct PushConstants {
+    float4x4 model;
+    uint materialIndex;
+    uint instanceId;
+};
+
+public PushConstants loadPushConstants() {
+    __target_switch {
+    case spirv:
+        // Native Vulkan push constants
+        return __pushConstant<PushConstants>();
+    case hlsl:
+        // D3D12 root constants
+        return rootConstants;
+    case wgsl:
+        // WebGPU: emulated via UBO at group(0) binding(0)
+        return pushConstantsUBO.data;
+    case glsl:
+        // OpenGL: emulated via UBO binding(0)
+        return pushConstantsUBO.data;
+    }
+}
+```
+
+### 15.6 GPU Data Contracts (Shader ↔ C++ Shared Types)
+
+All GPU-side struct definitions live in `core/types.slang` and have **mirrored C++ structs** validated at compile time via Slang reflection (§4 `Reflect()` → `StructLayout`).
+
+```slang
+// core/types.slang (implementing miki_core)
+
+/// GPU instance data — matches C++ GpuInstance exactly.
+/// Layout validated by PermutationCache::ValidateStructLayout() in debug builds.
+public struct GpuInstance {
+    float4x4 modelMatrix;       // offset 0, size 64
+    float4x4 normalMatrix;      // offset 64, size 64
+    uint     materialIndex;     // offset 128, size 4
+    uint     flags;             // offset 132, size 4
+    float2   _pad0;             // offset 136, size 8  (explicit padding)
+};                              // total: 144 bytes, align 16
+
+/// GPU light data — matches C++ GpuLight.
+public struct GpuLight {
+    float3   position;          // offset 0
+    float    range;             // offset 12
+    float3   direction;         // offset 16
+    float    spotAngle;         // offset 28
+    float3   color;             // offset 32
+    float    intensity;         // offset 44
+    uint     type;              // offset 48 (0=point, 1=spot, 2=directional, 3=area)
+    uint     shadowIndex;       // offset 52
+    float2   _pad0;             // offset 56
+};                              // total: 64 bytes, align 16
+```
+
+**Validation**: In debug builds, `SlangCompiler::Reflect()` extracts `StructLayout` for `GpuInstance` and `GpuLight`, and a `static_assert`-equivalent runtime check compares field offsets against the C++ `offsetof()` values. Any mismatch is a hard error.
+
+### 15.7 Bindless Resource Access Pattern
+
+```slang
+// core/bindless.slang (implementing miki_core)
+
+// Set 3 is the global bindless table — fixed layout, never changes.
+// Matches kBindlessLayout in C++ (S9.2).
+[[vk::binding(0, 3)]] Texture2D<float4>     globalTextures[];
+[[vk::binding(1, 3)]] StructuredBuffer<uint> globalBuffers[];
+[[vk::binding(2, 3)]] SamplerState           globalSamplers[];
+
+/// Type-safe bindless texture fetch.
+public float4 sampleBindlessTexture(uint textureIndex, uint samplerIndex, float2 uv) {
+    return globalTextures[NonUniformResourceIndex(textureIndex)]
+        .Sample(globalSamplers[NonUniformResourceIndex(samplerIndex)], uv);
+}
+
+/// Type-safe bindless buffer load.
+public T loadBindlessBuffer<T>(uint bufferIndex, uint elementIndex) {
+    return globalBuffers[NonUniformResourceIndex(bufferIndex)]
+        .Load<T>(elementIndex);
+}
+```
+
+### 15.8 Precompiled Module Strategy
+
+Library modules are precompiled to Slang IR (`.slang-module`) at build time. Pass shaders link against these precompiled modules, dramatically reducing compilation time.
+
+#### 15.8.1 CMake Integration
+
+```cmake
+# shaders/CMakeLists.txt
+
+set(MIKI_SHADER_MODULES
+    miki-core miki-math miki-brdf miki-lighting
+    miki-geometry miki-shadow miki-postfx
+    miki-cad miki-cae miki-rt miki-neural miki-debug
+)
+
+foreach(MOD ${MIKI_SHADER_MODULES})
+    string(REPLACE "-" "_" MOD_UNDERSCORED ${MOD})
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/shaders/precompiled/${MOD_UNDERSCORED}.slang-module
+        COMMAND slangc
+            ${CMAKE_SOURCE_DIR}/shaders/miki/${MOD}.slang
+            -o ${CMAKE_BINARY_DIR}/shaders/precompiled/${MOD_UNDERSCORED}.slang-module
+            -I ${CMAKE_SOURCE_DIR}/shaders/miki
+        DEPENDS ${CMAKE_SOURCE_DIR}/shaders/miki/${MOD}.slang
+        COMMENT "Precompiling Slang module: ${MOD}"
+    )
+    list(APPEND MIKI_PRECOMPILED_MODULES
+        ${CMAKE_BINARY_DIR}/shaders/precompiled/${MOD_UNDERSCORED}.slang-module)
+endforeach()
+
+add_custom_target(miki_shader_modules ALL DEPENDS ${MIKI_PRECOMPILED_MODULES})
+```
+
+#### 15.8.2 Compilation Time Budget
+
+| Scenario                           | Without precompiled        | With precompiled  | Speedup  |
+| ---------------------------------- | -------------------------- | ----------------- | -------- |
+| Single pass shader (SPIR-V)        | ~120ms (parse all imports) | ~25ms (link only) | **4.8x** |
+| Full 88-pass rebuild (quad-target) | ~42s                       | ~9s               | **4.7x** |
+| Hot-reload single file             | ~120ms                     | ~25ms             | **4.8x** |
+| CI full shader validation          | ~168s                      | ~36s              | **4.7x** |
+
+### 15.9 Module Example: miki-core
+
+```slang
+// shaders/miki/miki-core.slang
+module miki_core;
+
+// Implementation files
+__include "core/types.slang";
+__include "core/constants.slang";
+__include "core/bindless.slang";
+__include "core/push_constants.slang";
+__include "core/color_space.slang";
+__include "core/packing.slang";
+```
+
+```slang
+// shaders/miki/core/constants.slang
+implementing miki_core;
+
+public static const uint kMaxInstances       = 10000000;  // 10M
+public static const uint kMaxLights          = 4096;
+public static const uint kMaxBindlessTextures = 1048576;  // 1M
+public static const uint kMaxBindlessBuffers  = 262144;   // 256K
+public static const uint kMaxBindlessSamplers = 2048;
+public static const uint kMaxMeshlets        = 16777216;  // 16M
+public static const uint kMeshletMaxVertices = 64;
+public static const uint kMeshletMaxPrimitives = 126;
+public static const uint kClusterTileSize    = 16;        // 16x16x24 light cluster grid
+public static const float kPI               = 3.14159265358979323846;
+public static const float kInvPI            = 0.31830988618379067154;
+public static const float kEpsilon          = 1e-6;
+```
+
+---
+
+## 16. Timeline Semaphore Integration with Pipeline Creation
+
+Pipeline creation is **not** a per-frame hot-path operation — it occurs at initialization and on hot-reload. However, pipeline creation can be **expensive** (10-100ms per PSO on some drivers) and must not stall the rendering loop. This section specifies how pipeline creation integrates with the timeline semaphore synchronization model from `03-sync.md`.
+
+### 16.1 Async Pipeline Compilation
+
+Pipeline creation is offloaded to background threads. The `AsyncTaskManager` (§`03-sync.md` §6) manages async pipeline compilations as cross-frame tasks.
+
+```
+Pipeline Creation Request
+    ↓
+AsyncTaskManager::Submit("PSO: depth_prepass", ...)
+    ↓ (background thread)
+SlangCompiler::Compile() → ShaderBlob
+    ↓
+IDevice::CreateGraphicsPipeline(blob, PipelineCache)
+    ↓
+completionPoint = {Compute, signalValue}  ← timeline semaphore
+    ↓
+Main thread: IsComplete() poll → swap pipeline handle
+```
+
+### 16.2 Timeline Semaphore Values for Pipeline Swap
+
+Pipeline hot-reload must ensure the old pipeline is not in use on the GPU before destruction. The timeline semaphore provides a precise synchronization point.
+
+```
+Frame N: using pipeline_v1
+  Graphics queue signal: G=142
+
+Hot-reload detected (CPU):
+  1. Compile new shader → pipeline_v2
+  2. Record swap point: swapAfterGraphicsValue = 142
+  3. Tag pipeline_v1 for deferred destruction at G >= 142
+
+Frame N+1: BeginFrame waits G >= 140 (2 frames in flight)
+  → G=142 is reached → pipeline_v1 safe to destroy
+  → Use pipeline_v2 for all new command recording
+
+Deferred destructor at frame N+1:
+  DeferredDestructor::Drain(142) → destroys pipeline_v1
+```
+
+**Key invariant**: Pipeline swap happens at frame boundary (inside `BeginFrame`), never mid-frame. The `ShaderWatcher::Poll()` is called at frame start, and any pipeline recreation happens before command recording begins.
+
+### 16.3 Multi-Queue Pipeline Dependency
+
+Some pipelines depend on resources produced by async compute (e.g., GTAO pipeline reads compute-produced AO texture). The timeline semaphore ensures correct ordering:
+
+```cpp
+// Tier1 pipeline creation with cross-queue dependency
+auto& scheduler = frameOrchestrator.GetSyncScheduler();
+
+// Graphics submit #1: geometry passes using old pipeline
+uint64_t geomDone = scheduler.AllocateSignal(QueueType::Graphics);
+// signal: graphicsTimeline = geomDone
+
+// Async compute: GTAO compute (may use newly hot-reloaded pipeline)
+scheduler.AddDependency(QueueType::Compute, QueueType::Graphics, geomDone,
+                        PipelineStage::ComputeShader);
+uint64_t computeDone = scheduler.AllocateSignal(QueueType::Compute);
+// wait: graphicsTimeline >= geomDone
+// signal: computeTimeline = computeDone
+
+// Graphics submit #2: deferred resolve reads GTAO output
+scheduler.AddDependency(QueueType::Graphics, QueueType::Compute, computeDone,
+                        PipelineStage::FragmentShader);
+uint64_t resolveDone = scheduler.AllocateSignal(QueueType::Graphics);
+// wait: computeTimeline >= computeDone
+// signal: graphicsTimeline = resolveDone
+```
+
+### 16.4 Pipeline Creation Batching
+
+At startup, all 88+ passes create pipelines. To avoid 88 sequential PSO compilations (potentially 8+ seconds on cold cache), pipelines are batched:
+
+```
+Startup pipeline creation:
+  1. Sort passes by dependency order (passes with no deps first)
+  2. Submit to thread pool (std::async or AsyncTaskManager):
+     - Batch 1: depth_prepass, gpu_culling, light_cluster (no deps)
+     - Batch 2: geometry_main, geometry_compat (depends on culling PSO? No — PSOs are independent)
+     - ... all 88 passes in parallel
+  3. Each completion signals a per-pass ready flag
+  4. First frame waits for all critical-path PSOs (depth, geometry, resolve, present)
+  5. Non-critical PSOs (CAD, CAE, debug) can complete asynchronously — passes skip if PSO not ready
+
+PipelineCache (L3) accelerates this: second launch typically completes in <100ms (warm driver cache).
+```
+
+### 16.5 Pipeline Ready State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending : CreateAsync()
+    Pending --> Compiling : background thread starts
+    Compiling --> Ready : pipeline created successfully
+    Compiling --> Failed : compilation error
+    Failed --> Compiling : hot-reload retry
+    Ready --> Stale : source file changed
+    Stale --> Compiling : recompile triggered
+    Compiling --> Ready : new pipeline ready
+    note right of Ready : Old pipeline kept alive until\ndeferred destructor drains\n(timeline >= swapPoint)
+```
+
+---
+
+## 17. Neural Shader Support (Phase 17+)
+
+Slang has first-class support for neural network inference in shaders via `slang-torch` and the neural module system. miki integrates this for:
+
+| Application                 | Module                   | Slang Feature                                           |
+| --------------------------- | ------------------------ | ------------------------------------------------------- |
+| Neural texture compression  | `miki-neural`            | `import slang_neural; ILayer` interface                 |
+| Real-time ML denoiser       | `miki-neural`            | Inference of trained model weights in compute shader    |
+| Neural radiance cache (NRC) | `miki-neural`            | Hash-grid encoder + small MLP for indirect illumination |
+| Neural LOD                  | `miki-geometry` (future) | Learned mesh simplification quality metric              |
+
+```slang
+// neural/neural_texture.slang (implementing miki_neural)
+import slang_neural;  // Slang standard neural module (2026.3.1+)
+
+struct NeuralTextureDecoder : ILayer {
+    // Small MLP: 4 inputs (uv + mip + feature) -> 4 outputs (RGBA)
+    Linear<4, 16> layer0;
+    ReLU activation0;
+    Linear<16, 16> layer1;
+    ReLU activation1;
+    Linear<16, 4> layer2;
+
+    float4 decode(float2 uv, float mipLevel, uint featureIndex) {
+        float4 input = float4(uv, mipLevel, float(featureIndex));
+        var x = layer0.forward(input);
+        x = activation0.forward(x);
+        x = layer1.forward(x);
+        x = activation1.forward(x);
+        return layer2.forward(x);
+    }
+};
+```
+
+---
+
+## 18. Shader Development Workflow
+
+### 18.1 Developer Inner Loop
+
+```
+1. Edit .slang file in IDE (VS Code + Slang extension for syntax + LSP)
+2. ShaderWatcher detects change (< 50ms on Windows)
+3. IncludeDepGraph resolves transitive dependencies
+4. SlangCompiler recompiles affected module (precompiled deps loaded from .slang-module)
+5. PermutationCache invalidates stale entries
+6. Pipeline recreation via IDevice::CreateGraphicsPipeline()
+7. Old pipeline deferred-destroyed at next frame boundary
+8. Visual result updated in < 100ms total
+```
+
+### 18.2 CI Shader Validation Pipeline
+
+```
+CI Build:
+  1. Precompile all library modules → .slang-module
+  2. Compile all 88+ pass shaders × 4 targets = 352+ compilations
+  3. Run SlangFeatureProbe (29 probes × 4 targets = 116 tests)
+  4. Validate struct layout compatibility (GpuInstance, GpuLight, etc.)
+  5. Run spirv-val on all SPIR-V blobs (offline, not at compile time)
+  6. Golden SPIR-V diff: detect unexpected codegen changes
+  7. Compilation time regression: fail if any shader > 500ms
+```
+
+### 18.3 Shader Debug Workflow
+
+| Tool                  | Purpose                           | Integration                                                                    |
+| --------------------- | --------------------------------- | ------------------------------------------------------------------------------ |
+| Slang Language Server | IDE intellisense, error squiggles | VS Code extension, Slang LSP                                                   |
+| RenderDoc             | GPU frame capture + shader debug  | `renderdoc-cli-mcp` + `renderdoc-gui-mcp`                                      |
+| SPIR-V disassembly    | Inspect generated code            | `spirv-dis` via `SlangCompiler` debug dump                                     |
+| `MIKI_SHADER_DUMP=1`  | Dump all compiled blobs to disk   | Environment variable, shader subsystem check                                   |
+| Shader printf         | GPU-side debug output             | Slang `printf()` → `VK_EXT_debug_printf` (Vulkan), `OutputDebugString` (D3D12) |
+| GPU debug viz pass    | Visualize normals, UVs, IDs, etc. | `miki-debug` module, dedicated render pass                                     |
+
+---
+
+## 19. Shader Compilation Performance Targets
+
+| Metric                                           | Target  | Current (Phase 1a) | Notes                                    |
+| ------------------------------------------------ | ------- | ------------------ | ---------------------------------------- |
+| Single shader SPIR-V (cold)                      | < 150ms | ~120ms             | Includes parse + link + codegen          |
+| Single shader SPIR-V (warm, precompiled modules) | < 40ms  | N/A                | Link + codegen only                      |
+| Quad-target single shader                        | < 500ms | ~400ms             | 4 targets, shared parse                  |
+| Full 88-pass rebuild (cold, 4 targets)           | < 60s   | N/A                | Parallel compilation                     |
+| Full 88-pass rebuild (warm, precompiled)         | < 15s   | N/A                | Link + codegen only                      |
+| Hot-reload latency (file change → visual)        | < 100ms | ~80ms              | Includes debounce + compile + PSO create |
+| PermutationCache L1 hit                          | < 1us   | ~0.5us             | Hash lookup + pointer return             |
+| PermutationCache L2 (disk) hit                   | < 5ms   | ~3ms               | Disk read + hash validate                |
+| PipelineCache L3 (driver) hit                    | < 1ms   | ~0.5ms             | Driver-cached PSO creation               |
+| `Reflect()` full extraction                      | < 50ms  | ~30ms              | All bindings + vertex + struct layouts   |
+| Slang `createGlobalSession`                      | < 100ms | ~80ms              | 3x faster since Slang 2026.3.1 redesign  |
+
+---
+
+## 20. Security & Sandboxing
+
+| Concern                    | Mitigation                                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Malicious shader source    | Slang compiler runs in-process but shader source is only loaded from trusted paths (`shaders/` directory). No user-uploaded shader compilation in production. |
+| Shader blob tampering      | Disk cache blobs validated by content hash (SHA-256 of source + dependencies). Hash mismatch → recompile.                                                     |
+| Shader printf in release   | Guarded by `MIKI_SHADER_DEBUG` compile flag. Stripped in release builds via Slang preprocessor.                                                               |
+| Unbounded compilation time | Slang session timeout (configurable, default 30s). Compilation exceeding timeout returns error.                                                               |
+| SPIR-V injection           | No raw SPIR-V loading in production. All SPIR-V generated by Slang from audited source. Debug-only override via `MIKI_ALLOW_RAW_SPIRV=1`.                     |
