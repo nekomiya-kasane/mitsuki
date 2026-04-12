@@ -62,3 +62,6 @@ tools/RenderDocMCP/
 third_party
 node_modules
 dist
+
+# GitHub Copilot instructions (local only, not tracked)
+.github/copilot-instructions.md

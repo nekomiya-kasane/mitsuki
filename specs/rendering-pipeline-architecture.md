@@ -3967,10 +3967,11 @@ All shaders authored in **Slang**. Compiled at runtime to target IR:
 ```
 Slang source (.slang)
     | SlangCompiler
-    +-- SPIR-V  (Vulkan, Compat)
+    +-- SPIR-V  (Vulkan, Compat, OpenGL via GL_ARB_gl_spirv)
     +-- DXIL    (D3D12)
-    +-- GLSL    (OpenGL 4.30)
+    +-- GLSL    (offline/debug only)
     +-- WGSL    (WebGPU)
+    +-- MSL     (Metal — Phase 15a+)
 ```
 
 - Reflection-driven descriptor layout generation

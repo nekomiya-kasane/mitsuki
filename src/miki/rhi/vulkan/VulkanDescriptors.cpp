@@ -38,18 +38,42 @@ namespace miki::rhi {
             auto has = [stages](ShaderStage bit) {
                 return (static_cast<uint32_t>(stages) & static_cast<uint32_t>(bit)) != 0;
             };
-            if (has(ShaderStage::Vertex)) flags |= VK_SHADER_STAGE_VERTEX_BIT;
-            if (has(ShaderStage::Fragment)) flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
-            if (has(ShaderStage::Compute)) flags |= VK_SHADER_STAGE_COMPUTE_BIT;
-            if (has(ShaderStage::Task)) flags |= VK_SHADER_STAGE_TASK_BIT_EXT;
-            if (has(ShaderStage::Mesh)) flags |= VK_SHADER_STAGE_MESH_BIT_EXT;
-            if (has(ShaderStage::RayGen)) flags |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            if (has(ShaderStage::AnyHit)) flags |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-            if (has(ShaderStage::ClosestHit)) flags |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            if (has(ShaderStage::Miss)) flags |= VK_SHADER_STAGE_MISS_BIT_KHR;
-            if (has(ShaderStage::Intersection)) flags |= VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-            if (has(ShaderStage::Callable)) flags |= VK_SHADER_STAGE_CALLABLE_BIT_KHR;
-            if (stages == ShaderStage::All) flags = VK_SHADER_STAGE_ALL;
+            if (has(ShaderStage::Vertex)) {
+                flags |= VK_SHADER_STAGE_VERTEX_BIT;
+            }
+            if (has(ShaderStage::Fragment)) {
+                flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+            }
+            if (has(ShaderStage::Compute)) {
+                flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            if (has(ShaderStage::Task)) {
+                flags |= VK_SHADER_STAGE_TASK_BIT_EXT;
+            }
+            if (has(ShaderStage::Mesh)) {
+                flags |= VK_SHADER_STAGE_MESH_BIT_EXT;
+            }
+            if (has(ShaderStage::RayGen)) {
+                flags |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            }
+            if (has(ShaderStage::AnyHit)) {
+                flags |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+            }
+            if (has(ShaderStage::ClosestHit)) {
+                flags |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            }
+            if (has(ShaderStage::Miss)) {
+                flags |= VK_SHADER_STAGE_MISS_BIT_KHR;
+            }
+            if (has(ShaderStage::Intersection)) {
+                flags |= VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+            }
+            if (has(ShaderStage::Callable)) {
+                flags |= VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+            }
+            if (stages == ShaderStage::All) {
+                flags = VK_SHADER_STAGE_ALL;
+            }
             return flags;
         }
     }  // namespace
@@ -62,23 +86,25 @@ namespace miki::rhi {
         // Each pool supports a generous mix of descriptor types.
         // When exhausted, we retire it and create a new one.
         constexpr uint32_t kPoolSize = 1024;
-        std::array<VkDescriptorPoolSize, 8> poolSizes = {{
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kPoolSize},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kPoolSize},
-            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kPoolSize},
-            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kPoolSize / 4},
-            {VK_DESCRIPTOR_TYPE_SAMPLER, kPoolSize / 2},
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kPoolSize},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kPoolSize / 4},
-            {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, kPoolSize / 8},
+        constexpr uint32_t kPoolSizeCount = 8u;
+        std::array<VkDescriptorPoolSize, kPoolSizeCount> poolSizes = {{
+            {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = kPoolSize},
+            {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = kPoolSize},
+            {.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = kPoolSize},
+            {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = kPoolSize / 4},
+            {.type = VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = kPoolSize / 2},
+            {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = kPoolSize},
+            {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = kPoolSize / 4},
+            {.type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, .descriptorCount = kPoolSize / 8},
         }};
+        uint32_t poolSizeCount = capabilities_.hasAccelerationStructure ? kPoolSizeCount : kPoolSizeCount - 1u;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT
-                       | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        poolInfo.flags
+            = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
         poolInfo.maxSets = kPoolSize;
-        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        poolInfo.poolSizeCount = poolSizeCount;
         poolInfo.pPoolSizes = poolSizes.data();
 
         VkDescriptorPool pool = VK_NULL_HANDLE;
@@ -108,12 +134,10 @@ namespace miki::rhi {
 
             VkDescriptorBindingFlags flags = 0;
             if (b.count == 0) {
-                flags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
-                      | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
-                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+                flags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
+                        | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
             } else {
-                flags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
-                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+                flags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
             }
             bindingFlags.push_back(flags);
         }
@@ -147,7 +171,9 @@ namespace miki::rhi {
 
     void VulkanDevice::DestroyDescriptorLayoutImpl(DescriptorLayoutHandle h) {
         auto* data = descriptorLayouts_.Lookup(h);
-        if (!data) return;
+        if (!data) {
+            return;
+        }
         vkDestroyDescriptorSetLayout(device_, data->layout, nullptr);
         descriptorLayouts_.Free(h);
     }
@@ -156,13 +182,14 @@ namespace miki::rhi {
     // PipelineLayout
     // =========================================================================
 
-    auto VulkanDevice::CreatePipelineLayoutImpl(const PipelineLayoutDesc& desc)
-        -> RhiResult<PipelineLayoutHandle> {
+    auto VulkanDevice::CreatePipelineLayoutImpl(const PipelineLayoutDesc& desc) -> RhiResult<PipelineLayoutHandle> {
         std::vector<VkDescriptorSetLayout> vkLayouts;
         vkLayouts.reserve(desc.setLayouts.size());
         for (auto& layoutHandle : desc.setLayouts) {
             auto* layoutData = descriptorLayouts_.Lookup(layoutHandle);
-            if (!layoutData) return std::unexpected(RhiError::InvalidHandle);
+            if (!layoutData) {
+                return std::unexpected(RhiError::InvalidHandle);
+            }
             vkLayouts.push_back(layoutData->layout);
         }
 
@@ -200,7 +227,9 @@ namespace miki::rhi {
 
     void VulkanDevice::DestroyPipelineLayoutImpl(PipelineLayoutHandle h) {
         auto* data = pipelineLayouts_.Lookup(h);
-        if (!data) return;
+        if (!data) {
+            return;
+        }
         vkDestroyPipelineLayout(device_, data->layout, nullptr);
         pipelineLayouts_.Free(h);
     }
@@ -209,15 +238,18 @@ namespace miki::rhi {
     // DescriptorSet
     // =========================================================================
 
-    auto VulkanDevice::CreateDescriptorSetImpl(const DescriptorSetDesc& desc)
-        -> RhiResult<DescriptorSetHandle> {
+    auto VulkanDevice::CreateDescriptorSetImpl(const DescriptorSetDesc& desc) -> RhiResult<DescriptorSetHandle> {
         auto* layoutData = descriptorLayouts_.Lookup(desc.layout);
-        if (!layoutData) return std::unexpected(RhiError::InvalidHandle);
+        if (!layoutData) {
+            return std::unexpected(RhiError::InvalidHandle);
+        }
 
         // Ensure we have an active pool
         if (!activeDescriptorPool_) {
             activeDescriptorPool_ = AllocateDescriptorPool();
-            if (!activeDescriptorPool_) return std::unexpected(RhiError::OutOfDeviceMemory);
+            if (!activeDescriptorPool_) {
+                return std::unexpected(RhiError::OutOfDeviceMemory);
+            }
         }
 
         VkDescriptorSetAllocateInfo allocInfo{};
@@ -233,7 +265,9 @@ namespace miki::rhi {
             // Retire current pool, allocate new one, retry
             retiredDescriptorPools_.push_back(activeDescriptorPool_);
             activeDescriptorPool_ = AllocateDescriptorPool();
-            if (!activeDescriptorPool_) return std::unexpected(RhiError::OutOfDeviceMemory);
+            if (!activeDescriptorPool_) {
+                return std::unexpected(RhiError::OutOfDeviceMemory);
+            }
 
             allocInfo.descriptorPool = activeDescriptorPool_;
             r = vkAllocateDescriptorSets(device_, &allocInfo, &set);
@@ -261,7 +295,9 @@ namespace miki::rhi {
 
     void VulkanDevice::UpdateDescriptorSetImpl(DescriptorSetHandle h, std::span<const DescriptorWrite> writes) {
         auto* setData = descriptorSets_.Lookup(h);
-        if (!setData) return;
+        if (!setData) {
+            return;
+        }
 
         std::vector<VkWriteDescriptorSet> vkWrites;
         // Pre-allocate backing storage for descriptor info structs
@@ -284,21 +320,28 @@ namespace miki::rhi {
 
             if (auto* bufBinding = std::get_if<BufferBinding>(&write.resource)) {
                 auto* bufData = buffers_.Lookup(bufBinding->buffer);
-                if (!bufData) continue;
+                if (!bufData) {
+                    continue;
+                }
 
-                bufferInfos.push_back({bufData->buffer, bufBinding->offset,
-                    bufBinding->range == 0 ? VK_WHOLE_SIZE : bufBinding->range});
+                bufferInfos.push_back(
+                    {bufData->buffer, bufBinding->offset, bufBinding->range == 0 ? VK_WHOLE_SIZE : bufBinding->range}
+                );
                 vkWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 vkWrite.pBufferInfo = &bufferInfos.back();
             } else if (auto* texBinding = std::get_if<TextureBinding>(&write.resource)) {
                 VkDescriptorImageInfo imgInfo{};
                 if (texBinding->view.IsValid()) {
                     auto* viewData = textureViews_.Lookup(texBinding->view);
-                    if (viewData) imgInfo.imageView = viewData->view;
+                    if (viewData) {
+                        imgInfo.imageView = viewData->view;
+                    }
                 }
                 if (texBinding->sampler.IsValid()) {
                     auto* sampData = samplers_.Lookup(texBinding->sampler);
-                    if (sampData) imgInfo.sampler = sampData->sampler;
+                    if (sampData) {
+                        imgInfo.sampler = sampData->sampler;
+                    }
                 }
                 imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 imageInfos.push_back(imgInfo);
@@ -313,7 +356,9 @@ namespace miki::rhi {
                 vkWrite.pImageInfo = &imageInfos.back();
             } else if (auto* sampHandle = std::get_if<SamplerHandle>(&write.resource)) {
                 auto* sampData = samplers_.Lookup(*sampHandle);
-                if (!sampData) continue;
+                if (!sampData) {
+                    continue;
+                }
 
                 VkDescriptorImageInfo imgInfo{};
                 imgInfo.sampler = sampData->sampler;
@@ -322,7 +367,9 @@ namespace miki::rhi {
                 vkWrite.pImageInfo = &imageInfos.back();
             } else if (auto* accelHandle = std::get_if<AccelStructHandle>(&write.resource)) {
                 auto* accelData = accelStructs_.Lookup(*accelHandle);
-                if (!accelData) continue;
+                if (!accelData) {
+                    continue;
+                }
 
                 accelHandles.push_back(accelData->accelStruct);
                 VkWriteDescriptorSetAccelerationStructureKHR accelWrite{};
@@ -344,7 +391,9 @@ namespace miki::rhi {
 
     void VulkanDevice::DestroyDescriptorSetImpl(DescriptorSetHandle h) {
         auto* data = descriptorSets_.Lookup(h);
-        if (!data) return;
+        if (!data) {
+            return;
+        }
         vkFreeDescriptorSets(device_, data->sourcePool, 1, &data->set);
         descriptorSets_.Free(h);
     }

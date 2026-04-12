@@ -1026,9 +1026,11 @@ namespace miki::rhi {
         // Ray tracing
         if (hasExt(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
             capabilities_.hasAccelerationStructure = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::AccelerationStructure);
         }
         if (hasExt(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
             capabilities_.hasRayQuery = true;
+            capabilities_.enabledFeatures.Add(DeviceFeature::RayQuery);
         }
         if (hasExt(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
             capabilities_.hasRayTracingPipeline = true;
