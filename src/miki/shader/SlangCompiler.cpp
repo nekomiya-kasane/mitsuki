@@ -1,7 +1,7 @@
 /** @brief SlangCompiler implementation.
  *
  * Uses the Slang COM-like C API via slang.h to compile shaders
- * to SPIR-V, DXIL, GLSL 4.30, and WGSL, and extract reflection data.
+ * to SPIR-V, DXIL, GLSL 4.30, WGSL, and MSL 3.0, and extract reflection data.
  *
  * Architecture improvements over reference (D:\repos\miki):
  *   - Session pool: reuses slang::ISession per (target, searchPaths) tuple
@@ -890,12 +890,12 @@ namespace miki::shader {
         return std::make_pair(std::move(*spirvBlob), std::move(*dxilBlob));
     }
 
-    auto SlangCompiler::CompileQuadTarget(
+    auto SlangCompiler::CompileAllTargets(
         std::filesystem::path const& iSourcePath, std::string const& iEntryPoint, ShaderStage iStage
     ) -> core::Result<std::array<ShaderBlob, kTargetCount>> {
         auto pathStr = iSourcePath.string();
         MIKI_LOG_DEBUG(
-            debug::LogCategory::Shader, "[SlangCompiler] CompileQuadTarget: {} [{}]", pathStr, StageName(iStage)
+            debug::LogCategory::Shader, "[SlangCompiler] CompileAllTargets: {} [{}]", pathStr, StageName(iStage)
         );
 
         // Read source OUTSIDE the lock
@@ -910,7 +910,8 @@ namespace miki::shader {
         impl_->lastDiagnostics.clear();
 
         static constexpr std::array<ShaderTarget, kTargetCount> kTargets
-            = {ShaderTarget::SPIRV_1_5(), ShaderTarget::DXIL_6_6(), ShaderTarget::GLSL_430(), ShaderTarget::WGSL_1_0()};
+            = {ShaderTarget::SPIRV_1_5(), ShaderTarget::DXIL_6_6(), ShaderTarget::GLSL_430(), ShaderTarget::WGSL_1_0(),
+               ShaderTarget::MSL_3_0()};
 
         std::array<ShaderBlob, kTargetCount> blobs;
         for (size_t i = 0; i < kTargetCount; ++i) {
@@ -927,7 +928,54 @@ namespace miki::shader {
         auto t1 = std::chrono::steady_clock::now();
         auto ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
         MIKI_LOG_INFO(
-            debug::LogCategory::Shader, "[SlangCompiler] QuadTarget compiled {} (4 targets, {:.1f}ms)", pathStr, ms
+            debug::LogCategory::Shader, "[SlangCompiler] AllTargets compiled {} (5 targets, {:.1f}ms)", pathStr, ms
+        );
+        return blobs;
+    }
+
+    auto SlangCompiler::CompileActiveTargets(
+        std::filesystem::path const& iSourcePath, std::string const& iEntryPoint, ShaderStage iStage,
+        std::span<const ShaderTarget> iTargets
+    ) -> core::Result<std::vector<ShaderBlob>> {
+        auto pathStr = iSourcePath.string();
+        MIKI_LOG_DEBUG(
+            debug::LogCategory::Shader, "[SlangCompiler] CompileActiveTargets: {} [{}, {} targets]", pathStr,
+            StageName(iStage), iTargets.size()
+        );
+
+        if (iTargets.empty()) {
+            return std::unexpected(core::ErrorCode::InvalidArgument);
+        }
+
+        auto source = ReadFileToString(iSourcePath);
+        if (source.empty()) {
+            MIKI_LOG_ERROR(debug::LogCategory::Shader, "[SlangCompiler] Failed to read source: {}", pathStr);
+            return std::unexpected(core::ErrorCode::IoError);
+        }
+
+        auto t0 = std::chrono::steady_clock::now();
+        std::lock_guard lock(impl_->compileMutex);
+        impl_->lastDiagnostics.clear();
+
+        std::vector<ShaderBlob> blobs;
+        blobs.reserve(iTargets.size());
+
+        for (auto const& target : iTargets) {
+            auto session = impl_->GetPooledSession(target);
+            if (!session) {
+                return std::unexpected(session.error());
+            }
+            auto blob = impl_->CompileToBlob(*session, source, pathStr, iEntryPoint, iStage, target);
+            if (!blob) {
+                return std::unexpected(blob.error());
+            }
+            blobs.push_back(std::move(*blob));
+        }
+        auto t1 = std::chrono::steady_clock::now();
+        auto ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        MIKI_LOG_INFO(
+            debug::LogCategory::Shader, "[SlangCompiler] ActiveTargets compiled {} ({} targets, {:.1f}ms)", pathStr,
+            iTargets.size(), ms
         );
         return blobs;
     }

@@ -3,8 +3,11 @@
 // Set 3 is the global bindless table — fixed layout, never changes.
 // Matches kBindlessLayout in C++ (RHI descriptor set layout).
 //
-// Phase 1a: declarations + stub implementations.
-// Phase 3b: full implementation with NonUniformResourceIndex.
+// Tier1-only: requires descriptor indexing (NonUniformResourceIndex).
+// Slang's capability system automatically infers requirements from
+// NonUniformResourceIndex — no explicit [require] needed.
+// Compat (GLSL/WGSL/MSL) passes that accidentally call these functions
+// will get a Slang capability error at compile time (§15.4.3).
 
 implementing miki_core;
 
@@ -14,12 +17,14 @@ implementing miki_core;
 [[vk::binding(2, 3)]] SamplerState           globalSamplers[];
 
 /// Type-safe bindless texture fetch.
+/// Tier1-only: Slang infers descriptor indexing capability from NonUniformResourceIndex.
 public float4 sampleBindlessTexture(uint textureIndex, uint samplerIndex, float2 uv) {
     return globalTextures[NonUniformResourceIndex(textureIndex)]
         .Sample(globalSamplers[NonUniformResourceIndex(samplerIndex)], uv);
 }
 
 /// Type-safe bindless buffer load.
+/// Tier1-only: Slang infers descriptor indexing capability from NonUniformResourceIndex.
 public uint loadBindlessBufferUint(uint bufferIndex, uint elementIndex) {
     return globalBuffers[NonUniformResourceIndex(bufferIndex)][elementIndex];
 }

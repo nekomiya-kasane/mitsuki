@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -70,8 +69,8 @@ namespace miki::shader {
         /** @brief Monotonically increasing generation counter. Increments on each successful recompile. */
         [[nodiscard]] auto GetGeneration() const noexcept -> uint64_t;
 
-        /** @brief Get errors from the most recent compilation attempts. */
-        [[nodiscard]] auto GetLastErrors() const -> std::span<const ShaderError>;
+        /** @brief Get errors from the most recent compilation attempts (returns copy for thread safety). */
+        [[nodiscard]] auto GetLastErrors() const -> std::vector<ShaderError>;
 
         /** @brief Check if the watcher background thread is running. */
         [[nodiscard]] auto IsRunning() const noexcept -> bool;

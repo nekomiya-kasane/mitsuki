@@ -196,8 +196,13 @@ miki_add_test(test_permutation_cache    tests/shader/test_permutation_cache.cpp)
 miki_add_test(test_pipeline_cache       tests/shader/test_pipeline_cache.cpp)
 miki_add_test(test_pipeline_factory     tests/shader/test_pipeline_factory.cpp)
 
+# -- Shader pipeline tests (Phase 1b) ----------------------------------------
+miki_add_test(test_multi_target            tests/shader/test_multi_target.cpp)
+miki_add_test(test_shader_watcher          tests/shader/test_shader_watcher.cpp)
+miki_add_test(test_capability_annotations  tests/shader/test_capability_annotations.cpp)
+
 # Shader tests need to know where shader source files are
-foreach(_shader_test test_slang_compiler test_permutation_cache)
+foreach(_shader_test test_slang_compiler test_permutation_cache test_multi_target test_shader_watcher test_capability_annotations)
     if(TARGET ${_shader_test})
         target_compile_definitions(${_shader_test} PRIVATE
             MIKI_SHADER_DIR="${CMAKE_SOURCE_DIR}/shaders/miki"

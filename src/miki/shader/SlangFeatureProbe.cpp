@@ -168,7 +168,7 @@ namespace miki::shader {
             .name = "wgsl_no_64bit_atomics",
             .filename = "probe_wgsl_no_64bit_atomics.slang",
             .stage = ShaderStage::Compute,
-            .tier1Only = true
+            .tier1Only = false
         },
         ProbeDesc{
             .name = "wgsl_group_binding",
@@ -200,12 +200,24 @@ namespace miki::shader {
     // Internal: run one probe
     // ===========================================================================
 
+    static bool IsTier1Target(ShaderTargetType t) noexcept {
+        return t == ShaderTargetType::SPIRV || t == ShaderTargetType::DXIL;
+    }
+
     static auto RunProbe(
         SlangCompiler& iCompiler, ProbeDesc const& iProbe, ShaderTarget iTarget, std::filesystem::path const& iShaderDir
     ) -> ProbeTestResult {
         ProbeTestResult result;
         result.name = iProbe.name;
         result.target = iTarget;
+
+        // Skip Tier1-only probes on non-Tier1 targets
+        if (iProbe.tier1Only && !IsTier1Target(iTarget.type)) {
+            result.passed = false;
+            result.skipped = true;
+            result.diagnostic = "Skipped: tier1-only probe on non-tier1 target";
+            return result;
+        }
 
         auto shaderPath = iShaderDir / iProbe.filename;
         if (!std::filesystem::exists(shaderPath)) {

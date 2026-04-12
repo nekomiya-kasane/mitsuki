@@ -220,7 +220,7 @@ namespace miki::shader {
 
 #ifdef _WIN32
         void WatchThreadFunc(std::stop_token iStopToken) {
-            running.store(true, std::memory_order_release);
+            // running is set by Start() before thread spawn
 
             HANDLE hDir = CreateFileW(
                 watchDir.wstring().c_str(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -339,7 +339,9 @@ namespace miki::shader {
 
     ShaderWatcher::ShaderWatcher(std::unique_ptr<Impl> iImpl) : impl_(std::move(iImpl)) {}
     ShaderWatcher::~ShaderWatcher() {
-        Stop();
+        if (impl_) {
+            Stop();
+        }
     }
     ShaderWatcher::ShaderWatcher(ShaderWatcher&&) noexcept = default;
     auto ShaderWatcher::operator=(ShaderWatcher&&) noexcept -> ShaderWatcher& = default;
@@ -364,6 +366,7 @@ namespace miki::shader {
 
         impl_->watchDir = fs::canonical(iWatchDir);
         impl_->depGraph.ScanDirectory(impl_->watchDir);
+        impl_->running.store(true, std::memory_order_release);
         impl_->watchThread = std::jthread([this](std::stop_token st) { impl_->WatchThreadFunc(std::move(st)); });
         MIKI_LOG_INFO(debug::LogCategory::Shader, "[ShaderWatcher] Started watching: {}", impl_->watchDir.string());
         return {};
@@ -373,6 +376,7 @@ namespace miki::shader {
         if (impl_->watchThread.joinable()) {
             impl_->watchThread.request_stop();
             impl_->watchThread.join();
+            impl_->running.store(false, std::memory_order_release);
             MIKI_LOG_INFO(debug::LogCategory::Shader, "[ShaderWatcher] Stopped");
         }
     }
@@ -388,7 +392,7 @@ namespace miki::shader {
         return impl_->generation.load(std::memory_order_acquire);
     }
 
-    auto ShaderWatcher::GetLastErrors() const -> std::span<const ShaderError> {
+    auto ShaderWatcher::GetLastErrors() const -> std::vector<ShaderError> {
         std::lock_guard lock(impl_->errorMutex);
         return impl_->lastErrors;
     }
