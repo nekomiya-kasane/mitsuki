@@ -195,7 +195,7 @@ namespace miki::debug {
 
         // Build formatted line: [timestamp] [LEVEL] [Category] func | message
         std::string line;
-        line.reserve(128);
+        line.reserve(256);
         line += '[';
         line += ts;
         line += "] [";
@@ -203,10 +203,20 @@ namespace miki::debug {
         line += "] [";
         line.append(catStr.data(), catStr.size());
         line += "] ";
+
+        if (!entry.file.empty()) {
+            line.append(entry.file.data(), entry.file.size());
+            line.append(":");
+            line.append(std::to_string(entry.line));
+            line += " | ";
+        }
         if (!entry.func.empty()) {
             line.append(entry.func.data(), entry.func.size());
             line += " | ";
         }
+        line.append("\n  > ");
+
+        line += " | ";
         line.append(entry.message.data(), entry.message.size());
 
         // Write with style
@@ -356,8 +366,7 @@ namespace miki::debug {
         auto cat = trim(catStr);
 
         std::println(
-            file_,
-            R"({{"ts":{},"level":"{}","cat":"{}","func":"{}","msg":"{}","file":"{}","line":{},"tid":{}}})",
+            file_, R"({{"ts":{},"level":"{}","cat":"{}","func":"{}","msg":"{}","file":"{}","line":{},"tid":{}}})",
             entry.timestampNs, lvl, cat, funcEscaped, msgEscaped, fileEscaped, entry.line, entry.threadId
         );
     }
