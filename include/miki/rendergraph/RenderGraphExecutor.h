@@ -26,7 +26,6 @@
 #include "miki/core/Result.h"
 #include "miki/frame/CommandPoolAllocator.h"
 #include "miki/frame/FrameContext.h"
-#include "miki/frame/SyncScheduler.h"
 #include "miki/rendergraph/BatchSubmitter.h"
 #include "miki/rendergraph/PassRecorder.h"
 #include "miki/rendergraph/AsyncComputeScheduler.h"
@@ -87,7 +86,7 @@ namespace miki::rg {
         /// @brief Execute a compiled render graph: allocate, record, submit.
         [[nodiscard]] auto Execute(
             const CompiledRenderGraph& graph, RenderGraphBuilder& builder, const frame::FrameContext& frame,
-            rhi::DeviceHandle device, frame::SyncScheduler& scheduler, frame::CommandPoolAllocator& poolAllocator
+            rhi::DeviceHandle device, frame::CommandPoolAllocator& poolAllocator
         ) -> core::Result<void>;
 
         /// @brief Get execution statistics from the last Execute() call.
@@ -124,9 +123,8 @@ namespace miki::rg {
         ) -> std::future<core::Result<void>>;
 
         /// @brief Submit batches after async Phase 1+2 completes.
-        [[nodiscard]] auto SubmitAfterAsync(
-            const CompiledRenderGraph& graph, rhi::DeviceHandle device, frame::SyncScheduler& scheduler
-        ) -> core::Result<void>;
+        [[nodiscard]] auto SubmitAfterAsync(const CompiledRenderGraph& graph, rhi::DeviceHandle device)
+            -> core::Result<void>;
 
         /// @brief Access sub-components for advanced use.
         [[nodiscard]] auto GetAllocator() noexcept -> TransientResourceAllocator& { return allocator_; }

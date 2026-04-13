@@ -275,8 +275,7 @@ static auto BuildPushConst(
 // ============================================================================
 
 static auto BuildAndExecuteRenderGraph(
-    SceneResources& scene, miki::frame::FrameContext& frameCtx, miki::frame::SyncScheduler& syncSched,
-    miki::frame::CommandPoolAllocator& cmdPoolAlloc
+    SceneResources& scene, miki::frame::FrameContext& frameCtx, miki::frame::CommandPoolAllocator& cmdPoolAlloc
 ) -> bool {
     uint32_t w = frameCtx.width;
     uint32_t h = frameCtx.height;
@@ -380,7 +379,7 @@ static auto BuildAndExecuteRenderGraph(
 
     // ── Step 3: Execute the render graph ────────────────────────────
     RenderGraphExecutor executor;
-    auto execResult = executor.Execute(compiled, builder, frameCtx, scene.device, syncSched, cmdPoolAlloc);
+    auto execResult = executor.Execute(compiled, builder, frameCtx, scene.device, cmdPoolAlloc);
     if (!execResult) {
         std::println("[rg_demo] RenderGraph execute failed");
         return false;
@@ -401,7 +400,6 @@ static SurfaceManager* g_sm = nullptr;
 static SceneResources* g_scene = nullptr;
 static WindowHandle g_mainWindow;
 static bool g_shouldQuit = false;
-static miki::frame::SyncScheduler* g_scheduler = nullptr;
 static miki::frame::CommandPoolAllocator* g_poolAllocator = nullptr;
 
 static void RenderOneFrame(WindowHandle win) {
@@ -415,7 +413,7 @@ static void RenderOneFrame(WindowHandle win) {
     }
     auto& frameCtx = *frameResult;
 
-    if (!BuildAndExecuteRenderGraph(*g_scene, frameCtx, *g_scheduler, *g_poolAllocator)) {
+    if (!BuildAndExecuteRenderGraph(*g_scene, frameCtx, *g_poolAllocator)) {
         return;
     }
 
@@ -549,10 +547,6 @@ int main(int argc, char** argv) {
         std::println("[rg_demo] No FrameManager");
         return 1;
     }
-
-    // Use the device-owned SyncScheduler (per-device singleton).
-    // SurfaceManager::GetSyncScheduler() delegates to device.GetSyncScheduler().
-    g_scheduler = &surfMgr.GetSyncScheduler();
 
     miki::frame::CommandPoolAllocator::Desc poolDesc{
         .device = device.GetHandle(),

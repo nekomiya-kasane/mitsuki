@@ -14,7 +14,6 @@
 #include "miki/rendergraph/TransientHeapPool.h"
 #include "miki/rhi/adaptation/AdaptationQuery.h"
 #include "miki/rhi/backend/MockDevice.h"
-#include "miki/frame/SyncScheduler.h"
 #include "miki/frame/CommandPoolAllocator.h"
 #include "miki/frame/FrameContext.h"
 
@@ -7592,9 +7591,6 @@ namespace {
         device.Init();
         auto deviceHandle = DeviceHandle(&device, BackendType::Mock);
 
-        miki::frame::SyncScheduler scheduler;
-        scheduler.Init(device.GetQueueTimelinesImpl());
-
         miki::frame::CommandPoolAllocator::Desc poolDesc{
             .device = deviceHandle,
             .framesInFlight = 2,
@@ -7616,7 +7612,7 @@ namespace {
         ExecuteResult result;
         result.executor = RenderGraphExecutor(execCfg);
 
-        auto execResult = result.executor.Execute(*compileResult, builder, frame, deviceHandle, scheduler, pool);
+        auto execResult = result.executor.Execute(*compileResult, builder, frame, deviceHandle, pool);
         if (!execResult) {
             return std::unexpected(execResult.error());
         }
@@ -8158,15 +8154,13 @@ TEST(Executor, StatsResetOnSecondExecution) {
         MockDevice device;
         device.Init();
         auto dh = DeviceHandle(&device, BackendType::Mock);
-        miki::frame::SyncScheduler sched;
-        sched.Init(device.GetQueueTimelinesImpl());
         miki::frame::CommandPoolAllocator::Desc pd{.device = dh, .framesInFlight = 2};
         auto pool = miki::frame::CommandPoolAllocator::Create(pd);
         if (!pool) {
             return false;
         }
         miki::frame::FrameContext frame{.width = 64, .height = 64};
-        return executor.Execute(*compiled, builder, frame, dh, sched, *pool).has_value();
+        return executor.Execute(*compiled, builder, frame, dh, *pool).has_value();
     };
 
     RenderGraphExecutor executor;
@@ -8725,14 +8719,12 @@ TEST(Executor, RepeatedExecuteDoesNotLeak) {
         MockDevice device;
         device.Init();
         auto dh = DeviceHandle(&device, BackendType::Mock);
-        miki::frame::SyncScheduler sched;
-        sched.Init(device.GetQueueTimelinesImpl());
         miki::frame::CommandPoolAllocator::Desc pd{.device = dh, .framesInFlight = 2};
         auto pool = miki::frame::CommandPoolAllocator::Create(pd);
         ASSERT_TRUE(pool.has_value()) << "Frame " << frame;
         miki::frame::FrameContext fc{.frameIndex = static_cast<uint32_t>(frame % 2), .width = 64, .height = 64};
 
-        auto execResult = executor.Execute(*compiled, builder, fc, dh, sched, *pool);
+        auto execResult = executor.Execute(*compiled, builder, fc, dh, *pool);
         ASSERT_TRUE(execResult.has_value()) << "Frame " << frame;
 
         auto& stats = executor.GetStats();
@@ -9705,8 +9697,6 @@ TEST(ExecutorPhaseF, HeapPoolingReusesAcrossExecutions) {
     device.Init();
     auto dh = DeviceHandle(&device, BackendType::Mock);
 
-    miki::frame::SyncScheduler sched;
-    sched.Init(device.GetQueueTimelinesImpl());
     miki::frame::CommandPoolAllocator::Desc pd{.device = dh, .framesInFlight = 2};
     auto pool = miki::frame::CommandPoolAllocator::Create(pd);
     ASSERT_TRUE(pool.has_value());
@@ -9735,7 +9725,7 @@ TEST(ExecutorPhaseF, HeapPoolingReusesAcrossExecutions) {
         if (!compiled) {
             return;
         }
-        auto r = executor.Execute(*compiled, builder, frame, dh, sched, *pool);
+        auto r = executor.Execute(*compiled, builder, frame, dh, *pool);
         EXPECT_TRUE(r.has_value());
     };
 

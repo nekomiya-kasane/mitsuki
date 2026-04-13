@@ -30,7 +30,6 @@
 #include "miki/core/LinearAllocator.h"
 #include "miki/frame/CommandPoolAllocator.h"
 #include "miki/frame/FrameContext.h"
-#include "miki/frame/SyncScheduler.h"
 #include "miki/rendergraph/AsyncComputeScheduler.h"
 #include "miki/rendergraph/RenderGraphAdvanced.h"
 #include "miki/rendergraph/RenderGraphBuilder.h"
@@ -75,9 +74,6 @@ namespace {
         device.Init();
         auto deviceHandle = DeviceHandle(&device, BackendType::Mock);
 
-        miki::frame::SyncScheduler scheduler;
-        scheduler.Init(device.GetQueueTimelinesImpl());
-
         miki::frame::CommandPoolAllocator::Desc pd{
             .device = deviceHandle,
             .framesInFlight = 2,
@@ -92,7 +88,7 @@ namespace {
         miki::frame::FrameContext frame{.width = 1920, .height = 1080};
 
         RenderGraphExecutor executor(execCfg);
-        auto execResult = executor.Execute(*compiled, builder, frame, deviceHandle, scheduler, *pool);
+        auto execResult = executor.Execute(*compiled, builder, frame, deviceHandle, *pool);
         if (!execResult) {
             return std::unexpected(execResult.error());
         }
@@ -1739,8 +1735,6 @@ TEST(MultiFlow, HeapPoolPersistenceAcrossFrames) {
     MockDevice device;
     device.Init();
     auto deviceHandle = DeviceHandle(&device, BackendType::Mock);
-    miki::frame::SyncScheduler scheduler;
-    scheduler.Init(device.GetQueueTimelinesImpl());
     miki::frame::CommandPoolAllocator::Desc pd{
         .device = deviceHandle,
         .framesInFlight = 2,
@@ -1758,7 +1752,7 @@ TEST(MultiFlow, HeapPoolPersistenceAcrossFrames) {
     // Frame 1
     auto [b1, c1] = buildAndCompile();
     ASSERT_TRUE(c1.has_value());
-    auto r1 = executor.Execute(*c1, b1, frame, deviceHandle, scheduler, *pool);
+    auto r1 = executor.Execute(*c1, b1, frame, deviceHandle, *pool);
     ASSERT_TRUE(r1.has_value());
     auto stats1 = executor.GetStats();
     EXPECT_GE(stats1.allocation.heapsCreated, 1u);
@@ -1766,7 +1760,7 @@ TEST(MultiFlow, HeapPoolPersistenceAcrossFrames) {
     // Frame 2: same graph -> heap pool should reuse
     auto [b2, c2] = buildAndCompile();
     ASSERT_TRUE(c2.has_value());
-    auto r2 = executor.Execute(*c2, b2, frame, deviceHandle, scheduler, *pool);
+    auto r2 = executor.Execute(*c2, b2, frame, deviceHandle, *pool);
     ASSERT_TRUE(r2.has_value());
     auto stats2 = executor.GetStats();
     // Second frame: heap pool reuse -> fewer (or 0) new heaps created

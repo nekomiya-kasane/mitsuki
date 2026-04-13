@@ -13,7 +13,6 @@
 #include <span>
 
 #include "miki/core/Result.h"
-#include "miki/frame/SyncScheduler.h"
 #include "miki/rendergraph/PassRecorder.h"
 #include "miki/rendergraph/RenderGraphTypes.h"
 #include "miki/rhi/Device.h"
@@ -35,12 +34,11 @@ namespace miki::rg {
     /// @brief Submit recorded batches to GPU queues with timeline semaphore synchronization.
     /// @param graph The compiled render graph (for batch metadata and sync points).
     /// @param recordings The recorded command buffers from PassRecorder.
-    /// @param device The RHI device handle.
-    /// @param scheduler The sync scheduler for semaphore management.
+    /// @param device The RHI device handle (SyncScheduler obtained via device.GetSyncScheduler()).
     /// @param outStats Optional output statistics.
     [[nodiscard]] auto SubmitBatches(
         const CompiledRenderGraph& graph, std::span<const BatchRecording> recordings, rhi::DeviceHandle device,
-        frame::SyncScheduler& scheduler, SubmissionStats* outStats = nullptr
+        SubmissionStats* outStats = nullptr
     ) -> core::Result<void>;
 
 }  // namespace miki::rg

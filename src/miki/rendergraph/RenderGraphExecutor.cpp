@@ -47,7 +47,7 @@ namespace miki::rg {
 
     auto RenderGraphExecutor::Execute(
         const CompiledRenderGraph& graph, RenderGraphBuilder& builder, const frame::FrameContext& frame,
-        rhi::DeviceHandle device, frame::SyncScheduler& scheduler, frame::CommandPoolAllocator& poolAllocator
+        rhi::DeviceHandle device, frame::CommandPoolAllocator& poolAllocator
     ) -> core::Result<void> {
         stats_ = {};
         frameAllocator_.Reset();
@@ -72,7 +72,7 @@ namespace miki::rg {
         stats_.recording = recorder_.GetStats();
 
         // Phase 3: Submit batches
-        auto submitResult = SubmitBatches(graph, recorder_.GetBatchRecordings(), device, scheduler, &stats_.submission);
+        auto submitResult = SubmitBatches(graph, recorder_.GetBatchRecordings(), device, &stats_.submission);
         if (!submitResult) {
             allocator_.DestroyTransients(device);
             return submitResult;
@@ -122,10 +122,9 @@ namespace miki::rg {
     // SubmitAfterAsync — Phase 3 on render thread
     // =========================================================================
 
-    auto RenderGraphExecutor::SubmitAfterAsync(
-        const CompiledRenderGraph& graph, rhi::DeviceHandle device, frame::SyncScheduler& scheduler
-    ) -> core::Result<void> {
-        return SubmitBatches(graph, recorder_.GetBatchRecordings(), device, scheduler, &stats_.submission);
+    auto RenderGraphExecutor::SubmitAfterAsync(const CompiledRenderGraph& graph, rhi::DeviceHandle device)
+        -> core::Result<void> {
+        return SubmitBatches(graph, recorder_.GetBatchRecordings(), device, &stats_.submission);
     }
 
 }  // namespace miki::rg

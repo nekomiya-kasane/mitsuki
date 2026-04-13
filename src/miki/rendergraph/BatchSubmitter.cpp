@@ -15,9 +15,10 @@ namespace miki::rg {
 
     auto SubmitBatches(
         const CompiledRenderGraph& graph, std::span<const BatchRecording> recordings, rhi::DeviceHandle device,
-        frame::SyncScheduler& scheduler, SubmissionStats* outStats
+        SubmissionStats* outStats
     ) -> core::Result<void> {
         SubmissionStats stats{};
+        auto& scheduler = device.GetSyncScheduler();
 
         for (size_t bi = 0; bi < graph.batches.size() && bi < recordings.size(); ++bi) {
             auto& batch = graph.batches[bi];
@@ -71,28 +72,21 @@ namespace miki::rg {
             };
             MIKI_LOG_DEBUG(
                 ::miki::debug::LogCategory::Rhi,
-                "[Sync] RG BatchSubmitter: batch [{}/{}] queue={} cmds=[{}] waits=[{}] signals=[{}]",
-                bi + 1, graph.batches.size(), rhi::ToString(rhiQueue),
-                recording.commandBuffers.size(), waitSems.size(), signalSems.size()
+                "[Sync] RG BatchSubmitter: batch [{}/{}] queue={} cmds=[{}] waits=[{}] signals=[{}]", bi + 1,
+                graph.batches.size(), rhi::ToString(rhiQueue), recording.commandBuffers.size(), waitSems.size(),
+                signalSems.size()
             );
             for (auto& w : waitSems) {
                 auto semName = device.Dispatch([&](const auto& dev) { return dev.GetObjectDebugName(w.semaphore); });
-                MIKI_LOG_DEBUG(
-                    ::miki::debug::LogCategory::Rhi,
-                    "[Sync]   wait: \"{}\" value=[{}]", semName, w.value
-                );
+                MIKI_LOG_DEBUG(::miki::debug::LogCategory::Rhi, "[Sync]   wait: \"{}\" value=[{}]", semName, w.value);
             }
             for (auto& s : signalSems) {
                 auto semName = device.Dispatch([&](const auto& dev) { return dev.GetObjectDebugName(s.semaphore); });
-                MIKI_LOG_DEBUG(
-                    ::miki::debug::LogCategory::Rhi,
-                    "[Sync]   signal: \"{}\" value=[{}]", semName, s.value
-                );
+                MIKI_LOG_DEBUG(::miki::debug::LogCategory::Rhi, "[Sync]   signal: \"{}\" value=[{}]", semName, s.value);
             }
             device.Dispatch([&](auto& dev) { dev.Submit(rhiQueue, submitDesc); });
             MIKI_LOG_DEBUG(
-                ::miki::debug::LogCategory::Rhi,
-                "[Sync] RG BatchSubmitter: CommitSubmit queue={}",
+                ::miki::debug::LogCategory::Rhi, "[Sync] RG BatchSubmitter: CommitSubmit queue={}",
                 rhi::ToString(rhiQueue)
             );
             scheduler.CommitSubmit(rhiQueue);
