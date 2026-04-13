@@ -187,6 +187,8 @@ cmake --preset wasm-emscripten
 cmake --build build/wasm
 ```
 
+Note: `cmake --build --preset <name>` is used where a matching build preset is defined in `CMakePresets.json`. For configurations without a build preset (`debug-d3d12`, `debug-full`, `wasm-emscripten`, `ubsan`), the build directory is specified directly.
+
 ### Sanitizer Presets
 
 ```bash
