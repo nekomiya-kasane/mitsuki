@@ -318,6 +318,21 @@ namespace miki::rhi {
             vkWrite.dstArrayElement = write.arrayElement;
             vkWrite.descriptorCount = 1;
 
+            // clang-format off
+            // ┌──────────────────────┬──────────────────────────────────────────┬──────────────────┬───────────────────────────────────┐
+            // │ Resource variant     │ VkDescriptorType                         │ Info struct      │ Condition                         │
+            // ├──────────────────────┼──────────────────────────────────────────┼──────────────────┼───────────────────────────────────┤
+            // │ BufferBinding        │ UNIFORM_BUFFER                           │ pBufferInfo      │ always                            │
+            // ├----------------------┼------------------------------------------┼------------------┼-----------------------------------┤
+            // │ TextureBinding       │ COMBINED_IMAGE_SAMPLER                   │ pImageInfo       │ [sampler + view] both valid       │
+            // │ TextureBinding       │ SAMPLED_IMAGE                            │ pImageInfo       │ [view] valid, no sampler          │
+            // │ TextureBinding       │ SAMPLER                                  │ pImageInfo       │ [sampler] valid, no view          │
+            // ├----------------------┼------------------------------------------┼------------------┼-----------------------------------┤
+            // │ SamplerHandle        │ SAMPLER                                  │ pImageInfo       │ always                            │
+            // ├----------------------┼------------------------------------------┼------------------┼-----------------------------------┤
+            // │ AccelStructHandle    │ ACCELERATION_STRUCTURE_KHR               │ pNext            │ always                            │
+            // └──────────────────────┴──────────────────────────────────────────┴──────────────────┴───────────────────────────────────┘
+            // clang-format on
             if (auto* bufBinding = std::get_if<BufferBinding>(&write.resource)) {
                 auto* bufData = buffers_.Lookup(bufBinding->buffer);
                 if (!bufData) {
