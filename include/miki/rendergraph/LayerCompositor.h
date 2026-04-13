@@ -1,7 +1,7 @@
-/** @file FrameOrchestrator.h
+/** @file LayerCompositor.h
  *  @brief Multi-graph composition for per-layer render graphs (Phase I, §10.4).
  *
- *  Each LayerStack layer owns its own RenderGraph instance. The FrameOrchestrator
+ *  Each LayerStack layer owns its own RenderGraph instance. The LayerCompositor
  *  composes them: independent compilation/caching, cross-graph imports, ordered execution.
  *
  *  Layer ordering (from rendering-pipeline-architecture.md §2.1):
@@ -62,9 +62,9 @@ namespace miki::rg {
     ///   2. For each active layer: orchestrator.SetLayerBuilder(layer, std::move(builder))
     ///   3. orchestrator.CompileAll()
     ///   4. For each layer: orchestrator.GetCompiledGraph(layer) to execute
-    class FrameOrchestrator {
+    class LayerCompositor {
        public:
-        explicit FrameOrchestrator(const RenderGraphCompiler::Options& compilerOptions = {});
+        explicit LayerCompositor(const RenderGraphCompiler::Options& compilerOptions = {});
 
         /// @brief Begin a new frame. Patches external resources on cached graphs.
         void BeginFrame(const FrameContext& frameCtx);

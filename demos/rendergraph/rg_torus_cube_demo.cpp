@@ -550,9 +550,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Use the SurfaceManager's shared SyncScheduler — the same instance that
-    // FrameManager uses internally. Creating a separate SyncScheduler would cause
-    // double-signal of the same timeline semaphore value.
+    // Use the device-owned SyncScheduler (per-device singleton).
+    // SurfaceManager::GetSyncScheduler() delegates to device.GetSyncScheduler().
     g_scheduler = &surfMgr.GetSyncScheduler();
 
     miki::frame::CommandPoolAllocator::Desc poolDesc{

@@ -7,14 +7,14 @@
  *    I-3: PSO readiness tracking (bitmask, CheckPsoStaleness)
  *    I-4: Incremental recompile (CompileIncremental)
  *    I-5: External resource patching (CollectExternalResources, PatchExternalResources)
- *    I-6: Multi-graph composition (FrameOrchestrator)
+ *    I-6: Multi-graph composition (LayerCompositor)
  *
  *  Pure CPU tests — no GPU device required.
  */
 
 #include <gtest/gtest.h>
 
-#include "miki/rendergraph/FrameOrchestrator.h"
+#include "miki/rendergraph/LayerCompositor.h"
 #include "miki/rendergraph/RenderGraphBuilder.h"
 #include "miki/rendergraph/RenderGraphCompiler.h"
 #include "miki/rendergraph/RenderGraphTypes.h"
@@ -656,23 +656,23 @@ TEST(ExternalResources, TransientResourcesNotCollected) {
 }
 
 // =============================================================================
-// I-6: FrameOrchestrator — multi-graph composition
+// I-6: LayerCompositor — multi-graph composition
 // =============================================================================
 
-TEST(FrameOrchestrator, DefaultStateAllLayersActive) {
-    FrameOrchestrator orch;
+TEST(LayerCompositor, DefaultStateAllLayersActive) {
+    LayerCompositor orch;
     EXPECT_EQ(orch.GetActiveLayerCount(), static_cast<uint32_t>(LayerId::Count));
 }
 
-TEST(FrameOrchestrator, DeactivateLayerReducesCount) {
-    FrameOrchestrator orch;
+TEST(LayerCompositor, DeactivateLayerReducesCount) {
+    LayerCompositor orch;
     orch.SetLayerActive(LayerId::Preview, false);
     orch.SetLayerActive(LayerId::SVG, false);
     EXPECT_EQ(orch.GetActiveLayerCount(), static_cast<uint32_t>(LayerId::Count) - 2);
 }
 
-TEST(FrameOrchestrator, CompileAllWithSingleLayer) {
-    FrameOrchestrator orch;
+TEST(LayerCompositor, CompileAllWithSingleLayer) {
+    LayerCompositor orch;
     // Deactivate all but Scene
     orch.SetLayerActive(LayerId::Preview, false);
     orch.SetLayerActive(LayerId::Overlay, false);
@@ -694,8 +694,8 @@ TEST(FrameOrchestrator, CompileAllWithSingleLayer) {
     EXPECT_EQ(orch.GetCompiledGraph(LayerId::Preview), nullptr);
 }
 
-TEST(FrameOrchestrator, CacheHitOnSecondFrameIdenticalGraph) {
-    FrameOrchestrator orch;
+TEST(LayerCompositor, CacheHitOnSecondFrameIdenticalGraph) {
+    LayerCompositor orch;
     // Only use Scene layer
     for (int i = 1; i < static_cast<int>(LayerId::Count); ++i) {
         orch.SetLayerActive(static_cast<LayerId>(i), false);
@@ -714,8 +714,8 @@ TEST(FrameOrchestrator, CacheHitOnSecondFrameIdenticalGraph) {
     EXPECT_EQ(orch.GetLayerCacheResult(LayerId::Scene), CacheHitResult::FullHit);
 }
 
-TEST(FrameOrchestrator, IncrementalRecompileOnDescChange) {
-    FrameOrchestrator orch;
+TEST(LayerCompositor, IncrementalRecompileOnDescChange) {
+    LayerCompositor orch;
     for (int i = 1; i < static_cast<int>(LayerId::Count); ++i) {
         orch.SetLayerActive(static_cast<LayerId>(i), false);
     }
@@ -733,8 +733,8 @@ TEST(FrameOrchestrator, IncrementalRecompileOnDescChange) {
     EXPECT_EQ(orch.GetLayerCacheResult(LayerId::Scene), CacheHitResult::DescriptorOnlyChange);
 }
 
-TEST(FrameOrchestrator, MultipleLayersCompileIndependently) {
-    FrameOrchestrator orch;
+TEST(LayerCompositor, MultipleLayersCompileIndependently) {
+    LayerCompositor orch;
     for (int i = 2; i < static_cast<int>(LayerId::Count); ++i) {
         orch.SetLayerActive(static_cast<LayerId>(i), false);
     }
@@ -754,16 +754,16 @@ TEST(FrameOrchestrator, MultipleLayersCompileIndependently) {
     EXPECT_NE(scene->hash.descHash, preview->hash.descHash);
 }
 
-TEST(FrameOrchestrator, LayerWithoutBuilderSkipped) {
-    FrameOrchestrator orch;
+TEST(LayerCompositor, LayerWithoutBuilderSkipped) {
+    LayerCompositor orch;
     orch.BeginFrame({.swapchainImage = MakeTextureHandle(1)});
     // Don't set any builder
     EXPECT_TRUE(orch.CompileAll());  // should succeed (nothing to compile)
     EXPECT_EQ(orch.GetCompiledGraph(LayerId::Scene), nullptr);
 }
 
-TEST(FrameOrchestrator, InactiveLayerCacheResultIsMiss) {
-    FrameOrchestrator orch;
+TEST(LayerCompositor, InactiveLayerCacheResultIsMiss) {
+    LayerCompositor orch;
     orch.SetLayerActive(LayerId::Scene, false);
     EXPECT_EQ(orch.GetLayerCacheResult(LayerId::Scene), CacheHitResult::Miss);
 }
@@ -774,7 +774,7 @@ TEST(FrameOrchestrator, InactiveLayerCacheResultIsMiss) {
 
 TEST(PhaseIStress, RapidCacheTransitions_Miss_FullHit_DescChange_Miss) {
     // Simulate 4-frame sequence exercising all cache states
-    FrameOrchestrator orch;
+    LayerCompositor orch;
     for (int i = 1; i < static_cast<int>(LayerId::Count); ++i) {
         orch.SetLayerActive(static_cast<LayerId>(i), false);
     }
@@ -928,7 +928,7 @@ TEST(PhaseIStress, IncrementalRecompilePreservesEdgesAndSyncPoints) {
 
 TEST(PhaseIStress, MultiLayerMixedCacheStates) {
     // Scene: FullHit, Preview: DescChange, Overlay: Miss simultaneously
-    FrameOrchestrator orch;
+    LayerCompositor orch;
     for (int i = 3; i < static_cast<int>(LayerId::Count); ++i) {
         orch.SetLayerActive(static_cast<LayerId>(i), false);
     }
@@ -1008,7 +1008,7 @@ TEST(PhaseIStress, SwapchainRecreationAcrossFrames) {
 }
 
 TEST(PhaseIStress, OrchestratorReactivateLayerAfterDeactivation) {
-    FrameOrchestrator orch;
+    LayerCompositor orch;
     for (int i = 1; i < static_cast<int>(LayerId::Count); ++i) {
         orch.SetLayerActive(static_cast<LayerId>(i), false);
     }

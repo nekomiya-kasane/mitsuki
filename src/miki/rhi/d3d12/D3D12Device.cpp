@@ -327,6 +327,7 @@ namespace miki::rhi {
             queueTimelines_.transfer = queueTimelines_.graphics;  // transfer == graphics → share timeline
         }
 
+        syncScheduler_.Init(queueTimelines_);
         return {};
     }
 

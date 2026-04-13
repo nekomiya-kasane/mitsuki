@@ -72,14 +72,10 @@ namespace miki::rhi {
 
     struct SurfaceManager::Impl {
         DeviceHandle device;
-        platform::WindowManager* windowManager = nullptr;  // TODO (Nekomiya) bad smell
-        frame::SyncScheduler syncScheduler;
+        platform::WindowManager* windowManager = nullptr;
         std::unordered_map<platform::WindowHandle, SurfaceEntry, WindowHandleHash> surfaces;
 
-        Impl(DeviceHandle iDevice, platform::WindowManager& iWM) : device(iDevice), windowManager(&iWM) {
-            auto timelines = iDevice.Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
-            syncScheduler.Init(timelines);
-        }
+        Impl(DeviceHandle iDevice, platform::WindowManager& iWM) : device(iDevice), windowManager(&iWM) {}
 
         auto Find(platform::WindowHandle iWindow) -> SurfaceEntry* {
             auto it = surfaces.find(iWindow);
@@ -161,8 +157,8 @@ namespace miki::rhi {
             return std::unexpected(fmResult.error());
         }
 
-        // 5. Bind shared SyncScheduler (fixes multi-window timeline collision)
-        fmResult->SetSyncScheduler(&impl_->syncScheduler);
+        // 5. Bind device-owned SyncScheduler (device-global, multi-window safe)
+        fmResult->SetSyncScheduler(&impl_->device.GetSyncScheduler());
 
         // 6. Insert into map
         impl_->surfaces.emplace(iWindow, SurfaceEntry{std::move(surface), std::move(*fmResult), iConfig});
@@ -222,7 +218,7 @@ namespace miki::rhi {
 
     auto SurfaceManager::GetSyncScheduler() noexcept -> frame::SyncScheduler& {
         assert(impl_ && "SurfaceManager used after move");
-        return impl_->syncScheduler;
+        return impl_->device.GetSyncScheduler();
     }
 
     // =========================================================================

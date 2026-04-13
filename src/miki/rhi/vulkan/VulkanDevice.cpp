@@ -687,8 +687,7 @@ namespace miki::rhi {
         // Tag core Vulkan objects with debug names for validation/RenderDoc
         TagVkObject(device_, VK_OBJECT_TYPE_DEVICE, reinterpret_cast<uint64_t>(device_), "miki::Device");
         TagVkObject(
-            device_, VK_OBJECT_TYPE_PHYSICAL_DEVICE,
-            reinterpret_cast<uint64_t>(physicalDevice_), "miki::PhysicalDevice"
+            device_, VK_OBJECT_TYPE_PHYSICAL_DEVICE, reinterpret_cast<uint64_t>(physicalDevice_), "miki::PhysicalDevice"
         );
         TagVkObject(device_, VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(graphicsQueue_), "GraphicsQueue");
         if (presentQueue_ != graphicsQueue_) {
@@ -699,8 +698,7 @@ namespace miki::rhi {
         }
         if (computeAsyncQueue_ != VK_NULL_HANDLE && computeAsyncQueue_ != computeQueue_) {
             TagVkObject(
-                device_, VK_OBJECT_TYPE_QUEUE,
-                reinterpret_cast<uint64_t>(computeAsyncQueue_), "AsyncComputeQueue"
+                device_, VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(computeAsyncQueue_), "AsyncComputeQueue"
             );
         }
         if (transferQueue_ != graphicsQueue_) {
@@ -822,6 +820,7 @@ namespace miki::rhi {
         graphicsTimelineValue_ = 0;
         computeTimelineValue_ = 0;
         transferTimelineValue_ = 0;
+        syncScheduler_.Init(queueTimelines_);
         return {};
     }
 
@@ -855,6 +854,7 @@ namespace miki::rhi {
         graphicsTimelineValue_ = 0;
         computeTimelineValue_ = 0;
         transferTimelineValue_ = 0;
+        syncScheduler_.Init(queueTimelines_);
     }
 
     // =========================================================================
@@ -1609,11 +1609,15 @@ namespace miki::rhi {
         // Build flat arrays for Vulkan
         std::vector<VkSemaphoreSubmitInfo> waitInfos;
         waitInfos.reserve(waitEntries.size());
-        for (auto& e : waitEntries) waitInfos.push_back(e.info);
+        for (auto& e : waitEntries) {
+            waitInfos.push_back(e.info);
+        }
 
         std::vector<VkSemaphoreSubmitInfo> signalInfos;
         signalInfos.reserve(signalEntries.size());
-        for (auto& e : signalEntries) signalInfos.push_back(e.info);
+        for (auto& e : signalEntries) {
+            signalInfos.push_back(e.info);
+        }
 
         // Resolve signal fence
         VkFence vkFence = VK_NULL_HANDLE;
@@ -1635,21 +1639,18 @@ namespace miki::rhi {
 
         MIKI_LOG_DEBUG(
             ::miki::debug::LogCategory::Rhi,
-            "[Sync][Vk] SubmitImpl: queue={} cmds=[{}] waits=[{}] signals=[{}] fence=[0x{:x}]",
-            ToString(queue), cmdInfos.size(), waitInfos.size(), signalInfos.size(),
-            reinterpret_cast<uintptr_t>(vkFence)
+            "[Sync][Vk] SubmitImpl: queue={} cmds=[{}] waits=[{}] signals=[{}] fence=[0x{:x}]", ToString(queue),
+            cmdInfos.size(), waitInfos.size(), signalInfos.size(), reinterpret_cast<uintptr_t>(vkFence)
         );
         for (auto& e : waitEntries) {
             MIKI_LOG_DEBUG(
-                ::miki::debug::LogCategory::Rhi,
-                "[Sync][Vk]   wait: \"{}\" value=[{}] stage=[0x{:x}]",
+                ::miki::debug::LogCategory::Rhi, "[Sync][Vk]   wait: \"{}\" value=[{}] stage=[0x{:x}]",
                 e.name ? e.name : "(unnamed)", e.info.value, static_cast<uint64_t>(e.info.stageMask)
             );
         }
         for (auto& e : signalEntries) {
             MIKI_LOG_DEBUG(
-                ::miki::debug::LogCategory::Rhi,
-                "[Sync][Vk]   signal: \"{}\" value=[{}] stage=[0x{:x}]",
+                ::miki::debug::LogCategory::Rhi, "[Sync][Vk]   signal: \"{}\" value=[{}] stage=[0x{:x}]",
                 e.name ? e.name : "(unnamed)", e.info.value, static_cast<uint64_t>(e.info.stageMask)
             );
         }
@@ -1659,8 +1660,8 @@ namespace miki::rhi {
             VkResult submitResult = vkQueueSubmit2(targetQueue, 1, &submitInfo, vkFence);
             if (submitResult != VK_SUCCESS) {
                 MIKI_LOG_ERROR(
-                    ::miki::debug::LogCategory::Rhi,
-                    "[Sync][Vk] vkQueueSubmit2 FAILED: result={}", static_cast<int>(submitResult)
+                    ::miki::debug::LogCategory::Rhi, "[Sync][Vk] vkQueueSubmit2 FAILED: result={}",
+                    static_cast<int>(submitResult)
                 );
             }
         }
@@ -1718,8 +1719,7 @@ namespace miki::rhi {
             TagVkObject(device_, VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(data->semaphore), name);
         }
         MIKI_LOG_DEBUG(
-            ::miki::debug::LogCategory::Rhi,
-            "[Sync][Vk] SetDebugName: semaphore \"{}\" handle=[0x{:x}]",
+            ::miki::debug::LogCategory::Rhi, "[Sync][Vk] SetDebugName: semaphore \"{}\" handle=[0x{:x}]",
             name ? name : "(null)", h.value
         );
     }
@@ -1805,8 +1805,7 @@ namespace miki::rhi {
         accelStructs_.SetDebugName(h, name);
         if (auto* data = accelStructs_.Lookup(h)) {
             TagVkObject(
-                device_, VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
-                reinterpret_cast<uint64_t>(data->accelStruct), name
+                device_, VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, reinterpret_cast<uint64_t>(data->accelStruct), name
             );
         }
     }

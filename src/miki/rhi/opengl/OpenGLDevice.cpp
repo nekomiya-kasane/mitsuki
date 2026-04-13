@@ -211,6 +211,7 @@ namespace miki::rhi {
                 queueTimelines_.transfer = *r;
             }
         }
+        syncScheduler_.Init(queueTimelines_);
 
         MIKI_LOG_INFO(
             ::miki::debug::LogCategory::Rhi, "[OpenGL] Device initialized: {} (GL {}.{}, SPIR-V: {})",

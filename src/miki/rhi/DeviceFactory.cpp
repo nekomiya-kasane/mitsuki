@@ -159,4 +159,9 @@ namespace miki::rhi {
         return Dispatch([](auto& dev) -> std::string_view { return dev.GetCapabilities().deviceName; });
     }
 
+    // DeviceHandle::GetSyncScheduler — defined here because all backend types are complete
+    auto DeviceHandle::GetSyncScheduler() -> frame::SyncScheduler& {
+        return Dispatch([](auto& dev) -> frame::SyncScheduler& { return dev.GetSyncScheduler(); });
+    }
+
 }  // namespace miki::rhi

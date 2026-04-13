@@ -1,8 +1,8 @@
-/** @file FrameOrchestrator.cpp
+/** @file LayerCompositor.cpp
  *  @brief Multi-graph composition for per-layer render graphs (Phase I, §10.4).
  */
 
-#include "miki/rendergraph/FrameOrchestrator.h"
+#include "miki/rendergraph/LayerCompositor.h"
 
 #include <cassert>
 #include <string_view>
@@ -11,14 +11,14 @@ namespace miki::rg {
 
     static constexpr const char* kLayerNames[] = {"Scene", "Preview", "Overlay", "Widgets", "SVG", "HUD"};
 
-    FrameOrchestrator::FrameOrchestrator(const RenderGraphCompiler::Options& compilerOptions) {
+    LayerCompositor::LayerCompositor(const RenderGraphCompiler::Options& compilerOptions) {
         for (size_t i = 0; i < kLayerCount; ++i) {
             layers_[i].name = kLayerNames[i];
             compilers_[i] = RenderGraphCompiler(compilerOptions);
         }
     }
 
-    void FrameOrchestrator::BeginFrame(const FrameContext& frameCtx) {
+    void LayerCompositor::BeginFrame(const FrameContext& frameCtx) {
         currentFrameCtx_ = frameCtx;
         exports_.clear();
 
@@ -30,26 +30,26 @@ namespace miki::rg {
         }
     }
 
-    void FrameOrchestrator::SetLayerBuilder(LayerId layer, RenderGraphBuilder builder) {
+    void LayerCompositor::SetLayerBuilder(LayerId layer, RenderGraphBuilder builder) {
         auto idx = static_cast<size_t>(layer);
         assert(idx < kLayerCount);
         assert(builder.IsBuilt() && "Builder must be finalized via Build() before setting on orchestrator");
         builders_[idx] = std::move(builder);
     }
 
-    void FrameOrchestrator::SetLayerActive(LayerId layer, bool active) {
+    void LayerCompositor::SetLayerActive(LayerId layer, bool active) {
         auto idx = static_cast<size_t>(layer);
         assert(idx < kLayerCount);
         layers_[idx].active = active;
     }
 
-    void FrameOrchestrator::ExportResource(
+    void LayerCompositor::ExportResource(
         LayerId sourceLayer, const char* name, RGResourceHandle handle, RGResourceKind kind
     ) {
         exports_.push_back({.sourceLayer = sourceLayer, .name = name, .handle = handle, .kind = kind});
     }
 
-    auto FrameOrchestrator::ImportFromLayer(RenderGraphBuilder& targetBuilder, LayerId sourceLayer, const char* name)
+    auto LayerCompositor::ImportFromLayer(RenderGraphBuilder& targetBuilder, LayerId sourceLayer, const char* name)
         -> RGResourceHandle {
         // Find the export
         for (auto& exp : exports_) {
@@ -77,7 +77,7 @@ namespace miki::rg {
         return targetBuilder.ImportTexture({}, name);
     }
 
-    auto FrameOrchestrator::CompileAll() -> bool {
+    auto LayerCompositor::CompileAll() -> bool {
         bool allOk = true;
         for (size_t i = 0; i < kLayerCount; ++i) {
             if (!layers_[i].active || !builders_[i].has_value()) {
@@ -129,7 +129,7 @@ namespace miki::rg {
         return allOk;
     }
 
-    auto FrameOrchestrator::GetCompiledGraph(LayerId layer) const -> const CompiledRenderGraph* {
+    auto LayerCompositor::GetCompiledGraph(LayerId layer) const -> const CompiledRenderGraph* {
         auto idx = static_cast<size_t>(layer);
         if (idx < kLayerCount && layers_[idx].hasCompiledGraph) {
             return &layers_[idx].compiled;
@@ -137,7 +137,7 @@ namespace miki::rg {
         return nullptr;
     }
 
-    auto FrameOrchestrator::GetLayerCacheResult(LayerId layer) const -> CacheHitResult {
+    auto LayerCompositor::GetLayerCacheResult(LayerId layer) const -> CacheHitResult {
         auto idx = static_cast<size_t>(layer);
         if (idx < kLayerCount && layers_[idx].hasCompiledGraph) {
             return layers_[idx].compiled.cacheResult;
@@ -145,7 +145,7 @@ namespace miki::rg {
         return CacheHitResult::Miss;
     }
 
-    auto FrameOrchestrator::GetActiveLayerCount() const noexcept -> uint32_t {
+    auto LayerCompositor::GetActiveLayerCount() const noexcept -> uint32_t {
         uint32_t count = 0;
         for (auto& layer : layers_) {
             if (layer.active) {

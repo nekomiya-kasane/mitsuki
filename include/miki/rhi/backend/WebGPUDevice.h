@@ -16,6 +16,7 @@
 #include "miki/rhi/Device.h"
 #include "miki/rhi/GpuCapabilityProfile.h"
 #include "miki/rhi/adaptation/ShadowBuffer.h"
+#include "miki/frame/SyncScheduler.h"
 
 #include <dawn/webgpu.h>
 
@@ -226,6 +227,10 @@ namespace miki::rhi {
         auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
         auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() noexcept -> frame::SyncScheduler& { return syncScheduler_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() const noexcept -> const frame::SyncScheduler& {
+            return syncScheduler_;
+        }
 
         // -- Swapchain (WebGPUSwapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
@@ -419,28 +424,6 @@ namespace miki::rhi {
             auto n = swapchains_.GetDebugName(h);
             return n ? n : "(unnamed)";
         }
-        [[nodiscard]] auto GetObjectDebugNameImpl(PipelineLayoutHandle h) const -> const char* {
-            auto n = pipelineLayouts_.GetDebugName(h); return n ? n : "(unnamed)";
-        }
-        [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorLayoutHandle h) const -> const char* {
-            auto n = descriptorLayouts_.GetDebugName(h); return n ? n : "(unnamed)";
-        }
-        [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorSetHandle h) const -> const char* {
-            auto n = descriptorSets_.GetDebugName(h); return n ? n : "(unnamed)";
-        }
-        [[nodiscard]] auto GetObjectDebugNameImpl(QueryPoolHandle h) const -> const char* {
-            auto n = queryPools_.GetDebugName(h); return n ? n : "(unnamed)";
-        }
-        [[nodiscard]] auto GetObjectDebugNameImpl(AccelStructHandle) const -> const char* { return "(unnamed)"; }
-        [[nodiscard]] auto GetObjectDebugNameImpl(CommandPoolHandle h) const -> const char* {
-            auto n = commandPools_.GetDebugName(h); return n ? n : "(unnamed)";
-        }
-        [[nodiscard]] auto GetObjectDebugNameImpl(CommandBufferHandle h) const -> const char* {
-            auto n = commandBuffers_.GetDebugName(h); return n ? n : "(unnamed)";
-        }
-        [[nodiscard]] auto GetObjectDebugNameImpl(SwapchainHandle h) const -> const char* {
-            auto n = swapchains_.GetDebugName(h); return n ? n : "(unnamed)";
-        }
 
         // -- Surface capabilities --
         auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
@@ -512,6 +495,7 @@ namespace miki::rhi {
         HandlePool<WGPUFenceData, FenceTag, kMaxFences> fences_;
         HandlePool<WGPUSemaphoreData, SemaphoreTag, kMaxSemaphores> semaphores_;
         QueueTimelines queueTimelines_;
+        frame::SyncScheduler syncScheduler_;
         HandlePool<WGPUPipelineData, PipelineTag, kMaxPipelines> pipelines_;
         HandlePool<WGPUPipelineLayoutData, PipelineLayoutTag, kMaxPipelineLayouts> pipelineLayouts_;
         HandlePool<WGPUDescriptorLayoutData, DescriptorLayoutTag, kMaxDescriptorLayouts> descriptorLayouts_;

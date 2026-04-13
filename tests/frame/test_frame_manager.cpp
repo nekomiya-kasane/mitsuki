@@ -46,22 +46,16 @@ class FrameManagerTest : public RhiTest {
         if (GetParam() == BackendType::Mock) {
             GTEST_SKIP() << "FrameManager requires real sync primitives; Mock backend skipped";
         }
-
-        // Initialize device-global SyncScheduler (mandatory for FrameManager)
-        auto timelines = Dev().Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
-        syncScheduler_.Init(timelines);
     }
 
-    // Helper: create offscreen FrameManager with SyncScheduler bound
+    // Helper: create offscreen FrameManager with device-owned SyncScheduler
     [[nodiscard]] auto MakeOffscreen(uint32_t framesInFlight = 2) -> core::Result<FrameManager> {
         auto result = FrameManager::CreateOffscreen(Dev(), 1920, 1080, framesInFlight);
         if (result.has_value()) {
-            result->SetSyncScheduler(&syncScheduler_);
+            result->SetSyncScheduler(&Dev().GetSyncScheduler());
         }
         return result;
     }
-
-    SyncScheduler syncScheduler_;
 
     // Helper: EndFrame with a single command buffer (no convenience overload).
     static auto EndFrameSingle(FrameManager& fm, rhi::CommandBufferHandle cmd) -> core::Result<void> {
@@ -2086,28 +2080,24 @@ TEST_P(FrameManagerTest, STT04_EndFrameAutoClearsComputeSync) {
     EXPECT_EQ(fm.FrameNumber(), 2u);
 }
 
-// STT05: GIVEN FM WHEN SetSyncScheduler(non-null) THEN EndFrame uses scheduler allocations
+// STT05: GIVEN FM with device-owned SyncScheduler WHEN EndFrame THEN scheduler allocations increment
 TEST_P(FrameManagerTest, STT05_SyncSchedulerIntegration) {
     auto result = MakeOffscreen(2);
     ASSERT_TRUE(result.has_value());
     auto& fm = *result;
+    auto& sched = Dev().GetSyncScheduler();
 
-    // MakeOffscreen already binds syncScheduler_; re-bind a fresh one to verify
-    auto timelines = Dev().Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
-    SyncScheduler sched;
-    sched.Init(timelines);
-    fm.SetSyncScheduler(&sched);
-
+    auto baseValue = sched.GetCurrentValue(QueueType::Graphics);
     RunFrames(fm, 5);
 
     // SyncScheduler should track timeline values
-    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 5u);
-    EXPECT_EQ(fm.CurrentTimelineValue(), 5u);
+    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), baseValue + 5u);
+    EXPECT_EQ(fm.CurrentTimelineValue(), baseValue + 5u);
 
     // Continue with same scheduler — values keep incrementing
     RunFrames(fm, 3);
-    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), 8u);
-    EXPECT_EQ(fm.CurrentTimelineValue(), 8u);
+    EXPECT_EQ(sched.GetCurrentValue(QueueType::Graphics), baseValue + 8u);
+    EXPECT_EQ(fm.CurrentTimelineValue(), baseValue + 8u);
 }
 
 // STT06: GIVEN FM WHEN SetTransferSyncPoint THEN BeginFrame populates transferWaitValue

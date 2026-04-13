@@ -15,6 +15,7 @@
 
 #include "miki/rhi/Device.h"
 #include "miki/rhi/GpuCapabilityProfile.h"
+#include "miki/frame/SyncScheduler.h"
 
 #pragma warning(push)
 #pragma warning(disable : 4199)  // MSVC warning for language extension tokens
@@ -535,6 +536,10 @@ namespace miki::rhi {
         auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
         auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() noexcept -> frame::SyncScheduler& { return syncScheduler_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() const noexcept -> const frame::SyncScheduler& {
+            return syncScheduler_;
+        }
 
         // -- Swapchain (OpenGLSwapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
@@ -797,6 +802,7 @@ namespace miki::rhi {
         HandlePool<GLFenceData, FenceTag, kMaxFences> fences_;
         HandlePool<GLSemaphoreData, SemaphoreTag, kMaxSemaphores> semaphores_;
         QueueTimelines queueTimelines_;
+        frame::SyncScheduler syncScheduler_;
         HandlePool<GLPipelineData, PipelineTag, kMaxPipelines> pipelines_;
         HandlePool<GLPipelineLayoutData, PipelineLayoutTag, kMaxPipelineLayouts> pipelineLayouts_;
         HandlePool<GLDescriptorLayoutData, DescriptorLayoutTag, kMaxDescriptorLayouts> descriptorLayouts_;

@@ -19,19 +19,11 @@ namespace miki::frame {
     struct FrameOrchestrator::Impl {
         rhi::DeviceHandle device;
         ComputeQueueLevel computeLevel = ComputeQueueLevel::D_GraphicsOnly;
-        SyncScheduler syncScheduler;
         AsyncTaskManager asyncTaskManager;
         DeferredDestructor deferredDestructor;
 
-        Impl(
-            SyncScheduler&& sched, AsyncTaskManager&& atm, DeferredDestructor&& dd, rhi::DeviceHandle dev,
-            ComputeQueueLevel level
-        )
-            : device(dev)
-            , computeLevel(level)
-            , syncScheduler(std::move(sched))
-            , asyncTaskManager(std::move(atm))
-            , deferredDestructor(std::move(dd)) {}
+        Impl(AsyncTaskManager&& atm, DeferredDestructor&& dd, rhi::DeviceHandle dev, ComputeQueueLevel level)
+            : device(dev), computeLevel(level), asyncTaskManager(std::move(atm)), deferredDestructor(std::move(dd)) {}
     };
 
     FrameOrchestrator::~FrameOrchestrator() {
@@ -50,17 +42,15 @@ namespace miki::frame {
             return std::unexpected(core::ErrorCode::InvalidArgument);
         }
 
-        // Initialize SyncScheduler from device's global timeline semaphores
-        SyncScheduler scheduler;
-        auto timelines = iDevice.Dispatch([](const auto& dev) { return dev.GetQueueTimelines(); });
-        scheduler.Init(timelines);
-
         // Detect compute queue level
         auto caps = iDevice.Dispatch([](const auto& dev) -> const rhi::GpuCapabilityProfile& {
             return dev.GetCapabilities();
         });
         auto computeLevel = DetectComputeQueueLevel(caps);
         MIKI_LOG_INFO(debug::LogCategory::Render, "[Frame] ComputeQueueLevel: {}", ComputeQueueLevelName(computeLevel));
+
+        // Use device-owned SyncScheduler (per-device singleton)
+        auto& scheduler = iDevice.GetSyncScheduler();
 
         // Create AsyncTaskManager with level awareness
         auto atmResult = AsyncTaskManager::Create(iDevice, scheduler, computeLevel);
@@ -71,19 +61,18 @@ namespace miki::frame {
         // Create DeferredDestructor
         auto dd = DeferredDestructor::Create(iDevice, iFramesInFlight);
 
-        auto impl
-            = std::make_unique<Impl>(std::move(scheduler), std::move(*atmResult), std::move(dd), iDevice, computeLevel);
+        auto impl = std::make_unique<Impl>(std::move(*atmResult), std::move(dd), iDevice, computeLevel);
         return FrameOrchestrator(std::move(impl));
     }
 
     auto FrameOrchestrator::GetSyncScheduler() noexcept -> SyncScheduler& {
         assert(impl_ && "FrameOrchestrator used after move");
-        return impl_->syncScheduler;
+        return impl_->device.GetSyncScheduler();
     }
 
     auto FrameOrchestrator::GetSyncScheduler() const noexcept -> const SyncScheduler& {
         assert(impl_ && "FrameOrchestrator used after move");
-        return impl_->syncScheduler;
+        return impl_->device.Dispatch([](const auto& dev) -> const SyncScheduler& { return dev.GetSyncScheduler(); });
     }
 
     auto FrameOrchestrator::GetAsyncTaskManager() noexcept -> AsyncTaskManager& {

@@ -101,9 +101,9 @@ namespace miki::rhi {
         /// @brief Get the FrameManager for a window (nullptr if not attached).
         [[nodiscard]] auto GetFrameManager(platform::WindowHandle iWindow) -> frame::FrameManager*;
 
-        /// @brief Get the shared SyncScheduler (device-global, multi-window safe).
-        /// All FrameManagers created by this SurfaceManager share this scheduler,
-        /// ensuring monotonic timeline values across windows.
+        /// @brief Get the device-owned SyncScheduler (per-device singleton).
+        /// Delegates to DeviceHandle::GetSyncScheduler(). All FrameManagers
+        /// share this scheduler for monotonic timeline values across windows.
         [[nodiscard]] auto GetSyncScheduler() noexcept -> frame::SyncScheduler&;
 
         /// @brief Resize a window's surface (typically after WindowEvent::Resize).

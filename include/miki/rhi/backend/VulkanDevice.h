@@ -15,6 +15,7 @@
 
 #include "miki/rhi/Device.h"
 #include "miki/rhi/GpuCapabilityProfile.h"
+#include "miki/frame/SyncScheduler.h"
 
 #include <volk.h>
 
@@ -217,6 +218,10 @@ namespace miki::rhi {
         auto GetBackendTypeImpl() const -> BackendType { return tier_; }
         auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
         auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() noexcept -> frame::SyncScheduler& { return syncScheduler_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() const noexcept -> const frame::SyncScheduler& {
+            return syncScheduler_;
+        }
 
         // -- Swapchain (VulkanSwapchain.cpp) --
         //
@@ -506,6 +511,7 @@ namespace miki::rhi {
         // Created once at Init, registered in HandlePool, shared across all frames and windows.
         // Binary semaphores for swapchain are per-surface (in FrameManager).
         QueueTimelines queueTimelines_;
+        frame::SyncScheduler syncScheduler_;
         uint64_t graphicsTimelineValue_ = 0;
         uint64_t computeTimelineValue_ = 0;
         uint64_t transferTimelineValue_ = 0;

@@ -1,13 +1,14 @@
 /** @file FrameOrchestrator.h
  *  @brief Multi-window frame orchestration with shared sync infrastructure.
  *
- *  FrameOrchestrator owns the device-global shared services that all FrameManagers
- *  reference: SyncScheduler, AsyncTaskManager, DeferredDestructor.
+ *  FrameOrchestrator owns AsyncTaskManager and DeferredDestructor.
+ *  SyncScheduler is device-owned (per-device singleton); FrameOrchestrator
+ *  provides a convenience accessor that delegates to DeviceHandle::GetSyncScheduler().
  *  It does NOT own FrameManagers — SurfaceManager does.
  *
  *  Typical usage:
  *    auto orch = FrameOrchestrator::Create(device, framesInFlight);
- *    // SurfaceManager and FrameManagers reference orch->GetSyncScheduler() etc.
+ *    // SurfaceManager and FrameManagers use device.GetSyncScheduler() directly.
  *
  *  See: specs/03-sync.md §2.1
  *  Namespace: miki::frame
@@ -37,14 +38,14 @@ namespace miki::frame {
         auto operator=(FrameOrchestrator&&) noexcept -> FrameOrchestrator&;
 
         /// @brief Create a FrameOrchestrator bound to a device.
-        /// Initializes SyncScheduler (from device's QueueTimelines),
-        /// AsyncTaskManager, and DeferredDestructor.
+        /// Uses the device-owned SyncScheduler, creates AsyncTaskManager
+        /// and DeferredDestructor.
         /// @param iDevice         Valid device handle.
         /// @param iFramesInFlight Number of frame-in-flight slots for DeferredDestructor bins.
         [[nodiscard]] static auto Create(rhi::DeviceHandle iDevice, uint32_t iFramesInFlight = 2)
             -> core::Result<FrameOrchestrator>;
 
-        /// @brief Access the device-global SyncScheduler.
+        /// @brief Access the device-owned SyncScheduler (convenience, delegates to device).
         /// Used by FrameManager (for timeline allocation) and RenderGraph (for cross-queue deps).
         [[nodiscard]] auto GetSyncScheduler() noexcept -> SyncScheduler&;
         [[nodiscard]] auto GetSyncScheduler() const noexcept -> const SyncScheduler&;

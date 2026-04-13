@@ -13,6 +13,7 @@
 
 #include "miki/rhi/Device.h"
 #include "miki/rhi/GpuCapabilityProfile.h"
+#include "miki/frame/SyncScheduler.h"
 
 #ifndef NOMINMAX
 #    define NOMINMAX
@@ -276,6 +277,10 @@ namespace miki::rhi {
         [[nodiscard]] auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
         [[nodiscard]] auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return capabilities_; }
         [[nodiscard]] auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() noexcept -> frame::SyncScheduler& { return syncScheduler_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() const noexcept -> const frame::SyncScheduler& {
+            return syncScheduler_;
+        }
 
         // -- Swapchain (D3D12Swapchain.cpp) --
         auto CreateSwapchainImpl(const SwapchainDesc& desc) -> RhiResult<SwapchainHandle>;
@@ -396,8 +401,12 @@ namespace miki::rhi {
         void SetObjectDebugNameImpl(SamplerHandle h, const char* name) { samplers_.SetDebugName(h, name); }
         void SetObjectDebugNameImpl(ShaderModuleHandle h, const char* name) { shaderModules_.SetDebugName(h, name); }
         void SetObjectDebugNameImpl(PipelineHandle h, const char* name) { pipelines_.SetDebugName(h, name); }
-        void SetObjectDebugNameImpl(PipelineLayoutHandle h, const char* name) { pipelineLayouts_.SetDebugName(h, name); }
-        void SetObjectDebugNameImpl(DescriptorLayoutHandle h, const char* name) { descriptorLayouts_.SetDebugName(h, name); }
+        void SetObjectDebugNameImpl(PipelineLayoutHandle h, const char* name) {
+            pipelineLayouts_.SetDebugName(h, name);
+        }
+        void SetObjectDebugNameImpl(DescriptorLayoutHandle h, const char* name) {
+            descriptorLayouts_.SetDebugName(h, name);
+        }
         void SetObjectDebugNameImpl(DescriptorSetHandle h, const char* name) { descriptorSets_.SetDebugName(h, name); }
         void SetObjectDebugNameImpl(QueryPoolHandle h, const char* name) { queryPools_.SetDebugName(h, name); }
         void SetObjectDebugNameImpl(AccelStructHandle h, const char* name) { accelStructs_.SetDebugName(h, name); }
@@ -405,52 +414,68 @@ namespace miki::rhi {
         void SetObjectDebugNameImpl(CommandBufferHandle h, const char* name) { commandBuffers_.SetDebugName(h, name); }
         void SetObjectDebugNameImpl(SwapchainHandle h, const char* name) { swapchains_.SetDebugName(h, name); }
         [[nodiscard]] auto GetObjectDebugNameImpl(SemaphoreHandle h) const -> const char* {
-            auto n = semaphores_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = semaphores_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(FenceHandle h) const -> const char* {
-            auto n = fences_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = fences_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(BufferHandle h) const -> const char* {
-            auto n = buffers_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = buffers_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(TextureHandle h) const -> const char* {
-            auto n = textures_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = textures_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(TextureViewHandle h) const -> const char* {
-            auto n = textureViews_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = textureViews_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(SamplerHandle h) const -> const char* {
-            auto n = samplers_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = samplers_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(ShaderModuleHandle h) const -> const char* {
-            auto n = shaderModules_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = shaderModules_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(PipelineHandle h) const -> const char* {
-            auto n = pipelines_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = pipelines_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(PipelineLayoutHandle h) const -> const char* {
-            auto n = pipelineLayouts_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = pipelineLayouts_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorLayoutHandle h) const -> const char* {
-            auto n = descriptorLayouts_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = descriptorLayouts_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorSetHandle h) const -> const char* {
-            auto n = descriptorSets_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = descriptorSets_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(QueryPoolHandle h) const -> const char* {
-            auto n = queryPools_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = queryPools_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(AccelStructHandle h) const -> const char* {
-            auto n = accelStructs_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = accelStructs_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(CommandPoolHandle h) const -> const char* {
-            auto n = commandPools_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = commandPools_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(CommandBufferHandle h) const -> const char* {
-            auto n = commandBuffers_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = commandBuffers_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
         [[nodiscard]] auto GetObjectDebugNameImpl(SwapchainHandle h) const -> const char* {
-            auto n = swapchains_.GetDebugName(h); return n ? n : "(unnamed)";
+            auto n = swapchains_.GetDebugName(h);
+            return n ? n : "(unnamed)";
         }
 
         // -- Surface capabilities --
@@ -527,6 +552,7 @@ namespace miki::rhi {
 
         // -- Per-queue timeline semaphores (specs/03-sync.md §3.2) --
         QueueTimelines queueTimelines_;
+        frame::SyncScheduler syncScheduler_;
 
         // -- Capabilities --
         GpuCapabilityProfile capabilities_;

@@ -31,6 +31,10 @@
 #include "miki/rhi/Swapchain.h"
 #include "miki/rhi/Sync.h"
 
+namespace miki::frame {
+    class SyncScheduler;
+}
+
 namespace miki::rhi {
 
     // Forward declarations
@@ -251,6 +255,12 @@ namespace miki::rhi {
         }
         [[nodiscard]] auto GetSemaphoreValue(SemaphoreHandle h) -> uint64_t { return Self().GetSemaphoreValueImpl(h); }
         [[nodiscard]] auto GetQueueTimelines() const -> QueueTimelines { return Self().GetQueueTimelinesImpl(); }
+        [[nodiscard]] auto GetSyncScheduler() noexcept -> frame::SyncScheduler& {
+            return Self().GetSyncSchedulerImpl();
+        }
+        [[nodiscard]] auto GetSyncScheduler() const noexcept -> const frame::SyncScheduler& {
+            return Self().GetSyncSchedulerImpl();
+        }
 
         // --- Submission ---
         void Submit(QueueType queue, const SubmitDesc& desc) { Self().SubmitImpl(queue, desc); }
@@ -480,6 +490,9 @@ namespace miki::rhi {
         }
 
         [[nodiscard]] auto GetDeviceName() const noexcept -> std::string_view;
+
+        /// @brief Access the device-owned SyncScheduler (per-device singleton).
+        [[nodiscard]] auto GetSyncScheduler() -> frame::SyncScheduler&;
 
         [[nodiscard]] constexpr auto GetBackendName() const noexcept -> const char* {
             switch (tag_) {

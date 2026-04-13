@@ -12,6 +12,7 @@
 #include "miki/rhi/Device.h"
 #include "miki/rhi/GpuCapabilityProfile.h"
 #include "miki/rhi/backend/MockCommandBuffer.h"
+#include "miki/frame/SyncScheduler.h"
 
 namespace miki::rhi {
 
@@ -309,6 +310,10 @@ namespace miki::rhi {
         [[nodiscard]] auto GetCapabilitiesImpl() const -> const GpuCapabilityProfile& { return caps_; }
         [[nodiscard]] auto GetBackendTypeImpl() const -> BackendType { return kBackendType; }
         [[nodiscard]] auto GetQueueTimelinesImpl() const -> QueueTimelines { return queueTimelines_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() noexcept -> frame::SyncScheduler& { return syncScheduler_; }
+        [[nodiscard]] auto GetSyncSchedulerImpl() const noexcept -> const frame::SyncScheduler& {
+            return syncScheduler_;
+        }
 
        private:
         void CreateQueueTimelines() {
@@ -322,6 +327,7 @@ namespace miki::rhi {
             if (auto r = CreateSemaphoreImpl(desc)) {
                 queueTimelines_.transfer = *r;
             }
+            syncScheduler_.Init(queueTimelines_);
         }
         void DestroySyncObjects() {
             if (queueTimelines_.graphics.IsValid()) {
@@ -338,6 +344,7 @@ namespace miki::rhi {
 
         GpuCapabilityProfile caps_;
         QueueTimelines queueTimelines_;
+        frame::SyncScheduler syncScheduler_;
         HandlePool<MockSemaphoreData, SemaphoreTag, kMaxSemaphores> semaphores_;
         HandlePool<MockFenceData, FenceTag, kMaxFences> fences_;
         static constexpr uint64_t kMockHandleBase = 1000;

@@ -26,7 +26,7 @@ set(MIKI_RENDERGRAPH_SOURCES
     src/miki/rendergraph/PassMerger.cpp
     src/miki/rendergraph/RenderGraphSerializer.cpp
     src/miki/rendergraph/TransientHeapPool.cpp
-    src/miki/rendergraph/FrameOrchestrator.cpp
+    src/miki/rendergraph/LayerCompositor.cpp
     src/miki/rendergraph/RenderGraphDebug.cpp
     src/miki/rendergraph/RenderGraphExtension.cpp
     src/miki/rendergraph/RenderGraphCompute.cpp
