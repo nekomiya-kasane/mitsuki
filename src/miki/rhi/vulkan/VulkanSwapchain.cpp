@@ -362,11 +362,14 @@ namespace miki::rhi {
         }
 
         VkSemaphore vkSem = VK_NULL_HANDLE;
+        const char* semName = "(none)";
         if (signal.IsValid()) {
             auto* semData = semaphores_.Lookup(signal);
             if (semData) {
                 vkSem = semData->semaphore;
             }
+            auto poolName = semaphores_.GetDebugName(signal);
+            if (poolName) semName = poolName;
         }
 
         VkFence vkFence = VK_NULL_HANDLE;
@@ -378,8 +381,8 @@ namespace miki::rhi {
         }
 
         MIKI_LOG_DEBUG(
-            Rhi, "[Sync][Vk] AcquireNextImage: signal VkSem=[0x{:x}] fence=[0x{:x}]",
-            reinterpret_cast<uintptr_t>(vkSem), reinterpret_cast<uintptr_t>(vkFence)
+            Rhi, "[Sync][Vk] AcquireNextImage: signal \"{}\" fence=[0x{:x}]",
+            semName, reinterpret_cast<uintptr_t>(vkFence)
         );
 
         uint32_t imageIndex = 0;
@@ -442,16 +445,25 @@ namespace miki::rhi {
             return;
         }
 
-        std::vector<VkSemaphore> vkWaitSems;
-        vkWaitSems.reserve(waitSemaphores.size());
+        struct PresentSemEntry {
+            VkSemaphore sem;
+            const char* name;
+        };
+        std::vector<PresentSemEntry> waitEntries;
+        waitEntries.reserve(waitSemaphores.size());
         for (auto& sem : waitSemaphores) {
             if (sem.IsValid()) {
                 auto* semData = semaphores_.Lookup(sem);
                 if (semData) {
-                    vkWaitSems.push_back(semData->semaphore);
+                    auto poolName = semaphores_.GetDebugName(sem);
+                    waitEntries.push_back({semData->semaphore, poolName ? poolName : "(unnamed)"});
                 }
             }
         }
+
+        std::vector<VkSemaphore> vkWaitSems;
+        vkWaitSems.reserve(waitEntries.size());
+        for (auto& e : waitEntries) vkWaitSems.push_back(e.sem);
 
         uint32_t imageIndex = scData->lastAcquiredIndex;
 
@@ -460,11 +472,11 @@ namespace miki::rhi {
             "[Sync][Vk] PresentImpl: imageIndex=[{}] waitSems=[{}]",
             imageIndex, vkWaitSems.size()
         );
-        for (size_t i = 0; i < vkWaitSems.size(); ++i) {
+        for (auto& e : waitEntries) {
             MIKI_LOG_DEBUG(
                 ::miki::debug::LogCategory::Rhi,
-                "[Sync][Vk]   present wait[{}]: VkSem=[0x{:x}]",
-                i, reinterpret_cast<uintptr_t>(vkWaitSems[i])
+                "[Sync][Vk]   present wait: \"{}\"",
+                e.name ? e.name : "(unnamed)"
             );
         }
 

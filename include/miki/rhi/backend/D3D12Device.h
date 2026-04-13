@@ -387,6 +387,24 @@ namespace miki::rhi {
         auto GetMemoryStatsImpl() const -> MemoryStats;
         auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t;
 
+        // -- Debug names --
+        void SetObjectDebugNameImpl(SemaphoreHandle h, const char* name) { semaphores_.SetDebugName(h, name); }
+        void SetObjectDebugNameImpl(BufferHandle h, const char* name) { buffers_.SetDebugName(h, name); }
+        void SetObjectDebugNameImpl(TextureHandle h, const char* name) { textures_.SetDebugName(h, name); }
+        void SetObjectDebugNameImpl(PipelineHandle h, const char* name) { pipelines_.SetDebugName(h, name); }
+        auto GetDebugNameImpl(SemaphoreHandle h) const -> const char* {
+            auto n = semaphores_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        auto GetDebugNameImpl(BufferHandle h) const -> const char* {
+            auto n = buffers_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        auto GetDebugNameImpl(TextureHandle h) const -> const char* {
+            auto n = textures_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        auto GetDebugNameImpl(PipelineHandle h) const -> const char* {
+            auto n = pipelines_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+
         // -- Surface capabilities --
         auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
 

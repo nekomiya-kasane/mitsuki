@@ -771,6 +771,14 @@ namespace miki::rhi {
             queueTimelines_.asyncCompute = queueTimelines_.compute;
         }
 
+        // Name the timeline semaphores via the non-invasive debug API
+        SetObjectDebugNameImpl(queueTimelines_.graphics, "GraphicsTimeline");
+        SetObjectDebugNameImpl(queueTimelines_.compute, "ComputeTimeline");
+        SetObjectDebugNameImpl(queueTimelines_.transfer, "TransferTimeline");
+        if (queueTimelines_.asyncCompute.value != queueTimelines_.compute.value) {
+            SetObjectDebugNameImpl(queueTimelines_.asyncCompute, "AsyncComputeTimeline");
+        }
+
         graphicsTimelineValue_ = 0;
         computeTimelineValue_ = 0;
         transferTimelineValue_ = 0;
@@ -1523,8 +1531,12 @@ namespace miki::rhi {
         }
 
         // Marshal wait semaphores (skip emulated timeline handles with VK_NULL_HANDLE)
-        std::vector<VkSemaphoreSubmitInfo> waitInfos;
-        waitInfos.reserve(desc.waitSemaphores.size());
+        struct SemaphoreEntry {
+            VkSemaphoreSubmitInfo info;
+            const char* name;
+        };
+        std::vector<SemaphoreEntry> waitEntries;
+        waitEntries.reserve(desc.waitSemaphores.size());
         for (auto& w : desc.waitSemaphores) {
             auto* semData = semaphores_.Lookup(w.semaphore);
             if (!semData || semData->semaphore == VK_NULL_HANDLE) {
@@ -1535,12 +1547,12 @@ namespace miki::rhi {
             info.semaphore = semData->semaphore;
             info.value = w.value;
             info.stageMask = static_cast<VkPipelineStageFlags2>(w.stageMask);
-            waitInfos.push_back(info);
+            waitEntries.push_back({info, semaphores_.GetDebugName(w.semaphore)});
         }
 
         // Marshal signal semaphores (skip emulated timeline handles with VK_NULL_HANDLE)
-        std::vector<VkSemaphoreSubmitInfo> signalInfos;
-        signalInfos.reserve(desc.signalSemaphores.size());
+        std::vector<SemaphoreEntry> signalEntries;
+        signalEntries.reserve(desc.signalSemaphores.size());
         for (auto& s : desc.signalSemaphores) {
             auto* semData = semaphores_.Lookup(s.semaphore);
             if (!semData || semData->semaphore == VK_NULL_HANDLE) {
@@ -1551,8 +1563,17 @@ namespace miki::rhi {
             info.semaphore = semData->semaphore;
             info.value = s.value;
             info.stageMask = static_cast<VkPipelineStageFlags2>(s.stageMask);
-            signalInfos.push_back(info);
+            signalEntries.push_back({info, semaphores_.GetDebugName(s.semaphore)});
         }
+
+        // Build flat arrays for Vulkan
+        std::vector<VkSemaphoreSubmitInfo> waitInfos;
+        waitInfos.reserve(waitEntries.size());
+        for (auto& e : waitEntries) waitInfos.push_back(e.info);
+
+        std::vector<VkSemaphoreSubmitInfo> signalInfos;
+        signalInfos.reserve(signalEntries.size());
+        for (auto& e : signalEntries) signalInfos.push_back(e.info);
 
         // Resolve signal fence
         VkFence vkFence = VK_NULL_HANDLE;
@@ -1578,18 +1599,18 @@ namespace miki::rhi {
             ToString(queue), cmdInfos.size(), waitInfos.size(), signalInfos.size(),
             reinterpret_cast<uintptr_t>(vkFence)
         );
-        for (auto& w : waitInfos) {
+        for (auto& e : waitEntries) {
             MIKI_LOG_DEBUG(
                 ::miki::debug::LogCategory::Rhi,
-                "[Sync][Vk]   wait: VkSem=[0x{:x}] value=[{}] stage=[0x{:x}]",
-                reinterpret_cast<uintptr_t>(w.semaphore), w.value, static_cast<uint64_t>(w.stageMask)
+                "[Sync][Vk]   wait: \"{}\" value=[{}] stage=[0x{:x}]",
+                e.name ? e.name : "(unnamed)", e.info.value, static_cast<uint64_t>(e.info.stageMask)
             );
         }
-        for (auto& s : signalInfos) {
+        for (auto& e : signalEntries) {
             MIKI_LOG_DEBUG(
                 ::miki::debug::LogCategory::Rhi,
-                "[Sync][Vk]   signal: VkSem=[0x{:x}] value=[{}] stage=[0x{:x}]",
-                reinterpret_cast<uintptr_t>(s.semaphore), s.value, static_cast<uint64_t>(s.stageMask)
+                "[Sync][Vk]   signal: \"{}\" value=[{}] stage=[0x{:x}]",
+                e.name ? e.name : "(unnamed)", e.info.value, static_cast<uint64_t>(e.info.stageMask)
             );
         }
 
@@ -1645,6 +1666,65 @@ namespace miki::rhi {
             out[i].isDeviceLocal = (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
         }
         return count;
+    }
+
+    // =========================================================================
+    // Debug names — non-invasive, HandlePool-based
+    // =========================================================================
+
+    namespace {
+
+        void TagVkObject(
+            VkDevice device, VkObjectType objectType, uint64_t objectHandle, const char* name
+        ) {
+            if (name && vkSetDebugUtilsObjectNameEXT) {
+                VkDebugUtilsObjectNameInfoEXT nameInfo{};
+                nameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+                nameInfo.objectType = objectType;
+                nameInfo.objectHandle = objectHandle;
+                nameInfo.pObjectName = name;
+                vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
+            }
+        }
+
+    }  // anonymous namespace
+
+    void VulkanDevice::SetObjectDebugNameImpl(SemaphoreHandle h, const char* name) {
+        semaphores_.SetDebugName(h, name);
+        if (auto* data = semaphores_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(data->semaphore), name);
+        }
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync][Vk] SetDebugName: semaphore \"{}\" handle=[0x{:x}]",
+            name ? name : "(null)", h.value
+        );
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(BufferHandle h, const char* name) {
+        buffers_.SetDebugName(h, name);
+        if (auto* data = buffers_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(data->buffer), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(TextureHandle h, const char* name) {
+        textures_.SetDebugName(h, name);
+        if (auto* data = textures_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(data->image), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(PipelineHandle h, const char* name) {
+        pipelines_.SetDebugName(h, name);
+        if (auto* data = pipelines_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(data->pipeline), name);
+        }
+    }
+
+    auto VulkanDevice::GetDebugNameImpl(SemaphoreHandle h) const -> const char* {
+        auto name = semaphores_.GetDebugName(h);
+        return name ? name : "(unnamed)";
     }
 
 }  // namespace miki::rhi

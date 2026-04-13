@@ -275,23 +275,35 @@ namespace miki::frame {
             }
 
             // Binary semaphores for swapchain acquire (per-slot)
+            static constexpr const char* kImageAvailNames[] = {
+                "imageAvail[0]", "imageAvail[1]", "imageAvail[2]", "imageAvail[3]"
+            };
             rhi::SemaphoreDesc binDesc{.type = rhi::SemaphoreType::Binary, .initialValue = 0};
             for (uint32_t i = 0; i < framesInFlight; ++i) {
                 auto availResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
                 if (availResult) {
                     slots[i].imageAvail = *availResult;
+                    auto name = (i < 4) ? kImageAvailNames[i] : "imageAvail[N]";
+                    device.Dispatch([&](auto& dev) { dev.SetObjectDebugName(slots[i].imageAvail, name); });
                 }
             }
 
             // Per-swapchain-image renderDone semaphores.
             // Present holds renderDone asynchronously until the image is re-acquired,
             // so we index by image (not slot) to avoid reuse conflicts.
+            static constexpr const char* kRenderDoneNames[] = {
+                "renderDone[0]", "renderDone[1]", "renderDone[2]",
+                "renderDone[3]", "renderDone[4]", "renderDone[5]",
+                "renderDone[6]", "renderDone[7]",
+            };
             if (surface) {
                 swapchainImageCount = surface->GetSwapchainImageCount();
                 for (uint32_t i = 0; i < swapchainImageCount; ++i) {
                     auto doneResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
                     if (doneResult) {
                         imageRenderDone[i] = *doneResult;
+                        auto name = (i < 8) ? kRenderDoneNames[i] : "renderDone[N]";
+                        device.Dispatch([&](auto& dev) { dev.SetObjectDebugName(imageRenderDone[i], name); });
                     }
                 }
             }
@@ -312,11 +324,18 @@ namespace miki::frame {
             }
             // Create new for potentially different image count
             swapchainImageCount = surface->GetSwapchainImageCount();
+            static constexpr const char* kRenderDoneNames[] = {
+                "renderDone[0]", "renderDone[1]", "renderDone[2]",
+                "renderDone[3]", "renderDone[4]", "renderDone[5]",
+                "renderDone[6]", "renderDone[7]",
+            };
             rhi::SemaphoreDesc binDesc{.type = rhi::SemaphoreType::Binary, .initialValue = 0};
             for (uint32_t i = 0; i < swapchainImageCount; ++i) {
                 auto doneResult = device.Dispatch([&](auto& dev) { return dev.CreateSemaphore(binDesc); });
                 if (doneResult) {
                     imageRenderDone[i] = *doneResult;
+                    auto name = (i < 8) ? kRenderDoneNames[i] : "renderDone[N]";
+                    device.Dispatch([&](auto& dev) { dev.SetObjectDebugName(imageRenderDone[i], name); });
                 }
             }
         }

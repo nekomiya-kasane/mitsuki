@@ -314,6 +314,32 @@ namespace miki::rhi {
             return Self().GetMemoryHeapBudgetsImpl(out);
         }
 
+        // --- Debug names (non-invasive, debug builds only) ---
+
+        /// @brief Attach a semantic debug name to any RHI handle.
+        /// Calls the backend-specific object naming API (vkSetDebugUtilsObjectNameEXT / ID3D12Object::SetName)
+        /// and stores the name in the HandlePool for log resolution.
+        /// @param handle Valid handle returned by a Create* function.
+        /// @param name   String literal or pointer with lifetime >= handle lifetime.
+        void SetObjectDebugName(SemaphoreHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(BufferHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(TextureHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(PipelineHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+
+        /// @brief Resolve debug name for any handle. Returns "(unnamed)" if not set or in Release.
+        [[nodiscard]] auto GetObjectDebugName(SemaphoreHandle h) const -> const char* {
+            return Self().GetDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(BufferHandle h) const -> const char* {
+            return Self().GetDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(TextureHandle h) const -> const char* {
+            return Self().GetDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(PipelineHandle h) const -> const char* {
+            return Self().GetDebugNameImpl(h);
+        }
+
         // --- Capability query ---
         [[nodiscard]] auto GetCapabilities() const -> const GpuCapabilityProfile& {
             return Self().GetCapabilitiesImpl();

@@ -195,6 +195,9 @@ namespace miki::rhi {
             slot.alive.store(false, std::memory_order_release);
             slot.GetObject().~T();
             slot.dead = false;
+#ifndef NDEBUG
+            slot.debugName = nullptr;
+#endif
             slot.generation.fetch_add(1, std::memory_order_relaxed);
             slot.nextFree = freeListHead_;
             freeListHead_ = idx;
@@ -245,6 +248,9 @@ namespace miki::rhi {
 
             slot.GetObject().~T();
             slot.dead = false;
+#ifndef NDEBUG
+            slot.debugName = nullptr;
+#endif
             slot.nextFree = freeListHead_;
             freeListHead_ = slotIndex;
             ++freeCount_;
@@ -319,6 +325,37 @@ namespace miki::rhi {
 
         static constexpr auto InvalidIndex() noexcept -> uint32_t { return kInvalidIndex; }
 
+        /// @brief Attach a debug name to a live handle. Debug builds only; no-op in Release.
+        /// @param handle Valid handle returned by Allocate.
+        /// @param name   Pointer to a string with static or externally-managed lifetime.
+        void SetDebugName([[maybe_unused]] HandleType handle, [[maybe_unused]] const char* name) {
+#ifndef NDEBUG
+            if (!handle.IsValid()) return;
+            uint32_t idx = handle.GetIndex();
+            if (idx >= slots_.size()) return;
+            auto& slot = slots_[idx];
+            if (slot.alive.load(std::memory_order_acquire)
+                && slot.generation.load(std::memory_order_acquire) == handle.GetGeneration()) {
+                slot.debugName = name;
+            }
+#endif
+        }
+
+        /// @brief Get debug name for a handle. Returns nullptr in Release or if unnamed.
+        [[nodiscard]] auto GetDebugName([[maybe_unused]] HandleType handle) const -> const char* {
+#ifndef NDEBUG
+            if (!handle.IsValid()) return nullptr;
+            uint32_t idx = handle.GetIndex();
+            if (idx >= slots_.size()) return nullptr;
+            auto& slot = slots_[idx];
+            if (slot.alive.load(std::memory_order_acquire)
+                && slot.generation.load(std::memory_order_acquire) == handle.GetGeneration()) {
+                return slot.debugName;
+            }
+#endif
+            return nullptr;
+        }
+
         [[nodiscard]] auto FreeCount() const noexcept -> uint32_t { return freeCount_; }
         [[nodiscard]] auto LiveCount() const noexcept -> uint32_t {
             return static_cast<uint32_t>(slots_.size()) - freeCount_;
@@ -336,13 +373,20 @@ namespace miki::rhi {
             std::atomic<uint16_t> generation{0};
             std::atomic<bool> alive{false};
             bool dead = false;  // MarkDead'd but not yet Reclaim'd (payload still constructed)
+#ifndef NDEBUG
+            const char* debugName = nullptr;  ///< Debug-only semantic name (e.g. "GraphicsTimeline")
+#endif
 
             Slot() = default;
             Slot(const Slot& o)
                 : nextFree(o.nextFree)
                 , generation(o.generation.load(std::memory_order_relaxed))
                 , alive(o.alive.load(std::memory_order_relaxed))
-                , dead(o.dead) {}
+                , dead(o.dead) {
+#ifndef NDEBUG
+                debugName = o.debugName;
+#endif
+            }
             auto operator=(const Slot&) -> Slot& = delete;
 
             auto GetObject() noexcept -> T& { return *std::launder(reinterpret_cast<T*>(storage)); }

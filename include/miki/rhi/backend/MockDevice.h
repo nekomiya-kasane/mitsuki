@@ -180,6 +180,16 @@ namespace miki::rhi {
         auto GetMemoryStatsImpl() const -> MemoryStats { return {}; }
         auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget>) const -> uint32_t { return 0; }
 
+        // --- Debug names ---
+        void SetObjectDebugNameImpl(SemaphoreHandle, const char*) {}
+        void SetObjectDebugNameImpl(BufferHandle, const char*) {}
+        void SetObjectDebugNameImpl(TextureHandle, const char*) {}
+        void SetObjectDebugNameImpl(PipelineHandle, const char*) {}
+        auto GetDebugNameImpl(SemaphoreHandle) const -> const char* { return "(unnamed)"; }
+        auto GetDebugNameImpl(BufferHandle) const -> const char* { return "(unnamed)"; }
+        auto GetDebugNameImpl(TextureHandle) const -> const char* { return "(unnamed)"; }
+        auto GetDebugNameImpl(PipelineHandle) const -> const char* { return "(unnamed)"; }
+
         // --- Surface capabilities ---
         auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle&) const -> RenderSurfaceCapabilities { return {}; }
 

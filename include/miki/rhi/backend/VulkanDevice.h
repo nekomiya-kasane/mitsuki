@@ -391,6 +391,13 @@ namespace miki::rhi {
         auto GetMemoryStatsImpl() const -> MemoryStats;
         auto GetMemoryHeapBudgetsImpl(std::span<MemoryHeapBudget> out) const -> uint32_t;
 
+        // -- Debug names --
+        void SetObjectDebugNameImpl(SemaphoreHandle h, const char* name);
+        void SetObjectDebugNameImpl(BufferHandle h, const char* name);
+        void SetObjectDebugNameImpl(TextureHandle h, const char* name);
+        void SetObjectDebugNameImpl(PipelineHandle h, const char* name);
+        auto GetDebugNameImpl(SemaphoreHandle h) const -> const char*;
+
         // -- Surface capabilities --
         auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
 
