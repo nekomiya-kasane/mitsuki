@@ -75,6 +75,10 @@ namespace miki::rhi {
         }
 
         data->totalDescriptors = totalDescriptors;
+        data->bindings.reserve(desc.bindings.size());
+        for (auto& b : desc.bindings) {
+            data->bindings.push_back({.binding = b.binding, .type = b.type});
+        }
         return handle;
     }
 
@@ -219,6 +223,7 @@ namespace miki::rhi {
         data->gpuHandle = shaderVisibleCbvSrvUav_.GetGpuHandle(offset);
         data->descriptorCount = count;
         data->heapOffset = offset;
+        data->layoutHandle = desc.layout;
 
         if (!desc.writes.empty()) {
             UpdateDescriptorSetImpl(handle, desc.writes);
@@ -233,9 +238,25 @@ namespace miki::rhi {
             return;
         }
 
+        auto* layoutData = descriptorLayouts_.Lookup(setData->layoutHandle);
+        if (!layoutData) {
+            return;
+        }
+
+        auto resolveBindingType = [&](uint32_t bindingIndex) -> BindingType {
+            for (auto& info : layoutData->bindings) {
+                if (info.binding == bindingIndex) {
+                    return info.type;
+                }
+            }
+            return BindingType::UniformBuffer;
+        };
+
         for (auto& write : writes) {
             uint32_t destOffset = setData->heapOffset + write.binding + write.arrayElement;
             D3D12_CPU_DESCRIPTOR_HANDLE destCpu = shaderVisibleCbvSrvUav_.GetCpuHandle(destOffset);
+
+            BindingType bindingType = resolveBindingType(write.binding);
 
             if (auto* bufBinding = std::get_if<BufferBinding>(&write.resource)) {
                 auto* bufData = buffers_.Lookup(bufBinding->buffer);
@@ -243,14 +264,26 @@ namespace miki::rhi {
                     continue;
                 }
 
-                // Create CBV or UAV depending on binding type context
-                D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc{};
-                cbvDesc.BufferLocation = bufData->gpuAddress + bufBinding->offset;
-                cbvDesc.SizeInBytes = static_cast<UINT>(
-                    (bufBinding->range == 0) ? bufData->size - bufBinding->offset : bufBinding->range
-                );
-                cbvDesc.SizeInBytes = (cbvDesc.SizeInBytes + 255) & ~255u;  // 256B alignment
-                device_->CreateConstantBufferView(&cbvDesc, destCpu);
+                if (bindingType == BindingType::StorageBuffer) {
+                    // StorageBuffer → UAV (raw byte-address buffer)
+                    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+                    uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+                    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                    uavDesc.Buffer.FirstElement = bufBinding->offset / 4;
+                    uint64_t effectiveSize = (bufBinding->range == 0) ? bufData->size - bufBinding->offset : bufBinding->range;
+                    uavDesc.Buffer.NumElements = static_cast<UINT>(effectiveSize / 4);
+                    uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+                    device_->CreateUnorderedAccessView(bufData->resource.Get(), nullptr, &uavDesc, destCpu);
+                } else {
+                    // UniformBuffer → CBV
+                    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc{};
+                    cbvDesc.BufferLocation = bufData->gpuAddress + bufBinding->offset;
+                    cbvDesc.SizeInBytes = static_cast<UINT>(
+                        (bufBinding->range == 0) ? bufData->size - bufBinding->offset : bufBinding->range
+                    );
+                    cbvDesc.SizeInBytes = (cbvDesc.SizeInBytes + 255) & ~255u;  // 256B alignment
+                    device_->CreateConstantBufferView(&cbvDesc, destCpu);
+                }
 
             } else if (auto* texBinding = std::get_if<TextureBinding>(&write.resource)) {
                 if (texBinding->view.IsValid()) {

@@ -40,7 +40,27 @@ namespace miki::frame {
         uint32_t initialArenaCapacity = 16;
         uint32_t recordingThreadCount = 1;
 
-        // PoolRing[frameSlot][queueIndex][threadIndex]
+        // poolRing_ layout: [frameSlot][queueIndex][threadIndex] → PoolSlot
+        //
+        // Each frame slot owns an independent set of pools, reset in bulk at BeginFrame.
+        // Within a frame, each (queue, thread) pair maps to a unique native pool — lock-free.
+        //
+        //                         threadIndex →
+        //                         0           1           2        ... kMaxThreads-1
+        //                   ┌───────────┬───────────┬───────────┬─────────────────┐
+        //  frame 0, queue 0 │ PoolSlot  │ PoolSlot  │ PoolSlot  │      ...        │  Graphics
+        //           queue 1 │ PoolSlot  │ PoolSlot  │ PoolSlot  │      ...        │  Compute
+        //           queue 2 │ PoolSlot  │ PoolSlot  │ PoolSlot  │      ...        │  Transfer
+        //           queue 3 │ PoolSlot  │ PoolSlot  │ PoolSlot  │      ...        │  (reserved)
+        //                   ├───────────┼───────────┼───────────┼─────────────────┤
+        //  frame 1, queue 0 │ PoolSlot  │ PoolSlot  │ PoolSlot  │      ...        │
+        //           ...     │    ...    │    ...    │    ...    │      ...        │
+        //                   ├───────────┼───────────┼───────────┼─────────────────┤
+        //  frame N, ...     │    ...    │    ...    │    ...    │      ...        │
+        //                   └───────────┴───────────┴───────────┴─────────────────┘
+        //
+        // Total slots = kMaxFrames × kMaxQueues × kMaxThreads = 4 × 4 × 16 = 256
+        // Active slots = framesInFlight × activeQueueCount × recordingThreadCount
         static constexpr uint32_t kMaxFrames = kMaxFramesInFlight;
         static constexpr uint32_t kMaxQueues = kMaxQueueTypes;
         static constexpr uint32_t kMaxThreads = kMaxRecordingThreads;

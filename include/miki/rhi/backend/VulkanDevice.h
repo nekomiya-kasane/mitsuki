@@ -104,11 +104,17 @@ namespace miki::rhi {
 
     struct VulkanDescriptorLayoutData {
         VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+        struct BindingInfo {
+            uint32_t binding = 0;
+            BindingType type{};
+        };
+        std::vector<BindingInfo> bindings;
     };
 
     struct VulkanDescriptorSetData {
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorPool sourcePool = VK_NULL_HANDLE;
+        DescriptorLayoutHandle layoutHandle;
     };
 
     struct VulkanPipelineCacheData {

@@ -131,12 +131,18 @@ namespace miki::rhi {
         std::vector<D3D12_DESCRIPTOR_RANGE1> ranges;
         std::vector<D3D12_ROOT_PARAMETER1> rootParams;
         uint32_t totalDescriptors = 0;
+        struct BindingInfo {
+            uint32_t binding = 0;
+            BindingType type{};
+        };
+        std::vector<BindingInfo> bindings;
     };
 
     struct D3D12DescriptorSetData {
         D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle{};
         uint32_t descriptorCount = 0;
         uint32_t heapOffset = 0;  // Offset in the shader-visible descriptor heap
+        DescriptorLayoutHandle layoutHandle;
     };
 
     struct D3D12PipelineCacheData {

@@ -166,6 +166,10 @@ namespace miki::rhi {
             return std::unexpected(RhiError::TooManyObjects);
         }
         data->layout = layout;
+        data->bindings.reserve(desc.bindings.size());
+        for (auto& b : desc.bindings) {
+            data->bindings.push_back({.binding = b.binding, .type = b.type});
+        }
         return handle;
     }
 
@@ -284,6 +288,7 @@ namespace miki::rhi {
         }
         data->set = set;
         data->sourcePool = activeDescriptorPool_;
+        data->layoutHandle = desc.layout;
 
         // Apply initial writes
         if (!desc.writes.empty()) {
@@ -298,6 +303,21 @@ namespace miki::rhi {
         if (!setData) {
             return;
         }
+
+        auto* layoutData = descriptorLayouts_.Lookup(setData->layoutHandle);
+        if (!layoutData) {
+            return;
+        }
+
+        // Resolve BindingType from the layout's cached binding metadata.
+        auto resolveBindingType = [&](uint32_t bindingIndex) -> BindingType {
+            for (auto& info : layoutData->bindings) {
+                if (info.binding == bindingIndex) {
+                    return info.type;
+                }
+            }
+            return BindingType::UniformBuffer;
+        };
 
         std::vector<VkWriteDescriptorSet> vkWrites;
         // Pre-allocate backing storage for descriptor info structs
@@ -318,20 +338,25 @@ namespace miki::rhi {
             vkWrite.dstArrayElement = write.arrayElement;
             vkWrite.descriptorCount = 1;
 
+            BindingType bindingType = resolveBindingType(write.binding);
+
             // clang-format off
-            // ┌──────────────────────┬──────────────────────────────────────────┬──────────────────┬───────────────────────────────────┐
-            // │ Resource variant     │ VkDescriptorType                         │ Info struct      │ Condition                         │
-            // ├──────────────────────┼──────────────────────────────────────────┼──────────────────┼───────────────────────────────────┤
-            // │ BufferBinding        │ UNIFORM_BUFFER                           │ pBufferInfo      │ always                            │
-            // ├----------------------┼------------------------------------------┼------------------┼-----------------------------------┤
-            // │ TextureBinding       │ COMBINED_IMAGE_SAMPLER                   │ pImageInfo       │ [sampler + view] both valid       │
-            // │ TextureBinding       │ SAMPLED_IMAGE                            │ pImageInfo       │ [view] valid, no sampler          │
-            // │ TextureBinding       │ SAMPLER                                  │ pImageInfo       │ [sampler] valid, no view          │
-            // ├----------------------┼------------------------------------------┼------------------┼-----------------------------------┤
-            // │ SamplerHandle        │ SAMPLER                                  │ pImageInfo       │ always                            │
-            // ├----------------------┼------------------------------------------┼------------------┼-----------------------------------┤
-            // │ AccelStructHandle    │ ACCELERATION_STRUCTURE_KHR               │ pNext            │ always                            │
-            // └──────────────────────┴──────────────────────────────────────────┴──────────────────┴───────────────────────────────────┘
+            // Descriptor type is resolved from the DescriptorLayout's cached BindingType, not guessed from the resource variant.
+            // ┌──────────────────────┬───────────────────────┬──────────────────────────────────────────┬──────────────────┐
+            // │ Resource variant     │ BindingType            │ VkDescriptorType                         │ Info struct      │
+            // ├──────────────────────┼───────────────────────┼──────────────────────────────────────────┼──────────────────┤
+            // │ BufferBinding        │ UniformBuffer          │ UNIFORM_BUFFER                           │ pBufferInfo      │
+            // │ BufferBinding        │ StorageBuffer          │ STORAGE_BUFFER                           │ pBufferInfo      │
+            // ├──────────────────────┼───────────────────────┼──────────────────────────────────────────┼──────────────────┤
+            // │ TextureBinding       │ CombinedTextureSampler │ COMBINED_IMAGE_SAMPLER                   │ pImageInfo       │
+            // │ TextureBinding       │ SampledTexture         │ SAMPLED_IMAGE                            │ pImageInfo       │
+            // │ TextureBinding       │ StorageTexture         │ STORAGE_IMAGE                            │ pImageInfo       │
+            // │ TextureBinding       │ Sampler                │ SAMPLER                                  │ pImageInfo       │
+            // ├──────────────────────┼───────────────────────┼──────────────────────────────────────────┼──────────────────┤
+            // │ SamplerHandle        │ Sampler                │ SAMPLER                                  │ pImageInfo       │
+            // ├──────────────────────┼───────────────────────┼──────────────────────────────────────────┼──────────────────┤
+            // │ AccelStructHandle    │ AccelerationStructure  │ ACCELERATION_STRUCTURE_KHR               │ pNext            │
+            // └──────────────────────┴───────────────────────┴──────────────────────────────────────────┴──────────────────┘
             // clang-format on
             if (auto* bufBinding = std::get_if<BufferBinding>(&write.resource)) {
                 auto* bufData = buffers_.Lookup(bufBinding->buffer);
@@ -342,9 +367,33 @@ namespace miki::rhi {
                 bufferInfos.push_back(
                     {bufData->buffer, bufBinding->offset, bufBinding->range == 0 ? VK_WHOLE_SIZE : bufBinding->range}
                 );
-                vkWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                vkWrite.descriptorType = ToVkDescriptorType(bindingType);
                 vkWrite.pBufferInfo = &bufferInfos.back();
             } else if (auto* texBinding = std::get_if<TextureBinding>(&write.resource)) {
+                // Validate sampler/view presence against layout-declared BindingType
+                // ┌────────────────────────┬──────────┬─────────┐
+                // │ BindingType            │ view     │ sampler │
+                // ├────────────────────────┼──────────┼─────────┤
+                // │ CombinedTextureSampler │ required │ required│
+                // │ SampledTexture         │ required │ ignored │
+                // │ StorageTexture         │ required │ ignored │
+                // │ Sampler                │ ignored  │ required│
+                // └────────────────────────┴──────────┴─────────┘
+                bool needsView = bindingType == BindingType::CombinedTextureSampler
+                                 || bindingType == BindingType::SampledTexture
+                                 || bindingType == BindingType::StorageTexture;
+                bool needsSampler
+                    = bindingType == BindingType::CombinedTextureSampler || bindingType == BindingType::Sampler;
+                assert(
+                    (!needsView || texBinding->view.IsValid())
+                    && "TextureBinding: view required for this BindingType but not provided"
+                );
+                assert(
+                    (!needsSampler || texBinding->sampler.IsValid())
+                    && "TextureBinding: sampler required for this BindingType but not provided"
+                );
+
+                // 
                 VkDescriptorImageInfo imgInfo{};
                 if (texBinding->view.IsValid()) {
                     auto* viewData = textureViews_.Lookup(texBinding->view);
@@ -358,16 +407,11 @@ namespace miki::rhi {
                         imgInfo.sampler = sampData->sampler;
                     }
                 }
-                imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imgInfo.imageLayout = (bindingType == BindingType::StorageTexture)
+                                          ? VK_IMAGE_LAYOUT_GENERAL
+                                          : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 imageInfos.push_back(imgInfo);
-
-                if (texBinding->sampler.IsValid() && texBinding->view.IsValid()) {
-                    vkWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                } else if (texBinding->view.IsValid()) {
-                    vkWrite.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                } else {
-                    vkWrite.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                }
+                vkWrite.descriptorType = ToVkDescriptorType(bindingType);
                 vkWrite.pImageInfo = &imageInfos.back();
             } else if (auto* sampHandle = std::get_if<SamplerHandle>(&write.resource)) {
                 auto* sampData = samplers_.Lookup(*sampHandle);

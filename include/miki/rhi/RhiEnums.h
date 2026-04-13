@@ -24,6 +24,7 @@ namespace miki::rhi {
         Compute,       ///< Dedicated compute queue (frame-sync, HIGH priority)
         AsyncCompute,  ///< Async compute queue (cross-frame, NORMAL priority; Level A only, else alias Compute)
         Transfer,      ///< Transfer only (DMA / copy engine)
+        Count_,
     };
 
     // =========================================================================

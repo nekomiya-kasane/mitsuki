@@ -62,6 +62,7 @@ tools/RenderDocMCP/
 third_party
 node_modules
 dist
+*.natvis
 
 # GitHub Copilot instructions (local only, not tracked)
 .github/copilot-instructions.md
