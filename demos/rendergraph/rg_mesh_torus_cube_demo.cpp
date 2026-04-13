@@ -807,10 +807,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    miki::frame::SyncScheduler syncSched;
-    auto timelines = device.GetHandle().Dispatch([](auto& d) { return d.GetQueueTimelines(); });
-    syncSched.Init(timelines);
-    g_scheduler = &syncSched;
+    // Use the SurfaceManager's shared SyncScheduler — the same instance that
+    // FrameManager uses internally. Creating a separate SyncScheduler would cause
+    // double-signal of the same timeline semaphore value.
+    g_scheduler = &surfMgr.GetSyncScheduler();
 
     miki::frame::CommandPoolAllocator::Desc poolDesc{
         .device = device.GetHandle(),
