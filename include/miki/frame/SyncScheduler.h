@@ -118,6 +118,7 @@ namespace miki::frame {
                 case rhi::QueueType::Compute: return 1;
                 case rhi::QueueType::Transfer: return 2;
                 case rhi::QueueType::AsyncCompute: return asyncComputeSlot_;
+                case rhi::QueueType::Count_: break;
             }
             return 0;
         }

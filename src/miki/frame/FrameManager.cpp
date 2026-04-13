@@ -668,6 +668,68 @@ namespace miki::frame {
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, submitDesc); });
         }
 
+        // TODO (Nekomiya) review this, it is strange that we have to do a separate submit for the case of no batches.
+        // Can we merge it with the first batch if it exists, or is there some other way to avoid this? Maybe we can
+        // just always do this submit and merge the batch submits into it if they exist?
+        //
+        // ── 1b. Sync-only submit when no batches were issued ─────────
+        // When all GPU work is submitted externally (e.g. RenderGraph's BatchSubmitter),
+        // EndFrame receives empty iBatches. We must still:
+        //   (a) advance the graphics timeline (BeginFrame waits on it), and
+        //   (b) signal imageRenderDone so Present's binary semaphore wait is satisfied.
+        // A zero-command-buffer vkQueueSubmit2 is valid per spec and costs ~0 GPU time.
+        if (batchCount == 0 && impl_->surface) {
+            std::vector<rhi::SemaphoreSubmitInfo> waits;
+            std::vector<rhi::SemaphoreSubmitInfo> signals;
+
+            // Wait on swapchain acquire
+            if (slot.imageAvail.IsValid()) {
+                waits.push_back({
+                    .semaphore = slot.imageAvail,
+                    .value = 0,
+                    .stageMask = rhi::PipelineStage::ColorAttachmentOutput,
+                });
+            }
+
+            // Wait on transfer completion if applicable
+            if (impl_->transferSync.semaphore.IsValid() && impl_->transferSync.value > 0) {
+                waits.push_back({
+                    .semaphore = impl_->transferSync.semaphore,
+                    .value = impl_->transferSync.value,
+                    .stageMask = rhi::PipelineStage::Transfer,
+                });
+            }
+
+            // Wait on accumulated compute sync points
+            waits.insert(waits.end(), impl_->computeSyncPoints.begin(), impl_->computeSyncPoints.end());
+
+            // Signal graphics timeline
+            uint64_t nextValue = impl_->AllocateGraphicsSignal();
+            signals.push_back({
+                .semaphore = impl_->graphicsTimeline,
+                .value = nextValue,
+                .stageMask = rhi::PipelineStage::AllCommands,
+            });
+
+            // Signal renderDone for present
+            uint32_t imgIdx = impl_->surface->GetCurrentImageIndex();
+            if (imgIdx < impl_->swapchainImageCount && impl_->imageRenderDone[imgIdx].IsValid()) {
+                signals.push_back({
+                    .semaphore = impl_->imageRenderDone[imgIdx],
+                    .value = 0,
+                    .stageMask = rhi::PipelineStage::AllCommands,
+                });
+            }
+
+            rhi::SubmitDesc syncSubmit{
+                .commandBuffers = {},
+                .waitSemaphores = waits,
+                .signalSemaphores = signals,
+                .signalFence = {},
+            };
+            impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, syncSubmit); });
+        }
+
         // ── 2. Update slot timeline value ────────────────────────────
         slot.timelineValue = impl_->currentTimelineValue;
 
