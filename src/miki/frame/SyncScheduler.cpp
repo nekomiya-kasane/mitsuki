@@ -8,6 +8,10 @@
 #include <cassert>
 #include <format>
 
+#include "miki/debug/StructuredLogger.h"
+
+#include "miki/core/EnumStrings.h"
+
 namespace miki::frame {
 
     void SyncScheduler::Init(const rhi::QueueTimelines& timelines) {
@@ -27,11 +31,22 @@ namespace miki::frame {
             q.currentValue = 0;
             q.pendingWaits.clear();
         }
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync] SyncScheduler::Init: graphics=[0x{:x}] compute=[0x{:x}] transfer=[0x{:x}] asyncSlot=[{}]",
+            timelines.graphics.value, timelines.compute.value, timelines.transfer.value, asyncComputeSlot_
+        );
     }
 
     auto SyncScheduler::AllocateSignal(rhi::QueueType queue) -> uint64_t {
         auto& state = queues_[QueueIndex(queue)];
-        return state.nextValue++;
+        uint64_t allocated = state.nextValue++;
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync] SyncScheduler::AllocateSignal: queue={} allocated=[{}] nextValue=[{}] sem=[0x{:x}]",
+            rhi::ToString(queue), allocated, state.nextValue, state.semaphore.value
+        );
+        return allocated;
     }
 
     void SyncScheduler::AddDependency(
@@ -67,6 +82,11 @@ namespace miki::frame {
     void SyncScheduler::CommitSubmit(rhi::QueueType queue) {
         auto& state = queues_[QueueIndex(queue)];
         state.currentValue = state.nextValue - 1;  // Mark last allocated as committed
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync] SyncScheduler::CommitSubmit: queue={} currentValue=[{}] nextValue=[{}]",
+            rhi::ToString(queue), state.currentValue, state.nextValue
+        );
         state.pendingWaits.clear();
     }
 

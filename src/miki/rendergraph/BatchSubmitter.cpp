@@ -5,6 +5,8 @@
 
 #include "miki/rendergraph/BatchSubmitter.h"
 
+#include "miki/debug/StructuredLogger.h"
+#include "miki/core/EnumStrings.h"
 #include "miki/rhi/backend/AllBackends.h"
 
 #include <vector>
@@ -67,7 +69,30 @@ namespace miki::rg {
                 .signalSemaphores = signalSems,
                 .signalFence = {},
             };
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync] RG BatchSubmitter: batch [{}/{}] queue={} cmds=[{}] waits=[{}] signals=[{}]",
+                bi + 1, graph.batches.size(), rhi::ToString(rhiQueue),
+                recording.commandBuffers.size(), waitSems.size(), signalSems.size()
+            );
+            for (auto& w : waitSems) {
+                MIKI_LOG_DEBUG(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync]   wait: sem=[0x{:x}] value=[{}]", w.semaphore.value, w.value
+                );
+            }
+            for (auto& s : signalSems) {
+                MIKI_LOG_DEBUG(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync]   signal: sem=[0x{:x}] value=[{}]", s.semaphore.value, s.value
+                );
+            }
             device.Dispatch([&](auto& dev) { dev.Submit(rhiQueue, submitDesc); });
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync] RG BatchSubmitter: CommitSubmit queue={}",
+                rhi::ToString(rhiQueue)
+            );
             scheduler.CommitSubmit(rhiQueue);
 
             stats.batchesSubmitted++;

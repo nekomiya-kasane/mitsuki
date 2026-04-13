@@ -26,6 +26,8 @@
 #include "miki/debug/StackTrace.h"
 #include "miki/debug/StructuredLogger.h"
 
+#include "miki/core/EnumStrings.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -1570,9 +1572,36 @@ namespace miki::rhi {
         submitInfo.signalSemaphoreInfoCount = static_cast<uint32_t>(signalInfos.size());
         submitInfo.pSignalSemaphoreInfos = signalInfos.data();
 
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync][Vk] SubmitImpl: queue={} cmds=[{}] waits=[{}] signals=[{}] fence=[0x{:x}]",
+            ToString(queue), cmdInfos.size(), waitInfos.size(), signalInfos.size(),
+            reinterpret_cast<uintptr_t>(vkFence)
+        );
+        for (auto& w : waitInfos) {
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync][Vk]   wait: VkSem=[0x{:x}] value=[{}] stage=[0x{:x}]",
+                reinterpret_cast<uintptr_t>(w.semaphore), w.value, static_cast<uint64_t>(w.stageMask)
+            );
+        }
+        for (auto& s : signalInfos) {
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync][Vk]   signal: VkSem=[0x{:x}] value=[{}] stage=[0x{:x}]",
+                reinterpret_cast<uintptr_t>(s.semaphore), s.value, static_cast<uint64_t>(s.stageMask)
+            );
+        }
+
         {
             std::lock_guard lock(*queueMutex);
-            vkQueueSubmit2(targetQueue, 1, &submitInfo, vkFence);
+            VkResult submitResult = vkQueueSubmit2(targetQueue, 1, &submitInfo, vkFence);
+            if (submitResult != VK_SUCCESS) {
+                MIKI_LOG_ERROR(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync][Vk] vkQueueSubmit2 FAILED: result={}", static_cast<int>(submitResult)
+                );
+            }
         }
     }
 

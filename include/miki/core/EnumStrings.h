@@ -24,6 +24,21 @@
 namespace miki::rhi {
 
     // =========================================================================
+    // rhi::QueueType
+    // =========================================================================
+
+    constexpr auto ToString(QueueType v) -> const char* {
+        switch (v) {
+            case QueueType::Graphics: return "Graphics";
+            case QueueType::Compute: return "Compute";
+            case QueueType::AsyncCompute: return "AsyncCompute";
+            case QueueType::Transfer: return "Transfer";
+            case QueueType::Count_: return "Count_";
+        }
+        return "Unknown";
+    }
+
+    // =========================================================================
     // rhi::BackendType
     // =========================================================================
 

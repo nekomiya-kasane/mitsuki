@@ -377,9 +377,9 @@ namespace miki::rhi {
             }
         }
 
-        MIKI_LOG_INFO(
-            Rhi, "AcquireNextImage: vkSem = {} (0x{:x}), vkFence = {} (0x{:x})", static_cast<void*>(vkSem),
-            reinterpret_cast<uintptr_t>(vkSem), static_cast<void*>(vkFence), reinterpret_cast<uintptr_t>(vkFence)
+        MIKI_LOG_DEBUG(
+            Rhi, "[Sync][Vk] AcquireNextImage: signal VkSem=[0x{:x}] fence=[0x{:x}]",
+            reinterpret_cast<uintptr_t>(vkSem), reinterpret_cast<uintptr_t>(vkFence)
         );
 
         uint32_t imageIndex = 0;
@@ -397,6 +397,10 @@ namespace miki::rhi {
         }
 
         scData->lastAcquiredIndex = imageIndex;
+        MIKI_LOG_DEBUG(
+            Rhi, "[Sync][Vk] AcquireNextImage: imageIndex=[{}] result=[{}]",
+            imageIndex, static_cast<int>(result)
+        );
         return imageIndex;
     }
 
@@ -450,6 +454,19 @@ namespace miki::rhi {
         }
 
         uint32_t imageIndex = scData->lastAcquiredIndex;
+
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync][Vk] PresentImpl: imageIndex=[{}] waitSems=[{}]",
+            imageIndex, vkWaitSems.size()
+        );
+        for (size_t i = 0; i < vkWaitSems.size(); ++i) {
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync][Vk]   present wait[{}]: VkSem=[0x{:x}]",
+                i, reinterpret_cast<uintptr_t>(vkWaitSems[i])
+            );
+        }
 
         VkPresentInfoKHR presentInfo{};
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;

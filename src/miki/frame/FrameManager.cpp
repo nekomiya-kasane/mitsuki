@@ -44,6 +44,7 @@
 
 #include "miki/debug/StructuredLogger.h"
 
+#include "miki/core/EnumStrings.h"
 #include "miki/frame/CommandPoolAllocator.h"
 #include "miki/frame/DeferredDestructor.h"
 #include "miki/resource/ReadbackRing.h"
@@ -126,15 +127,31 @@ namespace miki::frame {
         void WaitForSlot(uint32_t slotIdx) {
             auto& slot = slots[slotIdx];
             if (graphicsTimeline.IsValid() && slot.timelineValue > 0) {
+                MIKI_LOG_DEBUG(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync] WaitForSlot: slot=[{}] timelineValue=[{}] sem=[0x{:x}]",
+                    slotIdx, slot.timelineValue, graphicsTimeline.value
+                );
                 device.Dispatch([&](auto& dev) {
                     dev.WaitSemaphore(graphicsTimeline, slot.timelineValue, UINT64_MAX);
                 });
+            } else {
+                MIKI_LOG_DEBUG(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync] WaitForSlot: slot=[{}] SKIP (timelineValue=[{}])",
+                    slotIdx, slot.timelineValue
+                );
             }
         }
 
         [[nodiscard]] auto AllocateGraphicsSignal() -> uint64_t {
             assert(syncScheduler && "SyncScheduler is required");
             auto v = syncScheduler->AllocateSignal(rhi::QueueType::Graphics);
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync] AllocateGraphicsSignal: value=[{}] (prev=[{}])",
+                v, currentTimelineValue
+            );
             currentTimelineValue = v;
             return v;
         }
@@ -204,6 +221,11 @@ namespace miki::frame {
 
             // 4. Submit to transfer queue, signal transfer timeline
             uint64_t nextTransferValue = ++currentTransferTimelineValue;
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync] SubmitTransferCopies: signal transferTimeline=[{}] sem=[0x{:x}]",
+                nextTransferValue, transferTimeline.value
+            );
             std::array<rhi::SemaphoreSubmitInfo, 1> transferSignals = {{
                 {.semaphore = transferTimeline, .value = nextTransferValue, .stageMask = rhi::PipelineStage::Transfer},
             }};
@@ -415,6 +437,13 @@ namespace miki::frame {
     auto FrameManager::BeginFrame() -> core::Result<FrameContext> {
         assert(impl_ && "FrameManager used after move");
 
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync] BeginFrame: frameIdx=[{}] currentTimeline=[{}] peekNext=[{}]",
+            impl_->frameIndex, impl_->currentTimelineValue,
+            impl_->syncScheduler ? impl_->syncScheduler->PeekNextSignal(rhi::QueueType::Graphics) : 0
+        );
+
         // 0. Reset per-frame transfer state
         impl_->transfersFlushed = false;
 
@@ -539,6 +568,12 @@ namespace miki::frame {
         auto& slot = impl_->slots[impl_->frameIndex];
         uint64_t fenceValue = impl_->currentTimelineValue + 1;
         impl_->lastPartialTimelineValue = 0;  // Reset partial tracking for this frame
+
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync] EndFrame BEGIN: frameIdx=[{}] batchCount=[{}] currentTimeline=[{}] fenceValue=[{}]",
+            impl_->frameIndex, iBatches.size(), impl_->currentTimelineValue, fenceValue
+        );
 
         // ── 0. Transfer copy dispatch ────────────────────────────────
         rhi::CommandListAcquisition transferAcq{};
@@ -665,6 +700,23 @@ namespace miki::frame {
                 .signalSemaphores = signals,
                 .signalFence = {},
             };
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync] EndFrame batch [{}/{}]: cmds=[{}] waits=[{}] signals=[{}]",
+                i + 1, batchCount, batchCmds.size(), waits.size(), signals.size()
+            );
+            for (auto& w : waits) {
+                MIKI_LOG_DEBUG(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync]   wait: sem=[0x{:x}] value=[{}]", w.semaphore.value, w.value
+                );
+            }
+            for (auto& s : signals) {
+                MIKI_LOG_DEBUG(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync]   signal: sem=[0x{:x}] value=[{}]", s.semaphore.value, s.value
+                );
+            }
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, submitDesc); });
         }
 
@@ -727,14 +779,41 @@ namespace miki::frame {
                 .signalSemaphores = signals,
                 .signalFence = {},
             };
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync] EndFrame SYNC-ONLY submit: waits=[{}] signals=[{}]",
+                waits.size(), signals.size()
+            );
+            for (auto& w : waits) {
+                MIKI_LOG_DEBUG(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync]   wait: sem=[0x{:x}] value=[{}]", w.semaphore.value, w.value
+                );
+            }
+            for (auto& s : signals) {
+                MIKI_LOG_DEBUG(
+                    ::miki::debug::LogCategory::Rhi,
+                    "[Sync]   signal: sem=[0x{:x}] value=[{}]", s.semaphore.value, s.value
+                );
+            }
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, syncSubmit); });
         }
 
         // ── 2. Update slot timeline value ────────────────────────────
         slot.timelineValue = impl_->currentTimelineValue;
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync] EndFrame: slot[{}].timelineValue = [{}]",
+            impl_->frameIndex, slot.timelineValue
+        );
 
         // ── 3. Present ───────────────────────────────────────────────
         if (impl_->surface) {
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync] EndFrame: Present (renderFinished sem=[0x{:x}])",
+                impl_->imageRenderDone[impl_->surface->GetCurrentImageIndex()].value
+            );
             auto presentResult = impl_->surface->Present();
             if (!presentResult) {
                 return std::unexpected(core::ErrorCode::SwapchainOutOfDate);
@@ -742,6 +821,11 @@ namespace miki::frame {
         }
 
         // ── 4. Commit to SyncScheduler + reset cross-queue sync points
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Rhi,
+            "[Sync] EndFrame: CommitGraphicsSubmit (currentTimeline=[{}])",
+            impl_->currentTimelineValue
+        );
         impl_->CommitGraphicsSubmit();
         impl_->transferSync.value = 0;
         impl_->computeSyncPoints.clear();

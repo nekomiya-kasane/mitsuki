@@ -9,6 +9,8 @@
 #include <cassert>
 #include <vector>
 
+#include "miki/debug/StructuredLogger.h"
+#include "miki/core/EnumStrings.h"
 #include "miki/rhi/backend/AllBackends.h"
 
 namespace miki::frame {
@@ -153,6 +155,11 @@ namespace miki::frame {
                 .signalSemaphores = std::span<const rhi::SemaphoreSubmitInfo>(&signalInfo, 1),
                 .signalFence = {},
             };
+            MIKI_LOG_DEBUG(
+                ::miki::debug::LogCategory::Rhi,
+                "[Sync] AsyncTask: batch [{}/{}] queue={} signal sem=[0x{:x}] value=[{}]",
+                i + 1, iBatches.size(), rhi::ToString(submitQueue), computeSem.value, signalValue
+            );
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(submitQueue, submitDesc); });
             impl_->scheduler->CommitSubmit(submitQueue);
             lastSignalValue = signalValue;
