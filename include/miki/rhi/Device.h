@@ -322,22 +322,70 @@ namespace miki::rhi {
         /// @param handle Valid handle returned by a Create* function.
         /// @param name   String literal or pointer with lifetime >= handle lifetime.
         void SetObjectDebugName(SemaphoreHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(FenceHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
         void SetObjectDebugName(BufferHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
         void SetObjectDebugName(TextureHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(TextureViewHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(SamplerHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(ShaderModuleHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
         void SetObjectDebugName(PipelineHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(PipelineLayoutHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(DescriptorLayoutHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(DescriptorSetHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(QueryPoolHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(AccelStructHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(CommandPoolHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(CommandBufferHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
+        void SetObjectDebugName(SwapchainHandle h, const char* name) { Self().SetObjectDebugNameImpl(h, name); }
 
         /// @brief Resolve debug name for any handle. Returns "(unnamed)" if not set or in Release.
         [[nodiscard]] auto GetObjectDebugName(SemaphoreHandle h) const -> const char* {
-            return Self().GetDebugNameImpl(h);
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(FenceHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
         }
         [[nodiscard]] auto GetObjectDebugName(BufferHandle h) const -> const char* {
-            return Self().GetDebugNameImpl(h);
+            return Self().GetObjectDebugNameImpl(h);
         }
         [[nodiscard]] auto GetObjectDebugName(TextureHandle h) const -> const char* {
-            return Self().GetDebugNameImpl(h);
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(TextureViewHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(SamplerHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(ShaderModuleHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
         }
         [[nodiscard]] auto GetObjectDebugName(PipelineHandle h) const -> const char* {
-            return Self().GetDebugNameImpl(h);
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(PipelineLayoutHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(DescriptorLayoutHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(DescriptorSetHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(QueryPoolHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(AccelStructHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(CommandPoolHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(CommandBufferHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
+        }
+        [[nodiscard]] auto GetObjectDebugName(SwapchainHandle h) const -> const char* {
+            return Self().GetObjectDebugNameImpl(h);
         }
 
         // --- Capability query ---

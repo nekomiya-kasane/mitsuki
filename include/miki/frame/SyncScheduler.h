@@ -128,6 +128,7 @@ namespace miki::frame {
             uint64_t nextValue = 1;     // Next value to allocate
             uint64_t currentValue = 0;  // Last committed (signaled) value
             std::vector<SyncWaitEntry> pendingWaits;
+            const char* debugName = "(unnamed)";  ///< Resolved semaphore debug name for logging
         };
 
         std::array<QueueState, kQueueCount> queues_{};

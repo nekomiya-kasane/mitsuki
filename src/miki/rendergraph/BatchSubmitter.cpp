@@ -76,15 +76,17 @@ namespace miki::rg {
                 recording.commandBuffers.size(), waitSems.size(), signalSems.size()
             );
             for (auto& w : waitSems) {
+                auto semName = device.Dispatch([&](const auto& dev) { return dev.GetObjectDebugName(w.semaphore); });
                 MIKI_LOG_DEBUG(
                     ::miki::debug::LogCategory::Rhi,
-                    "[Sync]   wait: sem=[0x{:x}] value=[{}]", w.semaphore.value, w.value
+                    "[Sync]   wait: \"{}\" value=[{}]", semName, w.value
                 );
             }
             for (auto& s : signalSems) {
+                auto semName = device.Dispatch([&](const auto& dev) { return dev.GetObjectDebugName(s.semaphore); });
                 MIKI_LOG_DEBUG(
                     ::miki::debug::LogCategory::Rhi,
-                    "[Sync]   signal: sem=[0x{:x}] value=[{}]", s.semaphore.value, s.value
+                    "[Sync]   signal: \"{}\" value=[{}]", semName, s.value
                 );
             }
             device.Dispatch([&](auto& dev) { dev.Submit(rhiQueue, submitDesc); });

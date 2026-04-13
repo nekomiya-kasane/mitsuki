@@ -140,6 +140,23 @@ namespace miki::rhi {
     }  // namespace
 
     // =========================================================================
+    // Debug utils — VkObject naming helper (used throughout device init & debug)
+    // =========================================================================
+
+    namespace {
+        void TagVkObject(VkDevice device, VkObjectType objectType, uint64_t objectHandle, const char* name) {
+            if (name && vkSetDebugUtilsObjectNameEXT) {
+                VkDebugUtilsObjectNameInfoEXT nameInfo{};
+                nameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+                nameInfo.objectType = objectType;
+                nameInfo.objectHandle = objectHandle;
+                nameInfo.pObjectName = name;
+                vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
+            }
+        }
+    }  // namespace
+
+    // =========================================================================
     // Debug messenger callback
     // =========================================================================
 
@@ -665,6 +682,29 @@ namespace miki::rhi {
             vkGetDeviceQueue(device_, queueFamilies_.transfer, 0, &transferQueue_);
         } else {
             transferQueue_ = graphicsQueue_;
+        }
+
+        // Tag core Vulkan objects with debug names for validation/RenderDoc
+        TagVkObject(device_, VK_OBJECT_TYPE_DEVICE, reinterpret_cast<uint64_t>(device_), "miki::Device");
+        TagVkObject(
+            device_, VK_OBJECT_TYPE_PHYSICAL_DEVICE,
+            reinterpret_cast<uint64_t>(physicalDevice_), "miki::PhysicalDevice"
+        );
+        TagVkObject(device_, VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(graphicsQueue_), "GraphicsQueue");
+        if (presentQueue_ != graphicsQueue_) {
+            TagVkObject(device_, VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(presentQueue_), "PresentQueue");
+        }
+        if (computeQueue_ != graphicsQueue_) {
+            TagVkObject(device_, VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(computeQueue_), "ComputeQueue");
+        }
+        if (computeAsyncQueue_ != VK_NULL_HANDLE && computeAsyncQueue_ != computeQueue_) {
+            TagVkObject(
+                device_, VK_OBJECT_TYPE_QUEUE,
+                reinterpret_cast<uint64_t>(computeAsyncQueue_), "AsyncComputeQueue"
+            );
+        }
+        if (transferQueue_ != graphicsQueue_) {
+            TagVkObject(device_, VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(transferQueue_), "TransferQueue");
         }
 
         return {};
@@ -1672,23 +1712,6 @@ namespace miki::rhi {
     // Debug names — non-invasive, HandlePool-based
     // =========================================================================
 
-    namespace {
-
-        void TagVkObject(
-            VkDevice device, VkObjectType objectType, uint64_t objectHandle, const char* name
-        ) {
-            if (name && vkSetDebugUtilsObjectNameEXT) {
-                VkDebugUtilsObjectNameInfoEXT nameInfo{};
-                nameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-                nameInfo.objectType = objectType;
-                nameInfo.objectHandle = objectHandle;
-                nameInfo.pObjectName = name;
-                vkSetDebugUtilsObjectNameEXT(device, &nameInfo);
-            }
-        }
-
-    }  // anonymous namespace
-
     void VulkanDevice::SetObjectDebugNameImpl(SemaphoreHandle h, const char* name) {
         semaphores_.SetDebugName(h, name);
         if (auto* data = semaphores_.Lookup(h)) {
@@ -1699,6 +1722,13 @@ namespace miki::rhi {
             "[Sync][Vk] SetDebugName: semaphore \"{}\" handle=[0x{:x}]",
             name ? name : "(null)", h.value
         );
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(FenceHandle h, const char* name) {
+        fences_.SetDebugName(h, name);
+        if (auto* data = fences_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_FENCE, reinterpret_cast<uint64_t>(data->fence), name);
+        }
     }
 
     void VulkanDevice::SetObjectDebugNameImpl(BufferHandle h, const char* name) {
@@ -1715,6 +1745,27 @@ namespace miki::rhi {
         }
     }
 
+    void VulkanDevice::SetObjectDebugNameImpl(TextureViewHandle h, const char* name) {
+        textureViews_.SetDebugName(h, name);
+        if (auto* data = textureViews_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(data->view), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(SamplerHandle h, const char* name) {
+        samplers_.SetDebugName(h, name);
+        if (auto* data = samplers_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_SAMPLER, reinterpret_cast<uint64_t>(data->sampler), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(ShaderModuleHandle h, const char* name) {
+        shaderModules_.SetDebugName(h, name);
+        if (auto* data = shaderModules_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_SHADER_MODULE, reinterpret_cast<uint64_t>(data->module), name);
+        }
+    }
+
     void VulkanDevice::SetObjectDebugNameImpl(PipelineHandle h, const char* name) {
         pipelines_.SetDebugName(h, name);
         if (auto* data = pipelines_.Lookup(h)) {
@@ -1722,8 +1773,142 @@ namespace miki::rhi {
         }
     }
 
-    auto VulkanDevice::GetDebugNameImpl(SemaphoreHandle h) const -> const char* {
+    void VulkanDevice::SetObjectDebugNameImpl(PipelineLayoutHandle h, const char* name) {
+        pipelineLayouts_.SetDebugName(h, name);
+        if (auto* data = pipelineLayouts_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_PIPELINE_LAYOUT, reinterpret_cast<uint64_t>(data->layout), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(DescriptorLayoutHandle h, const char* name) {
+        descriptorLayouts_.SetDebugName(h, name);
+        if (auto* data = descriptorLayouts_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, reinterpret_cast<uint64_t>(data->layout), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(DescriptorSetHandle h, const char* name) {
+        descriptorSets_.SetDebugName(h, name);
+        if (auto* data = descriptorSets_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_DESCRIPTOR_SET, reinterpret_cast<uint64_t>(data->set), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(QueryPoolHandle h, const char* name) {
+        queryPools_.SetDebugName(h, name);
+        if (auto* data = queryPools_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_QUERY_POOL, reinterpret_cast<uint64_t>(data->pool), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(AccelStructHandle h, const char* name) {
+        accelStructs_.SetDebugName(h, name);
+        if (auto* data = accelStructs_.Lookup(h)) {
+            TagVkObject(
+                device_, VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
+                reinterpret_cast<uint64_t>(data->accelStruct), name
+            );
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(CommandPoolHandle h, const char* name) {
+        commandPools_.SetDebugName(h, name);
+        if (auto* data = commandPools_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_COMMAND_POOL, reinterpret_cast<uint64_t>(data->pool), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(CommandBufferHandle h, const char* name) {
+        commandBuffers_.SetDebugName(h, name);
+        if (auto* data = commandBuffers_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_COMMAND_BUFFER, reinterpret_cast<uint64_t>(data->buffer), name);
+        }
+    }
+
+    void VulkanDevice::SetObjectDebugNameImpl(SwapchainHandle h, const char* name) {
+        swapchains_.SetDebugName(h, name);
+        if (auto* data = swapchains_.Lookup(h)) {
+            TagVkObject(device_, VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(data->swapchain), name);
+        }
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(SemaphoreHandle h) const -> const char* {
         auto name = semaphores_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(FenceHandle h) const -> const char* {
+        auto name = fences_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(BufferHandle h) const -> const char* {
+        auto name = buffers_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(TextureHandle h) const -> const char* {
+        auto name = textures_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(TextureViewHandle h) const -> const char* {
+        auto name = textureViews_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(SamplerHandle h) const -> const char* {
+        auto name = samplers_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(ShaderModuleHandle h) const -> const char* {
+        auto name = shaderModules_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(PipelineHandle h) const -> const char* {
+        auto name = pipelines_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(PipelineLayoutHandle h) const -> const char* {
+        auto name = pipelineLayouts_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(DescriptorLayoutHandle h) const -> const char* {
+        auto name = descriptorLayouts_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(DescriptorSetHandle h) const -> const char* {
+        auto name = descriptorSets_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(QueryPoolHandle h) const -> const char* {
+        auto name = queryPools_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(AccelStructHandle h) const -> const char* {
+        auto name = accelStructs_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(CommandPoolHandle h) const -> const char* {
+        auto name = commandPools_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(CommandBufferHandle h) const -> const char* {
+        auto name = commandBuffers_.GetDebugName(h);
+        return name ? name : "(unnamed)";
+    }
+
+    auto VulkanDevice::GetObjectDebugNameImpl(SwapchainHandle h) const -> const char* {
+        auto name = swapchains_.GetDebugName(h);
         return name ? name : "(unnamed)";
     }
 

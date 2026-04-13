@@ -393,10 +393,37 @@ namespace miki::rhi {
 
         // -- Debug names --
         void SetObjectDebugNameImpl(SemaphoreHandle h, const char* name);
+        void SetObjectDebugNameImpl(FenceHandle h, const char* name);
         void SetObjectDebugNameImpl(BufferHandle h, const char* name);
         void SetObjectDebugNameImpl(TextureHandle h, const char* name);
+        void SetObjectDebugNameImpl(TextureViewHandle h, const char* name);
+        void SetObjectDebugNameImpl(SamplerHandle h, const char* name);
+        void SetObjectDebugNameImpl(ShaderModuleHandle h, const char* name);
         void SetObjectDebugNameImpl(PipelineHandle h, const char* name);
-        auto GetDebugNameImpl(SemaphoreHandle h) const -> const char*;
+        void SetObjectDebugNameImpl(PipelineLayoutHandle h, const char* name);
+        void SetObjectDebugNameImpl(DescriptorLayoutHandle h, const char* name);
+        void SetObjectDebugNameImpl(DescriptorSetHandle h, const char* name);
+        void SetObjectDebugNameImpl(QueryPoolHandle h, const char* name);
+        void SetObjectDebugNameImpl(AccelStructHandle h, const char* name);
+        void SetObjectDebugNameImpl(CommandPoolHandle h, const char* name);
+        void SetObjectDebugNameImpl(CommandBufferHandle h, const char* name);
+        void SetObjectDebugNameImpl(SwapchainHandle h, const char* name);
+        [[nodiscard]] auto GetObjectDebugNameImpl(SemaphoreHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(FenceHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(BufferHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(TextureHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(TextureViewHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(SamplerHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(ShaderModuleHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(PipelineHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(PipelineLayoutHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorLayoutHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorSetHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(QueryPoolHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(AccelStructHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(CommandPoolHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(CommandBufferHandle h) const -> const char*;
+        [[nodiscard]] auto GetObjectDebugNameImpl(SwapchainHandle h) const -> const char*;
 
         // -- Surface capabilities --
         auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
