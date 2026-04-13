@@ -15,14 +15,21 @@
 namespace miki::frame {
 
     void SyncScheduler::Init(const rhi::QueueTimelines& timelines) {
+        static constexpr const char* kTimelineNames[] = {
+            "GraphicsTimeline", "ComputeTimeline", "TransferTimeline", "AsyncComputeTimeline"
+        };
         queues_[0].semaphore = timelines.graphics;
+        queues_[0].debugName = kTimelineNames[0];
         queues_[1].semaphore = timelines.compute;
+        queues_[1].debugName = kTimelineNames[1];
         queues_[2].semaphore = timelines.transfer;
+        queues_[2].debugName = kTimelineNames[2];
         // Level A: asyncCompute has its own semaphore → independent slot 3
         // Level B/C/D: asyncCompute aliases compute → slot 1 (shared counter)
         if (timelines.asyncCompute.value != timelines.compute.value) {
             asyncComputeSlot_ = 3;
             queues_[3].semaphore = timelines.asyncCompute;
+            queues_[3].debugName = kTimelineNames[3];
         } else {
             asyncComputeSlot_ = 1;  // QueueIndex(AsyncCompute) returns 1, sharing Compute's state
         }
@@ -33,8 +40,8 @@ namespace miki::frame {
         }
         MIKI_LOG_DEBUG(
             ::miki::debug::LogCategory::Rhi,
-            "[Sync] SyncScheduler::Init: graphics=[0x{:x}] compute=[0x{:x}] transfer=[0x{:x}] asyncSlot=[{}]",
-            timelines.graphics.value, timelines.compute.value, timelines.transfer.value, asyncComputeSlot_
+            "[Sync] SyncScheduler::Init: graphics=\"{}\" compute=\"{}\" transfer=\"{}\" asyncSlot=[{}]",
+            queues_[0].debugName, queues_[1].debugName, queues_[2].debugName, asyncComputeSlot_
         );
     }
 
@@ -43,8 +50,8 @@ namespace miki::frame {
         uint64_t allocated = state.nextValue++;
         MIKI_LOG_DEBUG(
             ::miki::debug::LogCategory::Rhi,
-            "[Sync] SyncScheduler::AllocateSignal: queue={} allocated=[{}] nextValue=[{}] sem=[0x{:x}]",
-            rhi::ToString(queue), allocated, state.nextValue, state.semaphore.value
+            "[Sync] SyncScheduler::AllocateSignal: queue={} allocated=[{}] nextValue=[{}] sem=\"{}\"",
+            rhi::ToString(queue), allocated, state.nextValue, state.debugName
         );
         return allocated;
     }

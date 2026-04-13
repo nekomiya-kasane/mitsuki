@@ -182,13 +182,37 @@ namespace miki::rhi {
 
         // --- Debug names ---
         void SetObjectDebugNameImpl(SemaphoreHandle, const char*) {}
+        void SetObjectDebugNameImpl(FenceHandle, const char*) {}
         void SetObjectDebugNameImpl(BufferHandle, const char*) {}
         void SetObjectDebugNameImpl(TextureHandle, const char*) {}
+        void SetObjectDebugNameImpl(TextureViewHandle, const char*) {}
+        void SetObjectDebugNameImpl(SamplerHandle, const char*) {}
+        void SetObjectDebugNameImpl(ShaderModuleHandle, const char*) {}
         void SetObjectDebugNameImpl(PipelineHandle, const char*) {}
-        auto GetDebugNameImpl(SemaphoreHandle) const -> const char* { return "(unnamed)"; }
-        auto GetDebugNameImpl(BufferHandle) const -> const char* { return "(unnamed)"; }
-        auto GetDebugNameImpl(TextureHandle) const -> const char* { return "(unnamed)"; }
-        auto GetDebugNameImpl(PipelineHandle) const -> const char* { return "(unnamed)"; }
+        void SetObjectDebugNameImpl(PipelineLayoutHandle, const char*) {}
+        void SetObjectDebugNameImpl(DescriptorLayoutHandle, const char*) {}
+        void SetObjectDebugNameImpl(DescriptorSetHandle, const char*) {}
+        void SetObjectDebugNameImpl(QueryPoolHandle, const char*) {}
+        void SetObjectDebugNameImpl(AccelStructHandle, const char*) {}
+        void SetObjectDebugNameImpl(CommandPoolHandle, const char*) {}
+        void SetObjectDebugNameImpl(CommandBufferHandle, const char*) {}
+        void SetObjectDebugNameImpl(SwapchainHandle, const char*) {}
+        [[nodiscard]] auto GetObjectDebugNameImpl(SemaphoreHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(FenceHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(BufferHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(TextureHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(TextureViewHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(SamplerHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(ShaderModuleHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(PipelineHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(PipelineLayoutHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorLayoutHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorSetHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(QueryPoolHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(AccelStructHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(CommandPoolHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(CommandBufferHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(SwapchainHandle) const -> const char* { return "(unnamed)"; }
 
         // --- Surface capabilities ---
         auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle&) const -> RenderSurfaceCapabilities { return {}; }

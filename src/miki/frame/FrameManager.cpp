@@ -223,8 +223,9 @@ namespace miki::frame {
             uint64_t nextTransferValue = ++currentTransferTimelineValue;
             MIKI_LOG_DEBUG(
                 ::miki::debug::LogCategory::Rhi,
-                "[Sync] SubmitTransferCopies: signal transferTimeline=[{}] sem=[0x{:x}]",
-                nextTransferValue, transferTimeline.value
+                "[Sync] SubmitTransferCopies: signal transferTimeline=[{}] sem=\"{}\"",
+                nextTransferValue,
+                device.Dispatch([&](const auto& dev) { return dev.GetObjectDebugName(transferTimeline); })
             );
             std::array<rhi::SemaphoreSubmitInfo, 1> transferSignals = {{
                 {.semaphore = transferTimeline, .value = nextTransferValue, .stageMask = rhi::PipelineStage::Transfer},
@@ -725,21 +726,27 @@ namespace miki::frame {
                 i + 1, batchCount, batchCmds.size(), waits.size(), signals.size()
             );
             for (auto& w : waits) {
+                auto semName = impl_->device.Dispatch(
+                    [&](const auto& dev) { return dev.GetObjectDebugName(w.semaphore); }
+                );
                 MIKI_LOG_DEBUG(
                     ::miki::debug::LogCategory::Rhi,
-                    "[Sync]   wait: sem=[0x{:x}] value=[{}]", w.semaphore.value, w.value
+                    "[Sync]   wait: \"{}\" value=[{}]", semName, w.value
                 );
             }
             for (auto& s : signals) {
+                auto semName = impl_->device.Dispatch(
+                    [&](const auto& dev) { return dev.GetObjectDebugName(s.semaphore); }
+                );
                 MIKI_LOG_DEBUG(
                     ::miki::debug::LogCategory::Rhi,
-                    "[Sync]   signal: sem=[0x{:x}] value=[{}]", s.semaphore.value, s.value
+                    "[Sync]   signal: \"{}\" value=[{}]", semName, s.value
                 );
             }
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, submitDesc); });
         }
 
-        // TODO (Nekomiya) review this, it is strange that we have to do a separate submit for the case of no batches.
+        // TODO (Nekomiya) review this
         // Can we merge it with the first batch if it exists, or is there some other way to avoid this? Maybe we can
         // just always do this submit and merge the batch submits into it if they exist?
         //
@@ -804,15 +811,21 @@ namespace miki::frame {
                 waits.size(), signals.size()
             );
             for (auto& w : waits) {
+                auto semName = impl_->device.Dispatch(
+                    [&](const auto& dev) { return dev.GetObjectDebugName(w.semaphore); }
+                );
                 MIKI_LOG_DEBUG(
                     ::miki::debug::LogCategory::Rhi,
-                    "[Sync]   wait: sem=[0x{:x}] value=[{}]", w.semaphore.value, w.value
+                    "[Sync]   wait: \"{}\" value=[{}]", semName, w.value
                 );
             }
             for (auto& s : signals) {
+                auto semName = impl_->device.Dispatch(
+                    [&](const auto& dev) { return dev.GetObjectDebugName(s.semaphore); }
+                );
                 MIKI_LOG_DEBUG(
                     ::miki::debug::LogCategory::Rhi,
-                    "[Sync]   signal: sem=[0x{:x}] value=[{}]", s.semaphore.value, s.value
+                    "[Sync]   signal: \"{}\" value=[{}]", semName, s.value
                 );
             }
             impl_->device.Dispatch([&](auto& dev) { dev.Submit(rhi::QueueType::Graphics, syncSubmit); });
@@ -830,8 +843,12 @@ namespace miki::frame {
         if (impl_->surface) {
             MIKI_LOG_DEBUG(
                 ::miki::debug::LogCategory::Rhi,
-                "[Sync] EndFrame: Present (renderFinished sem=[0x{:x}])",
-                impl_->imageRenderDone[impl_->surface->GetCurrentImageIndex()].value
+                "[Sync] EndFrame: Present (renderFinished sem=\"{}\")",
+                impl_->device.Dispatch([&](const auto& dev) {
+                    return dev.GetObjectDebugName(
+                        impl_->imageRenderDone[impl_->surface->GetCurrentImageIndex()]
+                    );
+                })
             );
             auto presentResult = impl_->surface->Present();
             if (!presentResult) {
