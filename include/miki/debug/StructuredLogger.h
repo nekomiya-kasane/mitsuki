@@ -47,6 +47,7 @@ namespace miki::debug {
         LogCategory category;
         std::string_view message;
         std::string_view file;
+        std::string_view func;
         uint32_t line;
         uint64_t timestampNs;
         uint32_t threadId;
@@ -197,8 +198,8 @@ namespace miki::debug {
         /// notify.
         template <typename... Args>
         auto Log(
-            LogLevel level, LogCategory cat, std::string_view file, uint32_t line, std::format_string<Args...> fmt,
-            Args&&... args
+            LogLevel level, LogCategory cat, std::string_view file, uint32_t line, std::string_view func,
+            std::format_string<Args...> fmt, Args&&... args
         ) -> void {
             auto levelInt = static_cast<uint8_t>(level);
             auto catLevel = static_cast<uint8_t>(GetCategoryLevel(cat));
@@ -216,7 +217,7 @@ namespace miki::debug {
             *result.out = '\0';
             auto msgLen = static_cast<uint32_t>(result.out - buf);
 
-            WriteToRing(level, cat, file, line, ns, std::string_view{buf, msgLen});
+            WriteToRing(level, cat, file, line, func, ns, std::string_view{buf, msgLen});
         }
 
         /// @brief Flush all sinks. Blocks until drain processes all pending entries.
@@ -249,8 +250,8 @@ namespace miki::debug {
 
        private:
         auto WriteToRing(
-            LogLevel level, LogCategory cat, std::string_view file, uint32_t line, uint64_t timestampNs,
-            std::string_view message
+            LogLevel level, LogCategory cat, std::string_view file, uint32_t line, std::string_view func,
+            uint64_t timestampNs, std::string_view message
         ) -> void;
 
         auto DrainLoop() -> void;
@@ -299,7 +300,8 @@ namespace miki::debug {
         constexpr auto lvl_ = static_cast<uint8_t>(level);                                                        \
         if constexpr (lvl_ >= MIKI_MIN_LOG_LEVEL) {                                                               \
             auto& logger_ = ::miki::debug::StructuredLogger::Instance();                                          \
-            if (logger_.GetCategoryLevel(cat) <= level) logger_.Log(level, cat, __FILE__, __LINE__, __VA_ARGS__); \
+            if (logger_.GetCategoryLevel(cat) <= level)                                                            \
+                logger_.Log(level, cat, __FILE__, __LINE__, __func__, __VA_ARGS__);                               \
         }                                                                                                         \
     } while (0)
 

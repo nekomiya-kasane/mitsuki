@@ -286,6 +286,138 @@ namespace miki::rg {
     }
 
     // =========================================================================
+    // J-1b: Mermaid flowchart export
+    // =========================================================================
+
+    namespace {
+
+        auto QueueMermaidStyle(RGQueueType queue) -> const char* {
+            switch (queue) {
+                case RGQueueType::Graphics: return "fill:#33cc33,color:#000";
+                case RGQueueType::AsyncCompute: return "fill:#9933cc,color:#fff";
+                case RGQueueType::Transfer: return "fill:#ff9933,color:#000";
+                default: return "fill:#33cc33,color:#000";
+            }
+        }
+
+    }  // anonymous namespace
+
+    void ExportMermaid(
+        const CompiledRenderGraph& graph, const RenderGraphBuilder& builder, std::ostream& out,
+        const MermaidOptions& options
+    ) {
+        auto& passes = builder.GetPasses();
+        auto& resources = builder.GetResources();
+
+        out << "flowchart " << options.direction << "\n";
+
+        // --- Batch subgraphs & pass nodes ---
+        if (options.clusterByBatch && !graph.batches.empty()) {
+            for (size_t bi = 0; bi < graph.batches.size(); ++bi) {
+                auto& batch = graph.batches[bi];
+                out << "  subgraph Batch" << bi << "[\"Batch " << bi << " — " << ToString(batch.queue) << "\"]\n";
+                out << "    direction " << options.direction << "\n";
+                for (auto pi : batch.passIndices) {
+                    auto& cp = graph.passes[pi];
+                    auto& pass = passes[cp.passIndex];
+                    auto name = pass.name ? pass.name : "(null)";
+                    out << "    P" << cp.passIndex << "[\"" << name;
+                    if (options.showBarrierCounts) {
+                        out << "\\nacq=" << cp.acquireBarriers.size() << " rel=" << cp.releaseBarriers.size();
+                    }
+                    out << "\"]\n";
+                    out << "    style P" << cp.passIndex << " " << QueueMermaidStyle(cp.queue) << "\n";
+                }
+                out << "  end\n";
+            }
+        } else {
+            for (auto& cp : graph.passes) {
+                auto& pass = passes[cp.passIndex];
+                auto name = pass.name ? pass.name : "(null)";
+                out << "  P" << cp.passIndex << "[\"" << name;
+                if (options.showBarrierCounts) {
+                    out << "\\nacq=" << cp.acquireBarriers.size() << " rel=" << cp.releaseBarriers.size();
+                }
+                out << "\"]\n";
+                out << "  style P" << cp.passIndex << " " << QueueMermaidStyle(cp.queue) << "\n";
+            }
+        }
+
+        // --- Dependency edges ---
+        for (auto& edge : graph.edges) {
+            auto label = ToString(edge.hazard);
+            bool crossQueue = false;
+            if (edge.srcPass < graph.passes.size() && edge.dstPass < graph.passes.size()) {
+                crossQueue = (graph.passes[edge.srcPass].queue != graph.passes[edge.dstPass].queue);
+            }
+            auto srcIdx = (edge.srcPass < graph.passes.size()) ? graph.passes[edge.srcPass].passIndex : edge.srcPass;
+            auto dstIdx = (edge.dstPass < graph.passes.size()) ? graph.passes[edge.dstPass].passIndex : edge.dstPass;
+            if (crossQueue) {
+                out << "  P" << srcIdx << " ==>|\"" << label << " xQ\"| P" << dstIdx << "\n";
+            } else {
+                out << "  P" << srcIdx << " -->|\"" << label << "\"| P" << dstIdx << "\n";
+            }
+        }
+
+        // --- Cross-queue sync points ---
+        if (options.showCrossQueueSync) {
+            for (auto& sp : graph.syncPoints) {
+                auto srcIdx = (sp.srcPassIndex < graph.passes.size())
+                                  ? graph.passes[sp.srcPassIndex].passIndex
+                                  : sp.srcPassIndex;
+                auto dstIdx = (sp.dstPassIndex < graph.passes.size())
+                                  ? graph.passes[sp.dstPassIndex].passIndex
+                                  : sp.dstPassIndex;
+                out << "  P" << srcIdx << " -.->|\"timeline=" << sp.timelineValue << "\"| P" << dstIdx << "\n";
+            }
+        }
+
+        // --- Resource nodes ---
+        if (options.showResourceEdges) {
+            for (auto& cp : graph.passes) {
+                auto& pass = passes[cp.passIndex];
+                for (auto& r : pass.reads) {
+                    auto ri = r.handle.GetIndex();
+                    if (ri < resources.size()) {
+                        auto& res = resources[ri];
+                        out << "  R" << ri << "([\"" << (res.name ? res.name : "?") << "\"])\n";
+                        out << "  R" << ri << " -.-> P" << cp.passIndex << "\n";
+                    }
+                }
+                for (auto& w : pass.writes) {
+                    auto ri = w.handle.GetIndex();
+                    if (ri < resources.size()) {
+                        auto& res = resources[ri];
+                        out << "  R" << ri << "([\"" << (res.name ? res.name : "?") << "\"])\n";
+                        out << "  P" << cp.passIndex << " -.-> R" << ri << "\n";
+                    }
+                }
+            }
+        }
+
+        // --- Aliasing annotations ---
+        if (options.showAliasing) {
+            for (size_t si = 0; si < graph.aliasing.resourceToSlot.size(); ++si) {
+                auto slotIdx = graph.aliasing.resourceToSlot[si];
+                if (slotIdx != AliasingLayout::kNotAliased && slotIdx < graph.aliasing.slots.size()) {
+                    auto& slot = graph.aliasing.slots[slotIdx];
+                    auto rName = (si < resources.size() && resources[si].name) ? resources[si].name : "?";
+                    out << "  %% R" << si << " (" << rName << ") -> aliasing slot " << slotIdx
+                        << " heap=" << ToString(slot.heapGroup) << " size=" << slot.size << "\n";
+                }
+            }
+        }
+    }
+
+    auto ExportMermaidString(
+        const CompiledRenderGraph& graph, const RenderGraphBuilder& builder, const MermaidOptions& options
+    ) -> std::string {
+        std::ostringstream ss;
+        ExportMermaid(graph, builder, ss, options);
+        return ss.str();
+    }
+
+    // =========================================================================
     // J-2: PassTimingReport (§12.2)
     // =========================================================================
 

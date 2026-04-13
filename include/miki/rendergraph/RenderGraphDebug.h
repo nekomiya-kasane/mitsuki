@@ -61,6 +61,30 @@ namespace miki::rg {
     ) -> std::string;
 
     // =========================================================================
+    // J-1b: Mermaid flowchart export (§12.1)
+    // =========================================================================
+
+    struct MermaidOptions {
+        bool showBarrierCounts = true;     ///< Show acquire/release barrier count in node label
+        bool showCrossQueueSync = true;    ///< Show cross-queue sync edges with timeline values
+        bool clusterByBatch = true;        ///< Group passes into subgraphs by CommandBatch
+        bool showResourceEdges = true;     ///< Show resource read/write edges
+        bool showAliasing = true;          ///< Annotate aliased resources
+        const char* direction = "TD";      ///< TD (top-down) or LR (left-right)
+    };
+
+    /// @brief Export compiled render graph as Mermaid flowchart.
+    void ExportMermaid(
+        const CompiledRenderGraph& graph, const RenderGraphBuilder& builder, std::ostream& out,
+        const MermaidOptions& options = {}
+    );
+
+    /// @brief Export to Mermaid string (convenience wrapper).
+    [[nodiscard]] auto ExportMermaidString(
+        const CompiledRenderGraph& graph, const RenderGraphBuilder& builder, const MermaidOptions& options = {}
+    ) -> std::string;
+
+    // =========================================================================
     // J-2: Per-pass GPU timestamps (§12.2)
     // =========================================================================
 

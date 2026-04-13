@@ -139,9 +139,9 @@ namespace miki::debug {
         uint64_t timestampNs;
         uint32_t threadId;
         uint16_t fileLen;
+        uint16_t funcLen;
         uint16_t msgLen;
     };
-    static_assert(sizeof(SerializedHeader) == 24);
 
     // ================================================================
     // ConsoleSink (tapioca-based)
@@ -193,7 +193,7 @@ namespace miki::debug {
         auto levelStr = ToString(entry.level);
         auto catStr = ToString(entry.category);
 
-        // Build formatted line
+        // Build formatted line: [timestamp] [LEVEL] [Category] func | message
         std::string line;
         line.reserve(128);
         line += '[';
@@ -203,6 +203,10 @@ namespace miki::debug {
         line += "] [";
         line.append(catStr.data(), catStr.size());
         line += "] ";
+        if (!entry.func.empty()) {
+            line.append(entry.func.data(), entry.func.size());
+            line += " | ";
+        }
         line.append(entry.message.data(), entry.message.size());
 
         // Write with style
@@ -257,7 +261,11 @@ namespace miki::debug {
         auto levelStr = ToString(entry.level);
         auto catStr = ToString(entry.category);
 
-        std::println(file_, "[{}] [{}] [{}] {}", ts, levelStr, catStr, entry.message);
+        if (!entry.func.empty()) {
+            std::println(file_, "[{}] [{}] [{}] {} | {}", ts, levelStr, catStr, entry.func, entry.message);
+        } else {
+            std::println(file_, "[{}] [{}] [{}] {}", ts, levelStr, catStr, entry.message);
+        }
     }
 
     auto FileSink::Flush() -> void {
@@ -336,6 +344,8 @@ namespace miki::debug {
         auto msgEscaped = EscapeJson(entry.message);
         auto fileEscaped = EscapeJson(entry.file);
 
+        auto funcEscaped = EscapeJson(entry.func);
+
         // Trim trailing spaces from padded level/cat strings
         auto trim = [](std::string_view sv) {
             auto end = sv.find_last_not_of(' ');
@@ -346,8 +356,9 @@ namespace miki::debug {
         auto cat = trim(catStr);
 
         std::println(
-            file_, R"({{"ts":{},"level":"{}","cat":"{}","msg":"{}","file":"{}","line":{},"tid":{}}})",
-            entry.timestampNs, lvl, cat, msgEscaped, fileEscaped, entry.line, entry.threadId
+            file_,
+            R"({{"ts":{},"level":"{}","cat":"{}","func":"{}","msg":"{}","file":"{}","line":{},"tid":{}}})",
+            entry.timestampNs, lvl, cat, funcEscaped, msgEscaped, fileEscaped, entry.line, entry.threadId
         );
     }
 
@@ -497,8 +508,8 @@ namespace miki::debug {
     }
 
     auto StructuredLogger::WriteToRing(
-        LogLevel level, LogCategory cat, std::string_view file, uint32_t line, uint64_t timestampNs,
-        std::string_view message
+        LogLevel level, LogCategory cat, std::string_view file, uint32_t line, std::string_view func,
+        uint64_t timestampNs, std::string_view message
     ) -> void {
         auto& ring = GetThreadRing();
 
@@ -510,9 +521,10 @@ namespace miki::debug {
         hdr.timestampNs = timestampNs;
         hdr.threadId = GetCurrentThreadIdHash();
         hdr.fileLen = static_cast<uint16_t>(std::min<size_t>(file.size(), 0xFFFF));
+        hdr.funcLen = static_cast<uint16_t>(std::min<size_t>(func.size(), 0xFFFF));
         hdr.msgLen = static_cast<uint16_t>(std::min<size_t>(message.size(), 0xFFFF));
 
-        uint32_t totalPayload = sizeof(SerializedHeader) + hdr.fileLen + hdr.msgLen;
+        uint32_t totalPayload = sizeof(SerializedHeader) + hdr.fileLen + hdr.funcLen + hdr.msgLen;
 
         // Build payload buffer
         thread_local std::vector<std::byte> payload;
@@ -523,6 +535,8 @@ namespace miki::debug {
         dst += sizeof(hdr);
         std::memcpy(dst, file.data(), hdr.fileLen);
         dst += hdr.fileLen;
+        std::memcpy(dst, func.data(), hdr.funcLen);
+        dst += hdr.funcLen;
         std::memcpy(dst, message.data(), hdr.msgLen);
 
         bool ok = ring.TryWrite(payload.data(), totalPayload);
@@ -622,12 +636,14 @@ namespace miki::debug {
 
                     auto* bytes = static_cast<const char*>(data);
                     auto* filePtr = bytes + sizeof(SerializedHeader);
-                    auto* msgPtr = filePtr + hdr.fileLen;
+                    auto* funcPtr = filePtr + hdr.fileLen;
+                    auto* msgPtr = funcPtr + hdr.funcLen;
 
                     LogEntry entry{};
                     entry.level = static_cast<LogLevel>(hdr.level);
                     entry.category = static_cast<LogCategory>(hdr.category);
                     entry.file = std::string_view{filePtr, hdr.fileLen};
+                    entry.func = std::string_view{funcPtr, hdr.funcLen};
                     entry.message = std::string_view{msgPtr, hdr.msgLen};
                     entry.line = hdr.line;
                     entry.timestampNs = hdr.timestampNs;

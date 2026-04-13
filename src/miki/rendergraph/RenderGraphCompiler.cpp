@@ -16,8 +16,10 @@
 
 #include "miki/rendergraph/RenderGraphCompiler.h"
 
+#include "miki/debug/StructuredLogger.h"
 #include "miki/rendergraph/AsyncComputeScheduler.h"
 #include "miki/rendergraph/CompilerUtils.h"
+#include "miki/rendergraph/RenderGraphDebug.h"
 
 #include <algorithm>
 #include <cassert>
@@ -1175,6 +1177,19 @@ namespace miki::rg {
         cachedOrder_ = order;
         cachedQueueAssignments_ = queueAssignments;
         cachedActiveSet_ = activeSet;
+
+        // Debug: dump Mermaid graph after compilation
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Render,
+            "[RenderGraph] Compiled: passes=[{}] batches=[{}] syncPoints=[{}] edges=[{}] aliases=[{}]",
+            result.passes.size(), result.batches.size(), result.syncPoints.size(),
+            result.edges.size(), result.aliasing.slots.size()
+        );
+        MIKI_LOG_DEBUG(
+            ::miki::debug::LogCategory::Render,
+            "[RenderGraph] Mermaid:\n{}",
+            ExportMermaidString(result, builder)
+        );
 
         return result;
     }
