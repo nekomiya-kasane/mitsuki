@@ -419,6 +419,28 @@ namespace miki::rhi {
             auto n = swapchains_.GetDebugName(h);
             return n ? n : "(unnamed)";
         }
+        [[nodiscard]] auto GetObjectDebugNameImpl(PipelineLayoutHandle h) const -> const char* {
+            auto n = pipelineLayouts_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorLayoutHandle h) const -> const char* {
+            auto n = descriptorLayouts_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        [[nodiscard]] auto GetObjectDebugNameImpl(DescriptorSetHandle h) const -> const char* {
+            auto n = descriptorSets_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        [[nodiscard]] auto GetObjectDebugNameImpl(QueryPoolHandle h) const -> const char* {
+            auto n = queryPools_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        [[nodiscard]] auto GetObjectDebugNameImpl(AccelStructHandle) const -> const char* { return "(unnamed)"; }
+        [[nodiscard]] auto GetObjectDebugNameImpl(CommandPoolHandle h) const -> const char* {
+            auto n = commandPools_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        [[nodiscard]] auto GetObjectDebugNameImpl(CommandBufferHandle h) const -> const char* {
+            auto n = commandBuffers_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
+        [[nodiscard]] auto GetObjectDebugNameImpl(SwapchainHandle h) const -> const char* {
+            auto n = swapchains_.GetDebugName(h); return n ? n : "(unnamed)";
+        }
 
         // -- Surface capabilities --
         auto GetSurfaceCapabilitiesImpl(const NativeWindowHandle& window) const -> RenderSurfaceCapabilities;
